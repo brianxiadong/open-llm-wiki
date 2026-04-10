@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}维护检查 - {{ repo.name }} - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ul>
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li>维护检查</li>
+  </ul>
+</nav>
+
+<h2>维护检查报告</h2>
+
+{% set sections = [
+  ('contradictions', '矛盾内容', '发现以下内容之间存在矛盾'),
+  ('stale_claims', '过时声明', '以下内容可能已过时，需要更新'),
+  ('orphan_pages', '孤立页面', '以下页面没有任何入链'),
+  ('missing_pages', '缺失页面', '以下页面被引用但尚未创建'),
+  ('missing_refs', '缺失引用', '以下内容缺少交叉引用'),
+  ('suggestions', '改进建议', '以下建议可以帮助提升知识库质量')
+] %}
+
+{% for key, title, desc in sections %}
+<article class="lint-section">
+  <details {% if report.get(key) %}open{% endif %}>
+    <summary>
+      {{ title }}
+      {% if report.get(key) %}
+      <span class="badge">{{ report[key]|length }}</span>
+      {% else %}
+      <span class="badge badge-muted">0</span>
+      {% endif %}
+    </summary>
+    {% if report.get(key) %}
+    <p><small>{{ desc }}</small></p>
+    <ul>
+      {% for item in report[key] %}
+      <li>
+        {% if item.page_slug %}
+        <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=item.page_slug) }}">
+          {{ item.title or item.page_slug }}
+        </a>
+        {% endif %}
+        {% if item.message %}<span> &mdash; {{ item.message }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p><small class="muted">未发现问题</small></p>
+    {% endif %}
+  </details>
+</article>
+{% endfor %}
+
+{% if has_fixes %}
+<form method="POST" action="{{ url_for('ops.apply_fixes', username=username, repo_slug=repo.slug) }}"
+      data-confirm="确定要应用自动修复吗？">
+  {% if csrf_token is defined %}
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  {% endif %}
+  <button type="submit">应用修复</button>
+</form>
+{% endif %}
+{% endblock %}

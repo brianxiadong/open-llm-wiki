@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}登录 - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+  <article>
+    <header>
+      <h2>登录</h2>
+    </header>
+    <form method="POST" action="{{ url_for('auth.login') }}">
+      {% if csrf_token is defined %}
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% endif %}
+      <label for="username">用户名</label>
+      <input type="text" id="username" name="username" placeholder="请输入用户名" required autofocus>
+
+      <label for="password">密码</label>
+      <input type="password" id="password" name="password" placeholder="请输入密码" required>
+
+      <button type="submit">登录</button>
+    </form>
+    <footer>
+      <p class="auth-footer">还没有账号？<a href="{{ url_for('auth.register') }}">立即注册</a></p>
+    </footer>
+  </article>
+</div>
+{% endblock %}

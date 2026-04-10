@@ -1,0 +1,204 @@
+{
+  "_description": "测试问答对。每个问题标注了：预期命中的 wiki 页面、适合的检索路径、参考答案要点、难度。",
+  "questions": [
+    {
+      "id": "q01",
+      "question": "Transformer 架构的核心创新是什么？它为什么能替代 RNN？",
+      "difficulty": "easy",
+      "preferred_path": "wiki",
+      "expected_pages": ["transformer-architecture.md", "attention-mechanism.md"],
+      "answer_key_points": [
+        "多头自注意力机制",
+        "并行化处理（不需要顺序计算）",
+        "解决了 RNN 的梯度消失和无法并行的问题"
+      ],
+      "source_docs": ["doc-01-transformer-architecture.md", "doc-04-attention-mechanism.md"]
+    },
+    {
+      "id": "q02",
+      "question": "Self-attention 和 Cross-attention 有什么区别？",
+      "difficulty": "easy",
+      "preferred_path": "wiki",
+      "expected_pages": ["attention-mechanism.md"],
+      "answer_key_points": [
+        "Self-attention: Q/K/V 来自同一序列",
+        "Cross-attention: Q 来自一个序列，K/V 来自另一个序列",
+        "Cross-attention 用于 encoder-decoder 之间的信息传递"
+      ],
+      "source_docs": ["doc-04-attention-mechanism.md"]
+    },
+    {
+      "id": "q03",
+      "question": "RLHF 训练一共分几步？每步做什么？",
+      "difficulty": "easy",
+      "preferred_path": "wiki",
+      "expected_pages": ["rlhf.md"],
+      "answer_key_points": [
+        "三步：SFT、奖励模型训练、PPO 优化",
+        "SFT: 用人工标注的对话数据监督微调",
+        "奖励模型: 学习人类偏好排序",
+        "PPO: 用奖励模型信号优化策略，加 KL 散度惩罚"
+      ],
+      "source_docs": ["doc-03-rlhf.md"]
+    },
+    {
+      "id": "q04",
+      "question": "哪篇文档提到了 FlashAttention？",
+      "difficulty": "easy",
+      "preferred_path": "qdrant",
+      "expected_pages": ["attention-mechanism.md"],
+      "answer_key_points": [
+        "FlashAttention 由 Dao 等人在 2022 年提出",
+        "通过 IO 感知的算法减少显存访问",
+        "将注意力计算复杂度从 O(n²) 的显存降低"
+      ],
+      "source_docs": ["doc-04-attention-mechanism.md"]
+    },
+    {
+      "id": "q05",
+      "question": "GPT 系列和 BERT 在架构上的根本区别是什么？",
+      "difficulty": "medium",
+      "preferred_path": "wiki",
+      "expected_pages": ["large-language-models.md", "transformer-architecture.md"],
+      "answer_key_points": [
+        "GPT 是 decoder-only，自回归生成",
+        "BERT 是 encoder-only，双向掩码预测",
+        "GPT 用于生成任务，BERT 用于理解任务"
+      ],
+      "source_docs": ["doc-02-large-language-models.md", "doc-01-transformer-architecture.md"]
+    },
+    {
+      "id": "q06",
+      "question": "RAG 和 LLM Wiki 在知识管理方面有什么根本区别？各自的优缺点是什么？",
+      "difficulty": "hard",
+      "preferred_path": "both",
+      "expected_pages": ["rag-vs-fine-tuning.md", "knowledge-management-with-llms.md"],
+      "answer_key_points": [
+        "RAG: 每次查询时重新检索和拼装，知识不积累",
+        "LLM Wiki: 知识被编译一次，持续更新，复利增长",
+        "RAG 优势: 实时性好，部署简单，适合大规模文档",
+        "LLM Wiki 优势: 综合性问题回答质量高，交叉引用已建好",
+        "存在观点矛盾: 有人认为 RAG 对多数场景已经足够"
+      ],
+      "source_docs": ["doc-05-rag-vs-fine-tuning.md", "doc-06-knowledge-management-with-llms.md"]
+    },
+    {
+      "id": "q07",
+      "question": "训练一个大语言模型大概需要多少成本？",
+      "difficulty": "medium",
+      "preferred_path": "qdrant",
+      "expected_pages": ["large-language-models.md"],
+      "answer_key_points": [
+        "GPT-2 (1.5B): 约 $50,000",
+        "PaLM (540B): 约 $8 million",
+        "成本随模型规模指数增长"
+      ],
+      "source_docs": ["doc-02-large-language-models.md"]
+    },
+    {
+      "id": "q08",
+      "question": "注意力机制的计算复杂度是多少？有哪些优化方案？",
+      "difficulty": "medium",
+      "preferred_path": "both",
+      "expected_pages": ["attention-mechanism.md", "transformer-architecture.md"],
+      "answer_key_points": [
+        "标准注意力: O(n²) 时间和空间复杂度",
+        "FlashAttention: IO 感知优化，减少显存访问",
+        "线性注意力: 用核近似将复杂度降到 O(n)"
+      ],
+      "source_docs": ["doc-04-attention-mechanism.md"]
+    },
+    {
+      "id": "q09",
+      "question": "关于知识管理，不同文档之间存在哪些矛盾观点？",
+      "difficulty": "hard",
+      "preferred_path": "wiki",
+      "expected_pages": ["rag-vs-fine-tuning.md", "knowledge-management-with-llms.md", "overview.md"],
+      "answer_key_points": [
+        "doc-05 认为 RAG 灵活、实时，对多数场景已足够",
+        "doc-06 认为纯 RAG 不够，需要编译式知识库（LLM Wiki）",
+        "矛盾点: RAG 是否足够 vs 需要持久化知识编译"
+      ],
+      "source_docs": ["doc-05-rag-vs-fine-tuning.md", "doc-06-knowledge-management-with-llms.md"]
+    },
+    {
+      "id": "q10",
+      "question": "DPO 和 RLHF 有什么区别？",
+      "difficulty": "medium",
+      "preferred_path": "qdrant",
+      "expected_pages": ["rlhf.md"],
+      "answer_key_points": [
+        "RLHF 需要训练独立的奖励模型 + PPO 优化",
+        "DPO 直接从偏好数据优化策略，跳过奖励模型",
+        "DPO 更简单，但 RLHF 在某些场景效果更好"
+      ],
+      "source_docs": ["doc-03-rlhf.md"]
+    },
+    {
+      "id": "q11",
+      "question": "从 RNN 到 Transformer 的技术演进路径是什么？",
+      "difficulty": "hard",
+      "preferred_path": "wiki",
+      "expected_pages": ["transformer-architecture.md", "attention-mechanism.md", "large-language-models.md"],
+      "answer_key_points": [
+        "RNN → LSTM (解决梯度消失) → Seq2seq + Attention → Transformer (完全注意力，并行化)",
+        "关键突破: Bahdanau attention (2014) → Attention Is All You Need (2017)",
+        "Transformer 催生了 BERT、GPT 等大模型"
+      ],
+      "source_docs": ["doc-01-transformer-architecture.md", "doc-04-attention-mechanism.md", "doc-02-large-language-models.md"]
+    },
+    {
+      "id": "q12",
+      "question": "我记得有一个用来降低注意力显存开销的技术，叫什么来着？",
+      "difficulty": "easy",
+      "preferred_path": "qdrant",
+      "expected_pages": ["attention-mechanism.md"],
+      "answer_key_points": [
+        "FlashAttention",
+        "由 Dao 等人提出",
+        "通过 tiling 和 IO 感知减少 HBM 访问"
+      ],
+      "source_docs": ["doc-04-attention-mechanism.md"]
+    },
+    {
+      "id": "q13",
+      "question": "DeepSeek 模型有什么特点？",
+      "difficulty": "medium",
+      "preferred_path": "qdrant",
+      "expected_pages": ["large-language-models.md"],
+      "answer_key_points": [
+        "开源/开放权重模型",
+        "DeepSeek-R1: 671B 参数的推理模型",
+        "性能接近 OpenAI o1，但成本更低"
+      ],
+      "source_docs": ["doc-02-large-language-models.md"]
+    },
+    {
+      "id": "q14",
+      "question": "什么场景下应该用 RAG，什么场景下应该用 Fine-tuning？",
+      "difficulty": "medium",
+      "preferred_path": "wiki",
+      "expected_pages": ["rag-vs-fine-tuning.md"],
+      "answer_key_points": [
+        "RAG: 知识频繁更新、需要引用来源、文档量大",
+        "Fine-tuning: 需要特定风格/格式、领域适配、固定知识"
+      ],
+      "source_docs": ["doc-05-rag-vs-fine-tuning.md"]
+    },
+    {
+      "id": "q15",
+      "question": "请综合所有来源，给出大语言模型技术的整体概述。",
+      "difficulty": "hard",
+      "preferred_path": "wiki",
+      "expected_pages": ["overview.md"],
+      "answer_key_points": [
+        "基于 Transformer 架构",
+        "通过 RLHF 等技术对齐人类偏好",
+        "RAG 和知识管理是重要应用方向",
+        "注意力机制是核心技术",
+        "开源模型（LLaMA、DeepSeek）推动了普及"
+      ],
+      "source_docs": ["doc-01-transformer-architecture.md", "doc-02-large-language-models.md", "doc-03-rlhf.md", "doc-04-attention-mechanism.md", "doc-05-rag-vs-fine-tuning.md", "doc-06-knowledge-management-with-llms.md"]
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page.title }} - {{ repo.name }} - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ul>
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">Wiki</a></li>
+    <li>{{ page.title }}</li>
+  </ul>
+</nav>
+
+<div class="wiki-page-layout">
+  <article class="wiki-page-main">
+    <header class="page-meta-bar">
+      <span class="badge badge-{{ page.type }}">{{ page.type_label or page.type }}</span>
+      <small>创建于 {{ page.created_at.strftime('%Y-%m-%d') if page.created_at }}</small>
+      <small>更新于 {{ page.updated_at.strftime('%Y-%m-%d') if page.updated_at }}</small>
+      {% if page.sources %}
+      <div class="page-sources">
+        <small>来源：</small>
+        {% for src in page.sources %}
+        <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}">
+          <small>{{ src.filename }}</small>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </header>
+
+    <div class="rendered-content">
+      {{ content|safe }}
+    </div>
+  </article>
+
+  <aside class="wiki-page-sidebar">
+    <h4>反向链接</h4>
+    {% if backlinks %}
+    <ul class="backlinks-list">
+      {% for link in backlinks %}
+      <li>
+        <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=link.slug) }}">
+          {{ link.title }}
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p><small class="muted">暂无其他页面链接到此页面</small></p>
+    {% endif %}
+  </aside>
+</div>
+{% endblock %}

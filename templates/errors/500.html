@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}服务器错误 - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<article class="error-page">
+  <header>
+    <h1>500</h1>
+  </header>
+  <h2>服务器内部错误</h2>
+  <p>服务器遇到了意外错误，请稍后再试。</p>
+  <a href="{{ url_for('index') }}" role="button">返回首页</a>
+</article>
+{% endblock %}

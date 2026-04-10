@@ -1,0 +1,39 @@
+{
+  "_description": "预期摄入后 Wiki 应该生成的实体页和概念页。用于评估 Ingest 质量。",
+  "expected_entities": [
+    {"name": "Transformer", "type": "concept", "source_docs": ["doc-01", "doc-02", "doc-04"]},
+    {"name": "Self-Attention", "type": "concept", "source_docs": ["doc-01", "doc-04"]},
+    {"name": "Multi-Head Attention", "type": "concept", "source_docs": ["doc-01", "doc-04"]},
+    {"name": "Positional Encoding", "type": "concept", "source_docs": ["doc-01"]},
+    {"name": "BERT", "type": "entity", "source_docs": ["doc-02"]},
+    {"name": "GPT", "type": "entity", "source_docs": ["doc-02", "doc-03"]},
+    {"name": "LLaMA", "type": "entity", "source_docs": ["doc-02"]},
+    {"name": "DeepSeek", "type": "entity", "source_docs": ["doc-02"]},
+    {"name": "RLHF", "type": "concept", "source_docs": ["doc-03"]},
+    {"name": "PPO (Proximal Policy Optimization)", "type": "concept", "source_docs": ["doc-03"]},
+    {"name": "DPO (Direct Preference Optimization)", "type": "concept", "source_docs": ["doc-03"]},
+    {"name": "RAG", "type": "concept", "source_docs": ["doc-05", "doc-06"]},
+    {"name": "FlashAttention", "type": "concept", "source_docs": ["doc-04"]},
+    {"name": "Fine-tuning", "type": "concept", "source_docs": ["doc-02", "doc-05"]},
+    {"name": "LLM Wiki", "type": "concept", "source_docs": ["doc-06"]},
+    {"name": "Vector Database", "type": "concept", "source_docs": ["doc-05"]}
+  ],
+  "expected_cross_references": [
+    {"from": "transformer", "to": "self-attention", "reason": "Transformer 的核心机制"},
+    {"from": "transformer", "to": "positional-encoding", "reason": "Transformer 的位置编码"},
+    {"from": "gpt", "to": "transformer", "reason": "GPT 基于 Transformer decoder"},
+    {"from": "bert", "to": "transformer", "reason": "BERT 基于 Transformer encoder"},
+    {"from": "rlhf", "to": "gpt", "reason": "RLHF 用于训练 InstructGPT/ChatGPT"},
+    {"from": "rlhf", "to": "dpo", "reason": "DPO 是 RLHF 的替代方案"},
+    {"from": "rag", "to": "llm-wiki", "reason": "两种不同的知识管理范式"},
+    {"from": "rag", "to": "vector-database", "reason": "RAG 依赖向量数据库检索"},
+    {"from": "flash-attention", "to": "self-attention", "reason": "FlashAttention 是注意力的优化"}
+  ],
+  "expected_contradictions": [
+    {
+      "doc_a": "doc-05-rag-vs-fine-tuning.md",
+      "doc_b": "doc-06-knowledge-management-with-llms.md",
+      "description": "doc-05 暗示 RAG 对多数场景已足够；doc-06 认为纯 RAG 不够，需要编译式知识库"
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}文档管理 - {{ repo.name }} - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ul>
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li>文档管理</li>
+  </ul>
+</nav>
+
+<h2>文档管理</h2>
+
+{% if is_owner %}
+<article>
+  <form method="POST" action="{{ url_for('source.upload', username=username, repo_slug=repo.slug) }}"
+        enctype="multipart/form-data">
+    {% if csrf_token is defined %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% endif %}
+    <div class="upload-row">
+      <input type="file" name="file" accept=".md,.txt,.pdf,.docx,.pptx,.png,.jpg,.jpeg" required>
+      <button type="submit">上传文档</button>
+    </div>
+    <small>支持格式：Markdown、TXT、PDF、DOCX、PPTX、PNG、JPG</small>
+  </form>
+</article>
+{% endif %}
+
+{% if sources %}
+<figure>
+  <table role="grid">
+    <thead>
+      <tr>
+        <th>文件名</th>
+        <th>大小</th>
+        <th>状态</th>
+        <th>上传时间</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for src in sources %}
+      <tr>
+        <td>
+          <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}">
+            {{ src.filename }}
+          </a>
+        </td>
+        <td>{{ src.size_display }}</td>
+        <td>
+          {% if src.ingested %}
+          <span class="badge badge-source">已摄入</span>
+          {% else %}
+          <span class="badge badge-muted">未摄入</span>
+          {% endif %}
+        </td>
+        <td>{{ src.created_at.strftime('%Y-%m-%d %H:%M') if src.created_at }}</td>
+        <td class="source-actions">
+          <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
+             role="button" class="outline small-btn">查看</a>
+          {% if not src.ingested and is_owner %}
+          <form method="POST" action="{{ url_for('source.ingest', username=username, repo_slug=repo.slug, source_id=src.id) }}"
+                style="display:inline">
+            <button type="submit" class="outline small-btn">摄入</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</figure>
+{% else %}
+<article class="empty-state">
+  <h3>还没有文档</h3>
+  <p>上传文档后，可以将其摄入为 Wiki 页面。</p>
+</article>
+{% endif %}
+{% endblock %}

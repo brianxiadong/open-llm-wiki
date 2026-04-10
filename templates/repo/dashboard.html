@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}{{ repo.name }} - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<div class="repo-header">
+  <div>
+    <h2>{{ repo.name }}</h2>
+    {% if repo.description %}
+    <p class="repo-description">{{ repo.description }}</p>
+    {% endif %}
+  </div>
+  <div class="repo-header-stats">
+    <span class="badge">📄 {{ repo.source_count }} 来源</span>
+    <span class="badge">📝 {{ repo.page_count }} 页面</span>
+  </div>
+</div>
+
+<div class="action-bar">
+  <a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}" role="button" class="outline">
+    上传文档
+  </a>
+  <a href="{{ url_for('ops.query', username=username, repo_slug=repo.slug) }}" role="button" class="outline">
+    查询
+  </a>
+  <a href="{{ url_for('ops.lint', username=username, repo_slug=repo.slug) }}" role="button" class="outline secondary">
+    维护检查
+  </a>
+  <a href="{{ url_for('wiki.graph', username=username, repo_slug=repo.slug) }}" role="button" class="outline secondary">
+    关系图谱
+  </a>
+  {% if is_owner %}
+  <a href="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}" role="button" class="outline secondary">
+    设置
+  </a>
+  {% endif %}
+</div>
+
+<div class="dashboard-layout">
+  <aside class="wiki-sidebar">
+    <nav>
+      {% set type_labels = {'overview': '概览', 'source': '来源', 'entity': '实体', 'concept': '概念', 'analysis': '分析'} %}
+      {% for type_key, type_label in type_labels.items() %}
+      <details {% if type_key == 'overview' %}open{% endif %}>
+        <summary>{{ type_label }}</summary>
+        <ul>
+          {% for page in pages if page.type == type_key %}
+          <li>
+            <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=page.slug) }}"
+               {% if active_page and active_page.slug == page.slug %}aria-current="page"{% endif %}>
+              {{ page.title }}
+            </a>
+          </li>
+          {% else %}
+          <li><small class="muted">暂无{{ type_label }}页面</small></li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endfor %}
+    </nav>
+  </aside>
+
+  <section class="wiki-content">
+    {% if page_content %}
+    {{ page_content|safe }}
+    {% else %}
+    <article class="empty-state">
+      <h3>欢迎使用 {{ repo.name }}</h3>
+      <p>上传文档并摄入后，Wiki 页面将自动生成并显示在这里。</p>
+      <a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}" role="button">
+        开始上传文档
+      </a>
+    </article>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

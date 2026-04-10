@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}设置 - {{ repo.name }} - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<h2>知识库设置</h2>
+<nav aria-label="breadcrumb">
+  <ul>
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li>设置</li>
+  </ul>
+</nav>
+
+<article>
+  <header><h3>基本信息</h3></header>
+  <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
+    {% if csrf_token is defined %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="update_info">
+    {% endif %}
+
+    <label for="name">知识库名称</label>
+    <input type="text" id="name" name="name" value="{{ repo.name }}" required>
+
+    <label for="description">描述</label>
+    <textarea id="description" name="description" rows="3">{{ repo.description or '' }}</textarea>
+
+    <button type="submit">保存修改</button>
+  </form>
+</article>
+
+<article>
+  <header><h3>Schema 编辑</h3></header>
+  <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
+    {% if csrf_token is defined %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% endif %}
+    <input type="hidden" name="action" value="update_schema">
+
+    <label for="schema_content">schema.md</label>
+    <textarea id="schema_content" name="schema_content" rows="12" class="code-textarea">{{ schema_content or '' }}</textarea>
+    <small>定义知识库的页面类型、属性和关系规则</small>
+
+    <button type="submit">保存 Schema</button>
+  </form>
+</article>
+
+<article class="danger-zone">
+  <header><h3>危险操作</h3></header>
+  <p>删除知识库后，所有页面和文档将永久丢失，且无法恢复。</p>
+  <form method="POST" action="{{ url_for('repo.delete', username=username, repo_slug=repo.slug) }}"
+        class="delete-form" data-confirm="确定要删除知识库「{{ repo.name }}」吗？此操作不可逆。">
+    {% if csrf_token is defined %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% endif %}
+    <button type="submit" class="outline contrast delete-btn">删除知识库</button>
+  </form>
+</article>
+{% endblock %}

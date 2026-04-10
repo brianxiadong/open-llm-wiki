@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}{{ source.filename }} - {{ repo.name }} - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ul>
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li><a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}">文档管理</a></li>
+    <li>{{ source.filename }}</li>
+  </ul>
+</nav>
+
+<div class="source-header">
+  <h2>{{ source.filename }}</h2>
+  {% if not source.ingested and is_owner %}
+  <form method="POST" action="{{ url_for('source.ingest', username=username, repo_slug=repo.slug, source_id=source.id) }}">
+    {% if csrf_token is defined %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% endif %}
+    <button type="submit">摄入到 Wiki</button>
+  </form>
+  {% elif source.ingested %}
+  <span class="badge badge-source">已摄入</span>
+  {% endif %}
+</div>
+
+<article class="rendered-content">
+  {{ content|safe }}
+</article>
+{% endblock %}

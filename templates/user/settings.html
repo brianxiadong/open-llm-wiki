@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}用户设置 - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<h2>用户设置</h2>
+
+<article>
+  <header><h3>个人信息</h3></header>
+  <form method="POST" action="{{ url_for('user.settings') }}">
+    {% if csrf_token is defined %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% endif %}
+    <input type="hidden" name="action" value="update_profile">
+
+    <label for="display_name">显示名称</label>
+    <input type="text" id="display_name" name="display_name"
+           value="{{ current_user.display_name or '' }}" placeholder="用于页面展示的名称">
+
+    <button type="submit">保存修改</button>
+  </form>
+</article>
+
+<article>
+  <header><h3>修改密码</h3></header>
+  <form method="POST" action="{{ url_for('user.settings') }}">
+    {% if csrf_token is defined %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% endif %}
+    <input type="hidden" name="action" value="change_password">
+
+    <label for="old_password">当前密码</label>
+    <input type="password" id="old_password" name="old_password" required>
+
+    <label for="new_password">新密码</label>
+    <input type="password" id="new_password" name="new_password" required minlength="8">
+
+    <label for="confirm_password">确认新密码</label>
+    <input type="password" id="confirm_password" name="confirm_password" required minlength="8">
+
+    <button type="submit">修改密码</button>
+  </form>
+</article>
+{% endblock %}

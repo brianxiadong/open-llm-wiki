@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}摄入进度 - {{ repo.name }} - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ul>
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li>摄入进度</li>
+  </ul>
+</nav>
+
+<h2>文档摄入</h2>
+
+<article>
+  <header>
+    <h3 id="task-title">正在处理…</h3>
+  </header>
+
+  <div class="progress-section">
+    <label id="progress-label">准备中…</label>
+    <progress id="progress-bar" value="0" max="100"></progress>
+    <small id="progress-pct">0%</small>
+  </div>
+
+  <div id="step-log" class="step-log">
+    <ul id="step-list"></ul>
+  </div>
+
+  <footer id="task-footer" hidden>
+    <a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}" role="button">
+      返回知识库
+    </a>
+  </footer>
+</article>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var streamUrl = '{{ url_for("ops.task_stream", task_id=task_id) }}';
+    var bar = document.getElementById('progress-bar');
+    var pct = document.getElementById('progress-pct');
+    var label = document.getElementById('progress-label');
+    var title = document.getElementById('task-title');
+    var stepList = document.getElementById('step-list');
+    var footer = document.getElementById('task-footer');
+
+    function addStep(msg, status) {
+      var li = document.createElement('li');
+      var icon = status === 'done' ? '✅' : status === 'error' ? '❌' : '⏳';
+      li.textContent = icon + ' ' + msg;
+      li.className = 'step-' + status;
+      stepList.appendChild(li);
+      stepList.parentElement.scrollTop = stepList.parentElement.scrollHeight;
+    }
+
+    var source = new EventSource(streamUrl);
+
+    source.addEventListener('progress', function (e) {
+      var data = JSON.parse(e.data);
+      bar.value = data.percent;
+      pct.textContent = data.percent + '%';
+      label.textContent = data.message || '';
+    });
+
+    source.addEventListener('step', function (e) {
+      var data = JSON.parse(e.data);
+      addStep(data.message, data.status || 'running');
+    });
+
+    source.addEventListener('done', function (e) {
+      var data = JSON.parse(e.data);
+      title.textContent = '摄入完成';
+      bar.value = 100;
+      pct.textContent = '100%';
+      label.textContent = data.message || '全部步骤已完成';
+      footer.hidden = false;
+      source.close();
+    });
+
+    source.addEventListener('error_event', function (e) {
+      var data = JSON.parse(e.data);
+      title.textContent = '摄入失败';
+      label.textContent = data.message || '处理过程中出现错误';
+      addStep(data.message || '未知错误', 'error');
+      footer.hidden = false;
+      source.close();
+    });
+
+    source.onerror = function () {
+      title.textContent = '连接中断';
+      label.textContent = '与服务器的连接已断开';
+      footer.hidden = false;
+      source.close();
+    };
+  })();
+</script>
+{% endblock %}
