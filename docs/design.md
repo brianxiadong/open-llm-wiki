@@ -318,6 +318,10 @@ POST /{username}/{repo}/schema           → 更新 Schema
 
 操作历史：
 GET  /{username}/{repo}/log              → 查看操作日志（log.md）
+
+Wiki 编辑：
+GET/POST /{username}/{repo}/wiki/{page}/edit   → 编辑 Wiki 页面（仅 owner）
+POST     /{username}/{repo}/wiki/{page}/delete → 删除 Wiki 页面（仅 owner）
 ```
 
 ### 6.2 页面设计
@@ -326,7 +330,9 @@ GET  /{username}/{repo}/log              → 查看操作日志（log.md）
 
 **仓库面板**：左侧是 Wiki 页面的树状导航（按类别），右侧默认显示 overview.md 的渲染内容。顶部工具栏有：上传文档、查询、维护检查、Schema、操作日志。
 
-**Wiki 页面**：渲染后的 markdown，顶部显示 frontmatter 元数据（类型、创建日期、来源）。页面内的 `[链接](page.md)` 自动转为站内链接。侧边栏显示「被引用此页面」的反向链接列表。
+**Wiki 页面**：渲染后的 markdown，顶部显示 frontmatter 元数据（类型、创建日期、来源）。页面内的 `[链接](page.md)` 自动转为站内链接。侧边栏显示「被引用此页面」的反向链接列表。owner 可通过页面顶部的「编辑」和「删除」按钮管理页面。
+
+**Wiki 编辑页**（`templates/wiki/edit.html`）：EasyMDE Markdown 编辑器，支持实时预览与自动保存草稿。
 
 **查询界面**：上方输入框，下方显示回答（markdown 渲染）。回答中的 Wiki 引用可点击跳转。有「保存为 Wiki 页面」按钮。
 

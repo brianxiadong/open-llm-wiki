@@ -422,6 +422,12 @@ def _register_routes(app: Flask) -> None:
             .order_by(Repo.updated_at.desc())
             .all()
         )
+        # Attach active task count to each repo for the card UI
+        for repo in repos:
+            repo.active_task_count = Task.query.filter(
+                Task.repo_id == repo.id,
+                Task.status.in_(["queued", "running"]),
+            ).count()
         return render_template("repo/list.html", username=username, repos=repos)
 
     @repo_bp.route("/repos/new", methods=["GET", "POST"])
@@ -651,6 +657,7 @@ def _register_routes(app: Flask) -> None:
             username=username,
             repo=repo,
             page=page,
+            page_slug=page_slug,
             content=html,
             backlinks=backlinks,
             is_owner=_is_owner(repo),
@@ -702,6 +709,77 @@ def _register_routes(app: Flask) -> None:
                 repo_slug=repo_slug,
                 page_slug="log",
             )
+        )
+
+    @wiki_bp.route("/<username>/<repo_slug>/wiki/<page_slug>/edit", methods=["GET", "POST"])
+    @login_required
+    def edit_page(username, repo_slug, page_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        wiki_dir = os.path.join(
+            get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
+        )
+        filepath = os.path.join(wiki_dir, f"{page_slug}.md")
+        if not os.path.isfile(filepath):
+            abort(404)
+
+        if request.method == "POST":
+            content = request.form.get("content", "")
+            if not content.strip():
+                flash("内容不能为空", "error")
+                return redirect(request.url)
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
+            if current_app.qdrant:
+                try:
+                    fm, _ = render_markdown(content)
+                    current_app.qdrant.upsert_page(
+                        repo_id=repo.id,
+                        filename=f"{page_slug}.md",
+                        title=fm.get("title", page_slug),
+                        page_type=fm.get("type", "unknown"),
+                        content=content,
+                    )
+                except Exception:
+                    logger.warning("Qdrant upsert failed for edited page %s", page_slug)
+            _sync_repo_counts(repo, username)
+            flash("页面已保存", "success")
+            return redirect(
+                url_for("wiki.view_page", username=username, repo_slug=repo_slug, page_slug=page_slug)
+            )
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            raw = f.read()
+        return render_template(
+            "wiki/edit.html",
+            username=username,
+            repo=repo,
+            page_slug=page_slug,
+            content=raw,
+        )
+
+    @wiki_bp.route("/<username>/<repo_slug>/wiki/<page_slug>/delete", methods=["POST"])
+    @login_required
+    def delete_page(username, repo_slug, page_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        wiki_dir = os.path.join(
+            get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
+        )
+        filepath = os.path.join(wiki_dir, f"{page_slug}.md")
+        if os.path.isfile(filepath):
+            os.remove(filepath)
+            if current_app.qdrant:
+                try:
+                    current_app.qdrant.delete_page(repo.id, f"{page_slug}.md")
+                except Exception:
+                    pass
+            _sync_repo_counts(repo, username)
+            flash(f"页面 {page_slug} 已删除", "success")
+        else:
+            flash("页面不存在", "error")
+        return redirect(
+            url_for("repo.dashboard", username=username, repo_slug=repo_slug)
         )
 
     app.register_blueprint(wiki_bp)
@@ -1130,10 +1208,24 @@ def _register_routes(app: Flask) -> None:
                 }
             )
 
+        def _fn_to_ref(fn: str) -> dict:
+            slug = fn.replace(".md", "")
+            return {
+                "url": url_for("wiki.view_page", username=username,
+                               repo_slug=repo_slug, page_slug=slug),
+                "title": fn.replace(".md", "").replace("-", " ").title(),
+                "filename": fn,
+            }
+
+        wiki_sources = [_fn_to_ref(fn) for fn in result.get("wiki_sources", [])]
+        qdrant_sources = [_fn_to_ref(fn) for fn in result.get("qdrant_sources", [])]
+
         return jsonify(
             html=answer_html,
             markdown=result.get("answer", ""),
             references=references,
+            wiki_sources=wiki_sources,
+            qdrant_sources=qdrant_sources,
         )
 
     @ops_bp.route("/<username>/<repo_slug>/query/save", methods=["POST"])

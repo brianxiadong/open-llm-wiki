@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}编辑 {{ page_slug }} - Open LLM Wiki{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
+<style>
+.wiki-edit-container { max-width: 900px; margin: 0 auto; }
+.edit-actions { margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center; }
+.EasyMDEContainer { border-radius: 6px; overflow: hidden; }
+</style>
+{% endblock %}
+
+{% block content %}
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li><a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=page_slug) }}">{{ page_slug }}</a></li>
+    <li>编辑</li>
+  </ul>
+</nav>
+
+<div class="wiki-edit-container">
+  <h2>编辑页面: <code>{{ page_slug }}</code></h2>
+  <form method="POST" id="edit-form">
+    <textarea name="content" id="wiki-editor">{{ content }}</textarea>
+    <div class="edit-actions">
+      <button type="submit" class="btn-primary">
+        <i data-lucide="save" aria-hidden="true"></i> 保存
+      </button>
+      <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=page_slug) }}"
+         role="button" class="secondary">取消</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
+<script>
+  var easyMDE = new EasyMDE({
+    element: document.getElementById('wiki-editor'),
+    spellChecker: false,
+    autosave: { enabled: true, uniqueId: 'wiki-edit-{{ page_slug }}', delay: 3000 },
+    toolbar: ['bold','italic','heading','|','quote','unordered-list','ordered-list','|',
+              'link','table','|','preview','side-by-side','fullscreen','|','guide'],
+    minHeight: '400px',
+  });
+</script>
+{% endblock %}

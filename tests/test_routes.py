@@ -246,3 +246,67 @@ def test_index_redirect(client):
     resp = client.get("/", follow_redirects=False)
     assert resp.status_code == 302
     assert "login" in (resp.headers.get("Location") or "").lower()
+
+
+# -- Wiki edit/delete ------------------------------------------------------
+
+
+def test_wiki_edit_page_get(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.get(f"/alice/{slug}/wiki/overview/edit")
+    assert resp.status_code == 200
+
+
+def test_wiki_edit_page_post_saves(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    new_content = "---\ntitle: 概览\ntype: overview\nupdated: 2026-01-01\n---\n\n# 已编辑\n"
+    resp = client.post(
+        f"/alice/{slug}/wiki/overview/edit",
+        data={"content": new_content},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    loc = resp.headers.get("Location") or ""
+    assert "overview" in loc
+
+
+def test_wiki_edit_page_empty_content(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/wiki/overview/edit",
+        data={"content": ""},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+
+
+def test_wiki_delete_page(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    import os
+
+    from config import Config
+
+    wiki_dir = os.path.join(Config.DATA_DIR, "alice", slug, "wiki")
+    test_page = os.path.join(wiki_dir, "to-delete.md")
+    with open(test_page, "w") as f:
+        f.write("---\ntitle: Delete Me\ntype: concept\n---\n\n# Test\n")
+    resp = client.post(
+        f"/alice/{slug}/wiki/to-delete/delete",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert not os.path.exists(test_page)
+
+
+def test_wiki_delete_nonexistent_page(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/wiki/nonexistent-xyz/delete",
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200

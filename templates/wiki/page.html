@@ -6,7 +6,7 @@
 <nav aria-label="面包屑导航">
   <ul class="breadcrumb">
     <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
-    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">Wiki</a></li>
+    <li>Wiki</li>
     <li>{{ page.title }}</li>
   </ul>
 </nav>
@@ -31,6 +31,22 @@
         <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}">{{ src.filename }}</a>{% if not loop.last %}、{% endif %}
         {% endfor %}
       </span>
+      {% endif %}
+      {% if is_owner %}
+      <div class="page-actions" style="margin-left:auto;display:flex;gap:0.5rem;align-items:center;">
+        <a href="{{ url_for('wiki.edit_page', username=username, repo_slug=repo.slug, page_slug=page_slug) }}"
+           role="button" class="outline secondary" style="padding:0.3rem 0.75rem;font-size:0.85rem;margin:0;">
+          <i data-lucide="pencil" aria-hidden="true"></i> 编辑
+        </a>
+        <form method="POST"
+              action="{{ url_for('wiki.delete_page', username=username, repo_slug=repo.slug, page_slug=page_slug) }}"
+              style="display:inline;margin:0;"
+              onsubmit="return confirm('确定要删除页面「{{ page.title }}」吗？此操作不可撤销。')">
+          <button type="submit" class="outline contrast" style="padding:0.3rem 0.75rem;font-size:0.85rem;margin:0;">
+            <i data-lucide="trash-2" aria-hidden="true"></i> 删除
+          </button>
+        </form>
+      </div>
       {% endif %}
     </header>
 
