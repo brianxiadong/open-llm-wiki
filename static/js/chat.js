@@ -375,15 +375,14 @@
       tab.dataset.key = s.key;
       tab.innerHTML =
         '<span class="session-title" title="' + escapeHtml(s.title) + '">' + escapeHtml(s.title) + '</span>' +
-        '<button class="session-del" title="删除" onclick="event.stopPropagation()">✕</button>';
+        '<button class="session-del" title="删除">✕</button>';
       tab.querySelector('.session-del').addEventListener('click', function(e) {
         e.stopPropagation();
         deleteSession(s.key);
       });
       tab.addEventListener('click', function() {
-        loadSession(s.key);
+        switchSession(s.key, sessions, tab);
       });
-      // 双击重命名
       tab.querySelector('.session-title').addEventListener('dblclick', function(e) {
         e.stopPropagation();
         var newTitle = prompt('重命名对话', s.title);
@@ -391,6 +390,19 @@
       });
       sessionList.appendChild(tab);
     });
+    // 滚动到激活 tab
+    var activeTab = sessionList.querySelector('.chat-session-tab.active');
+    if (activeTab) activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  function switchSession(key, sessions, clickedTab) {
+    if (SESSION_KEY === key) return;
+    SESSION_KEY = key;
+    // 更新 active 样式
+    sessionList.querySelectorAll('.chat-session-tab').forEach(function(t) {
+      t.classList.toggle('active', t.dataset.key === key);
+    });
+    restoreChatMessages(key);
   }
 
   function loadSessionList(activateKey) {
