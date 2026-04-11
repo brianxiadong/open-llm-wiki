@@ -316,6 +316,113 @@ def test_apply_fixes_skips_contradictions(tmp_path):
     mock_llm.chat.assert_not_called()
 
 
+# ── confidence scoring ────────────────────────────────────────
+
+
+def test_confidence_high(tmp_data_dir):
+    mock_llm = MagicMock()
+    engine = WikiEngine(mock_llm, MagicMock(), tmp_data_dir)
+    result = engine._score_confidence(
+        wiki_hit_count=3, chunk_hit_count=4,
+        top_chunk_score=0.90, hit_overview=True,
+        both_channels=True, answer_text="正常回答"
+    )
+    assert result["level"] == "high"
+    assert result["score"] >= 0.75
+    assert isinstance(result["reasons"], list)
+
+
+def test_confidence_medium(tmp_data_dir):
+    mock_llm = MagicMock()
+    engine = WikiEngine(mock_llm, MagicMock(), tmp_data_dir)
+    result = engine._score_confidence(
+        wiki_hit_count=1, chunk_hit_count=2,
+        top_chunk_score=0.60, hit_overview=False,
+        both_channels=False, answer_text="正常回答"
+    )
+    assert result["level"] == "medium"
+    assert 0.45 <= result["score"] < 0.75
+
+
+def test_confidence_low_no_evidence(tmp_data_dir):
+    mock_llm = MagicMock()
+    engine = WikiEngine(mock_llm, MagicMock(), tmp_data_dir)
+    result = engine._score_confidence(
+        wiki_hit_count=0, chunk_hit_count=0,
+        top_chunk_score=0.0, hit_overview=False,
+        both_channels=False, answer_text=""
+    )
+    assert result["level"] == "low"
+    assert result["score"] < 0.45
+
+
+def test_confidence_uncertainty_penalty(tmp_data_dir):
+    mock_llm = MagicMock()
+    engine = WikiEngine(mock_llm, MagicMock(), tmp_data_dir)
+    result = engine._score_confidence(
+        wiki_hit_count=1, chunk_hit_count=2,
+        top_chunk_score=0.78, hit_overview=False,
+        both_channels=True,
+        answer_text="基于现有资料只能推测到一些内容"
+    )
+    result_no_penalty = engine._score_confidence(
+        wiki_hit_count=1, chunk_hit_count=2,
+        top_chunk_score=0.78, hit_overview=False,
+        both_channels=True, answer_text="正常回答"
+    )
+    assert result["score"] < result_no_penalty["score"]
+
+
+def test_query_with_evidence_no_content(tmp_data_dir):
+    mock_qdrant = MagicMock()
+    mock_qdrant.search_chunks.return_value = []
+    engine = WikiEngine(MagicMock(), mock_qdrant, tmp_data_dir)
+    repo = MagicMock()
+    repo.slug = "empty"
+    repo.id = 1
+    result = engine.query_with_evidence(repo, "alice", "test?")
+    assert "markdown" in result
+    assert "confidence" in result
+    assert result["confidence"]["level"] == "low"
+    assert result["wiki_evidence"] == []
+    assert result["chunk_evidence"] == []
+
+
+def test_query_with_evidence_with_pages(tmp_data_dir):
+    wiki_dir = os.path.join(tmp_data_dir, "alice", "ev1", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "index.md"), "w") as f:
+        f.write("---\ntitle: 首页\ntype: index\n---\n\n- [C](concept.md)\n")
+    with open(os.path.join(wiki_dir, "concept.md"), "w") as f:
+        f.write("---\ntitle: Concept\ntype: concept\n---\n\n# Concept\n\nDetails.\n")
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": ["concept.md"]}
+    mock_llm.chat.return_value = "Here is the answer."
+
+    mock_qdrant = MagicMock()
+    mock_qdrant.search_chunks.return_value = [{
+        "chunk_id": "concept.md#0", "filename": "concept.md",
+        "page_title": "Concept", "page_type": "concept",
+        "heading": "Details", "chunk_text": "Details here.", "position": 0,
+        "score": 0.88,
+    }]
+
+    engine = WikiEngine(mock_llm, mock_qdrant, tmp_data_dir)
+    repo = MagicMock()
+    repo.slug = "ev1"
+    repo.id = 1
+    result = engine.query_with_evidence(repo, "alice", "What is it?")
+
+    assert result["markdown"]
+    assert len(result["wiki_evidence"]) >= 1
+    assert len(result["chunk_evidence"]) >= 1
+    assert result["confidence"]["level"] in ("high", "medium", "low")
+    assert "evidence_summary" in result
+    assert "wiki_sources" in result
+    assert "qdrant_sources" in result
+
+
 def test_apply_fixes_route(sample_repo, app):
     """apply_fixes route should handle empty issues_json gracefully."""
     client, repo_info = sample_repo

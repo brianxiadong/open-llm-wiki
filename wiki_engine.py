@@ -17,6 +17,16 @@ logger = logging.getLogger(__name__)
 
 _JSON_FENCE_CHARS = ("`", "```")
 
+_UNCERTAINTY_PHRASES = (
+    "基于现有资料只能推测到",
+    "现有证据不足以支持更确定的结论",
+    "当前知识库中缺少直接证据",
+)
+
+
+def _contains_uncertainty(text: str) -> bool:
+    return any(p in text for p in _UNCERTAINTY_PHRASES)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -140,6 +150,58 @@ class WikiEngine:
         except LLMClientError as exc:
             logger.error("chat_text failed: %s", exc)
             return ""
+
+    # -----------------------------------------------------------------------
+    # CONFIDENCE SCORING
+    # -----------------------------------------------------------------------
+
+    def _score_confidence(
+        self,
+        wiki_hit_count: int,
+        chunk_hit_count: int,
+        top_chunk_score: float,
+        hit_overview: bool,
+        both_channels: bool,
+        answer_text: str,
+    ) -> dict:
+        score = 0.0
+        reasons: list[str] = []
+
+        if wiki_hit_count >= 1:
+            score += 0.30
+            reasons.append(f"命中 {wiki_hit_count} 个 Wiki 页面")
+        if wiki_hit_count >= 2:
+            score += 0.15
+        if chunk_hit_count >= 2:
+            score += 0.25
+            reasons.append(f"命中 {chunk_hit_count} 个段落证据")
+        if chunk_hit_count >= 4:
+            score += 0.10
+        if both_channels:
+            score += 0.15
+            reasons.append("LLM Wiki 与向量检索均命中")
+        if top_chunk_score >= 0.85:
+            score += 0.10
+        elif top_chunk_score >= 0.75:
+            score += 0.05
+        if hit_overview:
+            score += 0.05
+            reasons.append("命中概览页")
+        if _contains_uncertainty(answer_text):
+            score -= 0.20
+            reasons.append("回答存在证据不足提示")
+
+        score = max(0.0, min(1.0, score))
+        if score >= 0.75:
+            level = "high"
+        elif score >= 0.45:
+            level = "medium"
+        else:
+            level = "low"
+            if not reasons:
+                reasons.append("证据不足")
+
+        return {"level": level, "score": round(score, 2), "reasons": reasons}
 
     # -----------------------------------------------------------------------
     # INGEST
@@ -565,10 +627,11 @@ class WikiEngine:
                 wiki_filenames = [wiki_filenames]
 
         qdrant_filenames: list[str] = []
+        chunk_hits: list[dict] = []
         if self._qdrant:
             try:
-                hits = self._qdrant.search(repo_id=repo_id, query=question, limit=8)
-                qdrant_filenames = [h["filename"] for h in hits if h.get("filename")]
+                chunk_hits = self._qdrant.search_chunks(repo_id=repo_id, query=question, limit=8)
+                qdrant_filenames = list({h["filename"] for h in chunk_hits})
             except QdrantServiceError:
                 pass
 
@@ -620,12 +683,209 @@ class WikiEngine:
             return
 
         loaded = set(page_contents.keys())
+        answer_text = "".join(answer_chunks)
+        confidence = self._score_confidence(
+            wiki_hit_count=len(wiki_filenames),
+            chunk_hit_count=len(chunk_hits),
+            top_chunk_score=chunk_hits[0]["score"] if chunk_hits else 0.0,
+            hit_overview="overview.md" in wiki_filenames,
+            both_channels=bool(wiki_filenames) and bool(chunk_hits),
+            answer_text=answer_text,
+        )
+        wiki_ev = []
+        for fn in wiki_filenames:
+            if fn not in loaded:
+                continue
+            fm_ev, _ = render_markdown(page_contents[fn])
+            reason = "高层概览页命中" if fn == "overview.md" else "结构化路径选中"
+            page_slug = fn.replace(".md", "")
+            wiki_ev.append({
+                "filename": fn,
+                "title": fm_ev.get("title", page_slug),
+                "type": fm_ev.get("type", "unknown"),
+                "url": f"/{page_slug}",
+                "reason": reason,
+            })
+        chunk_ev = []
+        for hit in chunk_hits:
+            fn = hit["filename"]
+            page_slug = fn.replace(".md", "")
+            chunk_ev.append({
+                "chunk_id": hit["chunk_id"],
+                "filename": fn,
+                "title": hit.get("page_title", page_slug),
+                "heading": hit.get("heading", ""),
+                "url": f"/{page_slug}",
+                "snippet": hit.get("chunk_text", "")[:200],
+                "score": hit.get("score", 0.0),
+            })
+        evidence_summary = (
+            f"本回答基于 {len(wiki_ev)} 个 Wiki 页面和 {len(chunk_ev)} 个原文片段生成。"
+        )
         yield {"event": "done", "data": {
-            "answer": "".join(answer_chunks),
+            "answer": answer_text,
+            "markdown": answer_text,
+            "confidence": confidence,
+            "wiki_evidence": wiki_ev,
+            "chunk_evidence": chunk_ev,
+            "evidence_summary": evidence_summary,
             "wiki_sources": [f for f in wiki_filenames if f in loaded],
-            "qdrant_sources": [f for f in qdrant_filenames if f in loaded],
+            "qdrant_sources": list({h["filename"] for h in chunk_hits}),
             "referenced_pages": list(loaded),
         }}
+
+    # -----------------------------------------------------------------------
+    # QUERY WITH EVIDENCE
+    # -----------------------------------------------------------------------
+
+    def query_with_evidence(
+        self,
+        repo: Any,
+        username: str,
+        question: str,
+        wiki_base_url: str = "",
+    ) -> dict[str, Any]:
+        """Query using dual-channel evidence retrieval with rule-based confidence scoring."""
+        repo_slug = repo.slug
+        repo_id = repo.id
+        wiki_dir = self._wiki_dir(username, repo_slug)
+        schema_content = _read_file(self._schema_path(username, repo_slug))
+        index_content = _read_file(self._index_path(username, repo_slug))
+
+        system_base = (
+            "你是一个 Wiki 知识助手。根据 Wiki 内容准确回答问题。\n"
+            "当关键结论证据不足时，必须使用以下提示语之一：\n"
+            "「基于现有资料只能推测到」、「现有证据不足以支持更确定的结论」、"
+            "「当前知识库中缺少直接证据」。\n\n"
+            + (schema_content or "")
+        )
+
+        # -- Wiki path -------------------------------------------------
+        wiki_filenames: list[str] = []
+        if index_content:
+            pick = self._chat_json(
+                system=system_base,
+                user=(
+                    "根据用户问题，从索引中选出最相关的页面（最多 8 个）。\n"
+                    '返回 JSON: {"filenames": ["a.md", "b.md"]}\n\n'
+                    f"--- 问题 ---\n{question}\n\n--- index.md ---\n{index_content}"
+                ),
+                default={"filenames": []},
+            )
+            wiki_filenames = pick.get("filenames", [])
+            if isinstance(wiki_filenames, str):
+                wiki_filenames = [wiki_filenames]
+
+        # -- Chunk path ------------------------------------------------
+        chunk_hits: list[dict] = []
+        if self._qdrant:
+            try:
+                chunk_hits = self._qdrant.search_chunks(
+                    repo_id=repo_id, query=question, limit=8
+                )
+            except QdrantServiceError as exc:
+                logger.warning("search_chunks failed: %s", exc)
+
+        # -- Build wiki_evidence ---------------------------------------
+        wiki_evidence: list[dict] = []
+        page_contents: dict[str, str] = {}
+        chunk_fns = {h["filename"] for h in chunk_hits}
+        for fn in wiki_filenames:
+            content = _read_file(os.path.join(wiki_dir, fn))
+            if not content:
+                continue
+            page_contents[fn] = content
+            fm, _ = render_markdown(content)
+            if fn == "overview.md":
+                reason = "高层概览页命中"
+            elif fn in chunk_fns:
+                reason = "结构化路径与片段证据共同支持"
+            else:
+                reason = "结构化路径选中"
+            page_slug = fn.replace(".md", "")
+            wiki_evidence.append({
+                "filename": fn,
+                "title": fm.get("title", page_slug),
+                "type": fm.get("type", "unknown"),
+                "url": f"{wiki_base_url}/{page_slug}" if wiki_base_url else f"/{page_slug}",
+                "reason": reason,
+            })
+
+        # -- Build chunk_evidence --------------------------------------
+        chunk_evidence: list[dict] = []
+        for hit in chunk_hits:
+            fn = hit["filename"]
+            if fn not in page_contents:
+                content = _read_file(os.path.join(wiki_dir, fn))
+                if content:
+                    page_contents[fn] = content
+            page_slug = fn.replace(".md", "")
+            chunk_evidence.append({
+                "chunk_id": hit["chunk_id"],
+                "filename": fn,
+                "title": hit.get("page_title", page_slug),
+                "heading": hit.get("heading", ""),
+                "url": f"{wiki_base_url}/{page_slug}" if wiki_base_url else f"/{page_slug}",
+                "snippet": hit.get("chunk_text", "")[:200],
+                "score": hit.get("score", 0.0),
+            })
+
+        if not page_contents:
+            empty_conf = self._score_confidence(0, 0, 0.0, False, False, "")
+            return {
+                "markdown": "暂无相关 Wiki 内容可以回答该问题。请先导入相关资料。",
+                "confidence": empty_conf,
+                "wiki_evidence": [],
+                "chunk_evidence": [],
+                "evidence_summary": "暂无证据。",
+                "referenced_pages": [],
+                "wiki_sources": [],
+                "qdrant_sources": [],
+            }
+
+        # -- Build context & generate answer ---------------------------
+        context_parts = [f"=== {fn} ===\n{content[:5000]}"
+                         for fn, content in page_contents.items()]
+        context_block = "\n\n".join(context_parts)
+
+        answer = self._chat_text(
+            system=system_base,
+            user=(
+                "根据以下 Wiki 页面和原文片段回答用户问题，使用 Markdown 格式。\n"
+                "若证据不足，请使用指定提示语。\n\n"
+                f"--- 问题 ---\n{question}\n\n"
+                f"--- Wiki 内容 ---\n{context_block}"
+            ),
+        )
+
+        # -- Confidence ------------------------------------------------
+        top_score = chunk_hits[0]["score"] if chunk_hits else 0.0
+        hit_overview = "overview.md" in wiki_filenames
+        both = bool(wiki_filenames) and bool(chunk_hits)
+        confidence = self._score_confidence(
+            wiki_hit_count=len(wiki_filenames),
+            chunk_hit_count=len(chunk_hits),
+            top_chunk_score=top_score,
+            hit_overview=hit_overview,
+            both_channels=both,
+            answer_text=answer,
+        )
+
+        loaded = set(page_contents.keys())
+        evidence_summary = (
+            f"本回答基于 {len(wiki_evidence)} 个 Wiki 页面和 {len(chunk_evidence)} 个原文片段生成。"
+        )
+
+        return {
+            "markdown": answer,
+            "confidence": confidence,
+            "wiki_evidence": wiki_evidence,
+            "chunk_evidence": chunk_evidence,
+            "evidence_summary": evidence_summary,
+            "referenced_pages": list(loaded),
+            "wiki_sources": [e["filename"] for e in wiki_evidence],
+            "qdrant_sources": list(chunk_fns),
+        }
 
     # -----------------------------------------------------------------------
     # LINT
