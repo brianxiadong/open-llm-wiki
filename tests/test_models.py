@@ -136,3 +136,26 @@ def test_set_repo_public(sample_repo, app):
         from models import Repo
         repo = Repo.query.filter_by(slug=slug).first()
         assert repo.is_public == True
+
+
+def test_query_log_creation(sample_repo, app):
+    client, repo_info = sample_repo
+    with app.app_context():
+        from models import QueryLog, User, db
+        user = User.query.filter_by(username="alice").first()
+        log = QueryLog(
+            repo_id=repo_info["id"],
+            user_id=user.id,
+            question="test question",
+            answer_preview="test answer",
+            confidence="medium",
+            wiki_hit_count=2,
+            chunk_hit_count=3,
+            evidence_summary="2 pages, 3 chunks",
+        )
+        db.session.add(log)
+        db.session.commit()
+        fetched = QueryLog.query.filter_by(question="test question").first()
+        assert fetched is not None
+        assert fetched.confidence == "medium"
+        assert fetched.wiki_hit_count == 2

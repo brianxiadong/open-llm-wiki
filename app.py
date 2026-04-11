@@ -1467,6 +1467,10 @@ def _register_routes(app: Flask) -> None:
             _, answer_html = render_markdown(pre_answer, _wiki_base_url(username, repo_slug))
             pre_wiki = data.get("_wiki_sources", [])
             pre_qdrant = data.get("_qdrant_sources", [])
+            pre_confidence = data.get("_confidence", {"level": "low", "score": 0.0, "reasons": []})
+            pre_wiki_ev = data.get("_wiki_evidence", [])
+            pre_chunk_ev = data.get("_chunk_evidence", [])
+            pre_ev_summary = data.get("_evidence_summary", "")
 
             def _src_to_ref(fn):
                 slug = fn.replace(".md", "")
@@ -1480,6 +1484,11 @@ def _register_routes(app: Flask) -> None:
             return jsonify(
                 html=answer_html,
                 markdown=pre_answer,
+                answer=pre_answer,
+                confidence=pre_confidence,
+                wiki_evidence=pre_wiki_ev,
+                chunk_evidence=pre_chunk_ev,
+                evidence_summary=pre_ev_summary,
                 references=[_src_to_ref(fn) for fn in pre_wiki],
                 wiki_sources=[_src_to_ref(fn) for fn in pre_wiki],
                 qdrant_sources=[_src_to_ref(fn) for fn in pre_qdrant],
@@ -1489,29 +1498,44 @@ def _register_routes(app: Flask) -> None:
             return jsonify(error="请输入问题"), 400
 
         try:
-            result = current_app.wiki_engine.query(repo, username, question)
+            result = current_app.wiki_engine.query_with_evidence(
+                repo, username, question, _wiki_base_url(username, repo_slug)
+            )
         except Exception as exc:
             logger.exception("Query failed for repo %s", repo.id)
             return jsonify(error=f"查询失败: {exc}"), 500
 
         _, answer_html = render_markdown(
-            result.get("answer", ""), _wiki_base_url(username, repo_slug)
+            result.get("markdown", ""), _wiki_base_url(username, repo_slug)
         )
 
-        references = []
-        for fn in result.get("referenced_pages", []):
-            page_slug = fn.replace(".md", "")
-            references.append(
-                {
-                    "url": url_for(
-                        "wiki.view_page",
-                        username=username,
-                        repo_slug=repo_slug,
-                        page_slug=page_slug,
-                    ),
-                    "title": fn.replace(".md", "").replace("-", " ").title(),
-                }
+        # -- Write query log -------------------------------------------
+        try:
+            from models import QueryLog
+            import json as _json
+            ql = QueryLog(
+                repo_id=repo.id,
+                user_id=user.id,
+                question=question,
+                answer_preview=result.get("markdown", "")[:500],
+                confidence=result.get("confidence", {}).get("level", "low"),
+                wiki_hit_count=len(result.get("wiki_evidence", [])),
+                chunk_hit_count=len(result.get("chunk_evidence", [])),
+                used_wiki_pages=_json.dumps(
+                    [e["filename"] for e in result.get("wiki_evidence", [])],
+                    ensure_ascii=False,
+                ),
+                used_chunk_ids=_json.dumps(
+                    [e["chunk_id"] for e in result.get("chunk_evidence", [])],
+                    ensure_ascii=False,
+                ),
+                evidence_summary=result.get("evidence_summary", ""),
             )
+            from models import db
+            db.session.add(ql)
+            db.session.commit()
+        except Exception as ql_exc:
+            logger.warning("QueryLog write failed: %s", ql_exc)
 
         def _fn_to_ref(fn: str) -> dict:
             slug = fn.replace(".md", "")
@@ -1522,15 +1546,23 @@ def _register_routes(app: Flask) -> None:
                 "filename": fn,
             }
 
-        wiki_sources = [_fn_to_ref(fn) for fn in result.get("wiki_sources", [])]
-        qdrant_sources = [_fn_to_ref(fn) for fn in result.get("qdrant_sources", [])]
+        wiki_sources_refs = [_fn_to_ref(fn) for fn in result.get("wiki_sources", [])]
+        qdrant_sources_refs = [_fn_to_ref(fn) for fn in result.get("qdrant_sources", [])]
+        referenced = result.get("referenced_pages", [])
+        references = [_fn_to_ref(fn) for fn in referenced]
 
         return jsonify(
             html=answer_html,
-            markdown=result.get("answer", ""),
+            markdown=result.get("markdown", ""),
+            answer=result.get("markdown", ""),
+            confidence=result.get("confidence", {}),
+            wiki_evidence=result.get("wiki_evidence", []),
+            chunk_evidence=result.get("chunk_evidence", []),
+            evidence_summary=result.get("evidence_summary", ""),
+            referenced_pages=referenced,
             references=references,
-            wiki_sources=wiki_sources,
-            qdrant_sources=qdrant_sources,
+            wiki_sources=wiki_sources_refs,
+            qdrant_sources=qdrant_sources_refs,
         )
 
     @ops_bp.route("/<username>/<repo_slug>/query/stream", methods=["GET"])

@@ -523,3 +523,82 @@ def test_global_search_unauthorized(client, app):
     resp = client.get("/alice/search?q=test", follow_redirects=False)
     assert resp.status_code in (302, 403)
 
+
+
+# -- query_api evidence schema -------------------------------------------
+
+def test_query_api_returns_confidence(sample_repo, app):
+    """query API must return confidence, wiki_evidence, chunk_evidence fields."""
+    from unittest.mock import patch
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    fake = {
+        "markdown": "Test answer",
+        "confidence": {"level": "medium", "score": 0.6, "reasons": ["命中 1 个页面"]},
+        "wiki_evidence": [{"filename": "overview.md", "title": "概览",
+                           "type": "overview", "url": "/test", "reason": "高层概览页命中"}],
+        "chunk_evidence": [],
+        "evidence_summary": "基于 1 个页面生成。",
+        "referenced_pages": ["overview.md"],
+        "wiki_sources": ["overview.md"],
+        "qdrant_sources": [],
+    }
+    with patch.object(app.wiki_engine, "query_with_evidence", return_value=fake):
+        resp = client.post(f"/alice/{slug}/query", json={"q": "test"})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "confidence" in data
+    assert data["confidence"]["level"] == "medium"
+    assert "wiki_evidence" in data
+    assert "chunk_evidence" in data
+    assert "html" in data
+    assert "wiki_sources" in data
+    assert "qdrant_sources" in data
+
+
+def test_query_api_render_only_returns_confidence(sample_repo):
+    """Render-only branch must also return confidence and evidence fields."""
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/query",
+        json={
+            "q": "test",
+            "_rendered_answer": "# Hello",
+            "_confidence": {"level": "low", "score": 0.2, "reasons": []},
+            "_wiki_evidence": [],
+            "_chunk_evidence": [],
+            "_evidence_summary": "",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "html" in data
+    assert "confidence" in data
+    assert data["confidence"]["level"] == "low"
+
+
+def test_query_stream_done_has_evidence(sample_repo, app):
+    """SSE done event must include confidence and evidence fields."""
+    from unittest.mock import patch
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    def fake_stream(repo, username, question):
+        yield {"event": "progress", "data": {"message": "检索中", "percent": 10}}
+        yield {"event": "answer_chunk", "data": {"chunk": "Hi"}}
+        yield {"event": "done", "data": {
+            "answer": "Hi", "markdown": "Hi",
+            "confidence": {"level": "low", "score": 0.1, "reasons": []},
+            "wiki_evidence": [], "chunk_evidence": [],
+            "evidence_summary": "暂无证据。",
+            "wiki_sources": [], "qdrant_sources": [],
+            "referenced_pages": [],
+        }}
+
+    with patch.object(app.wiki_engine, "query_stream", side_effect=fake_stream):
+        resp = client.get(f"/alice/{slug}/query/stream?q=test")
+    assert resp.status_code == 200
+    assert b"confidence" in resp.data
+    assert b"wiki_evidence" in resp.data
+    assert b"chunk_evidence" in resp.data

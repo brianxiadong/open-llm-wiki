@@ -67,6 +67,23 @@ class Task(db.Model):
     repo = db.relationship("Repo", back_populates="tasks")
 
 
+class QueryLog(db.Model):
+    __tablename__ = "query_logs"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    repo_id = db.Column(db.Integer, db.ForeignKey("repos.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    question = db.Column(db.Text, nullable=False)
+    answer_preview = db.Column(db.Text, nullable=True)
+    confidence = db.Column(db.String(16), nullable=False, default="low")
+    wiki_hit_count = db.Column(db.Integer, nullable=False, default=0)
+    chunk_hit_count = db.Column(db.Integer, nullable=False, default=0)
+    used_wiki_pages = db.Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
+    used_chunk_ids = db.Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
+    evidence_summary = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utc_now)
+
+
 @login_manager.user_loader
 def load_user(user_id: str) -> User | None:
     return db.session.get(User, int(user_id))
