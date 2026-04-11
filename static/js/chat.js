@@ -513,6 +513,7 @@
   }
 
   /* ── Send query ───────────────────────────────────────── */
+  form.addEventListener('submit', function (e) {
     e.preventDefault();
     var q = input.value.trim();
     if (!q || isLoading) return;
