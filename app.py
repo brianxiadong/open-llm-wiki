@@ -170,6 +170,10 @@ def _purge_source_wiki(app, repo, username: str, source_filename: str) -> int:
                     app.qdrant.delete_page(repo.id, fname)
                 except Exception:
                     pass
+                try:
+                    app.qdrant.delete_page_chunks(repo.id, fname)
+                except Exception:
+                    pass
                 removed += 1
                 logger.info("Purged wiki page %s (source: %s)", fname, source_filename)
         except Exception:
@@ -822,6 +826,13 @@ def _register_routes(app: Flask) -> None:
                         page_type=fm.get("type", "unknown"),
                         content=content,
                     )
+                    current_app.qdrant.upsert_page_chunks(
+                        repo_id=repo.id,
+                        filename=f"{page_slug}.md",
+                        title=fm.get("title", page_slug),
+                        page_type=fm.get("type", "unknown"),
+                        content=content,
+                    )
                 except Exception:
                     logger.warning("Qdrant upsert failed for edited page %s", page_slug)
             _sync_repo_counts(repo, username)
@@ -854,6 +865,7 @@ def _register_routes(app: Flask) -> None:
             if current_app.qdrant:
                 try:
                     current_app.qdrant.delete_page(repo.id, f"{page_slug}.md")
+                    current_app.qdrant.delete_page_chunks(repo.id, f"{page_slug}.md")
                 except Exception:
                     pass
             _sync_repo_counts(repo, username)

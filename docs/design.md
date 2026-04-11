@@ -155,21 +155,31 @@ Step 6: 更新 overview.md
                          │
             ┌────────────┴────────────┐
             ▼                         ▼
-    Wiki 结构化路径              Qdrant 语义路径
-    LLM 读 index.md             向量相似度检索
-    沿目录和交叉引用导航         返回 Top-K 页面
-    选出结构上相关的页面         选出语义上相关的页面
+    Wiki 结构化路径              Qdrant Chunk 语义路径
+    LLM 读 index.md             chunk 向量相似度检索
+    沿目录和交叉引用导航         返回 Top-8 原文片段
+    选出结构上相关的页面         精确命中段落级内容
             │                         │
             └────────────┬────────────┘
                          ▼
-                  合并去重，得到最终页面集
+                  合并去重，计算规则化置信度
                          │
                          ▼
-                  LLM 阅读这些页面，综合回答
+                  LLM 阅读页面内容，综合回答
                          │
                          ▼
-              用户可选择将回答保存为新 Wiki 页面
+              返回 wiki_evidence + chunk_evidence + confidence
+              写入 query_logs 供后续分析
 ```
+
+**Phase 1 升级（可信度底座）：**
+- Qdrant 现采用**双层 collection**：
+  - `repo_{id}`：页面级向量（全文，用于 Wiki 路径辅助检索）
+  - `repo_{id}_chunks`：段落级向量（400-800 字，用于 chunk 证据检索）
+- 查询方法升级为 `query_with_evidence()`，返回 `wiki_evidence`、`chunk_evidence`、`confidence`
+- 置信度基于规则打分（0.0-1.0），分级为 `high/medium/low`，写入 `query_logs`
+- SSE `done` 事件同步返回置信度和双通道证据
+- 新增 `manage.py rebuild-chunk-index` 命令用于存量数据回填
 
 **为什么需要两条路径？** 它们各自擅长不同类型的查询：
 
@@ -203,15 +213,30 @@ GET /{username}/{repo}/query/stream?q=<question>
     event: answer_chunk  (chunk="...")  × N
         │
         ▼
-    event: done  (answer, wiki_sources, qdrant_sources, referenced_pages)
+    event: done  (answer, markdown, confidence, wiki_evidence, chunk_evidence, evidence_summary, wiki_sources, qdrant_sources, referenced_pages)
         │
-        ▼ 前端用 done 中的 markdown 调用 POST /query（_rendered_answer 模式）渲染 HTML
+        ▼ 前端用 done 中的 markdown 调用 POST /query（_rendered_answer 模式）渲染 HTML + 证据面板
 ```
 
 - **后端**：`WikiEngine.query_stream()` 为生成器，`LLMClient.chat_stream()` 使用 `stream=True`；Flask 路由使用 `stream_with_context` + `mimetype=text/event-stream`。
-- **前端**：`chat.js` 优先使用 `EventSource`；`answer_chunk` 事件实时更新加载气泡；`done` 后调用 `POST /query`（`_rendered_answer` 模式）获取完整渲染 HTML。
+- **前端**：`chat.js` 优先使用 `EventSource`；`answer_chunk` 事件实时更新加载气泡；`done` 后调用 `POST /query`（`_rendered_answer` 模式）获取完整渲染 HTML，并展示置信度 badge + 双证据面板。
 - **降级**：`queryStreamUrl` 缺失时自动回退到原 POST 轮询模式。
-- **渲染复用**：`POST /query` 若请求体含 `_rendered_answer`，则跳过 LLM 调用，直接渲染 Markdown 返回 HTML，避免重复计费。
+- **渲染复用**：`POST /query` 若请求体含 `_rendered_answer`，则跳过 LLM 调用，直接渲染 Markdown 返回 HTML，同时返回 `confidence`、`wiki_evidence`、`chunk_evidence` 字段。
+
+**Phase 1 新增 query API 返回字段：**
+```json
+{
+  "html": "...",
+  "markdown": "...",
+  "answer": "...",
+  "confidence": {"level": "high|medium|low", "score": 0.85, "reasons": ["..."]},
+  "wiki_evidence": [{"filename": "...", "title": "...", "type": "...", "url": "...", "reason": "..."}],
+  "chunk_evidence": [{"chunk_id": "...", "filename": "...", "title": "...", "heading": "...", "url": "...", "snippet": "...", "score": 0.92}],
+  "evidence_summary": "本回答基于 N 个 Wiki 页面和 M 个原文片段生成。",
+  "wiki_sources": [...],
+  "qdrant_sources": [...]
+}
+```
 
 ### 4.3 Lint（维护检查）
 
@@ -285,6 +310,26 @@ CREATE TABLE tasks (
     started_at    DATETIME,
     finished_at   DATETIME,
     FOREIGN KEY (repo_id) REFERENCES repos(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Phase 1 新增：查询日志表
+CREATE TABLE query_logs (
+    id               INT AUTO_INCREMENT PRIMARY KEY,
+    repo_id          INT NOT NULL,
+    user_id          INT NOT NULL,
+    question         TEXT NOT NULL,
+    answer_preview   TEXT,
+    confidence       VARCHAR(16) NOT NULL DEFAULT 'low',
+    wiki_hit_count   INT NOT NULL DEFAULT 0,
+    chunk_hit_count  INT NOT NULL DEFAULT 0,
+    used_wiki_pages  LONGTEXT,
+    used_chunk_ids   LONGTEXT,
+    evidence_summary TEXT,
+    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_ql_repo (repo_id),
+    INDEX idx_ql_user (user_id),
+    CONSTRAINT fk_ql_repo FOREIGN KEY (repo_id) REFERENCES repos(id),
+    CONSTRAINT fk_ql_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 

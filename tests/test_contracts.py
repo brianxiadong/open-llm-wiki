@@ -217,3 +217,52 @@ def test_task_queue_page_accessible(app, auth_client, sample_repo):
     resp = client.get(f"/{repo_info['username']}/{repo_info['slug']}/tasks")
     assert resp.status_code == 200
     assert "任务队列" in resp.data.decode("utf-8")
+
+
+# ── New evidence/confidence JSON schema ──────────────────────────────────
+
+
+def test_query_api_response_has_confidence_fields(app, sample_repo):
+    """query API must return confidence, wiki_evidence, chunk_evidence fields."""
+    from unittest.mock import patch
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    fake = {
+        "markdown": "answer", "confidence": {"level": "low", "score": 0.1, "reasons": []},
+        "wiki_evidence": [], "chunk_evidence": [], "evidence_summary": "",
+        "referenced_pages": [], "wiki_sources": [], "qdrant_sources": [],
+    }
+    with patch.object(app.wiki_engine, "query_with_evidence", return_value=fake):
+        resp = client.post(f"/alice/{slug}/query", json={"q": "test"})
+    data = resp.get_json()
+    for field in ("confidence", "wiki_evidence", "chunk_evidence", "evidence_summary",
+                  "html", "markdown", "wiki_sources", "qdrant_sources"):
+        assert field in data, f"Missing field: {field}"
+    assert isinstance(data["confidence"], dict)
+    assert "level" in data["confidence"]
+    assert "score" in data["confidence"]
+    assert "reasons" in data["confidence"]
+
+
+def test_query_stream_done_has_evidence_fields(app, sample_repo):
+    """SSE done event must include confidence, wiki_evidence, chunk_evidence fields."""
+    from unittest.mock import patch
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    def fake_stream(repo, username, question):
+        yield {"event": "done", "data": {
+            "answer": "Hi", "markdown": "Hi",
+            "confidence": {"level": "low", "score": 0.1, "reasons": []},
+            "wiki_evidence": [], "chunk_evidence": [],
+            "evidence_summary": "暂无证据。",
+            "wiki_sources": [], "qdrant_sources": [],
+            "referenced_pages": [],
+        }}
+
+    with patch.object(app.wiki_engine, "query_stream", side_effect=fake_stream):
+        resp = client.get(f"/alice/{slug}/query/stream?q=test")
+    body = resp.data.decode()
+    assert "confidence" in body
+    assert "wiki_evidence" in body
+    assert "chunk_evidence" in body

@@ -396,6 +396,17 @@ class WikiEngine:
                 logger.error("Vector upsert failed for %s: %s", filename, exc)
                 yield _progress("index", pct, f"Vector index failed for {filename}: {exc}")
 
+            try:
+                self._qdrant.upsert_page_chunks(
+                    repo_id=repo_id,
+                    filename=filename,
+                    title=title,
+                    page_type=page_type,
+                    content=content,
+                )
+            except QdrantServiceError as exc:
+                logger.error("Chunk upsert failed for %s: %s", filename, exc)
+
         yield _progress("index", 85, "Vector indexing complete")
 
         # -- 7. Finalize: rebuild index.md ----------------------------------
@@ -465,6 +476,13 @@ class WikiEngine:
                     try:
                         fm_ov, _ = render_markdown(new_overview)
                         self._qdrant.upsert_page(
+                            repo_id=repo_id,
+                            filename="overview.md",
+                            title=fm_ov.get("title", "概览"),
+                            page_type="overview",
+                            content=new_overview,
+                        )
+                        self._qdrant.upsert_page_chunks(
                             repo_id=repo_id,
                             filename="overview.md",
                             title=fm_ov.get("title", "概览"),

@@ -156,5 +156,48 @@ def check():
         click.echo(f"  {icon} {service}: {status}")
 
 
+@cli.command("rebuild-chunk-index")
+@click.option("--repo-id", default=None, type=int, help="只重建指定 repo 的 chunk 索引")
+def rebuild_chunk_index(repo_id):
+    """重建 Qdrant chunk 索引（用于存量数据回填）"""
+    from app import create_app
+    from models import Repo
+    from utils import get_repo_path, list_wiki_pages
+
+    app = create_app()
+    with app.app_context():
+        if not app.qdrant:
+            click.echo("Qdrant 不可用，跳过。")
+            return
+        query = Repo.query
+        if repo_id:
+            query = query.filter_by(id=repo_id)
+        repos = query.all()
+        for repo in repos:
+            user = repo.user
+            base = get_repo_path(app.config["DATA_DIR"], user.username, repo.slug)
+            wiki_dir = os.path.join(base, "wiki")
+            if not os.path.isdir(wiki_dir):
+                continue
+            pages = list_wiki_pages(wiki_dir)
+            click.echo(f"Rebuilding chunks for repo={repo.id} ({repo.slug}): {len(pages)} pages")
+            for page in pages:
+                fpath = os.path.join(wiki_dir, page["filename"])
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    app.qdrant.upsert_page_chunks(
+                        repo_id=repo.id,
+                        filename=page["filename"],
+                        title=page["title"],
+                        page_type=page["type"],
+                        content=content,
+                    )
+                    click.echo(f"  OK: {page['filename']}")
+                except Exception as exc:
+                    click.echo(f"  FAIL: {page['filename']}: {exc}")
+    click.echo("Done.")
+
+
 if __name__ == "__main__":
     cli()
