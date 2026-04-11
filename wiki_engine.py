@@ -372,6 +372,46 @@ class WikiEngine:
             existing_log = "---\ntitle: Ingestion Log\ntype: log\n---\n\n# Ingestion Log\n"
         _write_file(log_path, existing_log + log_entry)
 
+        # -- 9. Update overview.md -----------------------------------------
+        if total_pages > 0:
+            yield _progress("finalize", 94, "Updating overview.md …")
+            overview_path = os.path.join(wiki_dir, "overview.md")
+
+            overview_pages = list_wiki_pages(wiki_dir)
+            page_summaries_for_overview = "\n".join(
+                f"- [{p['title']}]({p['filename']}) (type: {p['type']})"
+                for p in overview_pages
+                if p["filename"] not in ("log.md", "schema.md", "overview.md")
+            )
+            now_str_ov = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+            new_overview = self._chat_text(
+                system=system_base,
+                user=(
+                    "请生成或更新 Wiki 的 overview.md 全局概览页面。\n"
+                    f"包含 YAML frontmatter (title: 概览, type: overview, updated: {now_str_ov})。\n"
+                    "内容要求：对知识库的整体高层综述，涵盖主要主题、核心发现、重要实体，"
+                    "适合作为新读者的入口。使用 Markdown 格式，包含必要的章节标题。\n\n"
+                    f"--- 当前所有页面 ---\n{page_summaries_for_overview or '(暂无页面)'}\n\n"
+                    f"--- 最新摄入来源 ---\n{source_filename}\n\n"
+                    f"--- 摄入分析摘要 ---\n{json.dumps(analysis, ensure_ascii=False)}"
+                ),
+            )
+            if new_overview:
+                _write_file(overview_path, new_overview)
+                if self._qdrant:
+                    try:
+                        fm_ov, _ = render_markdown(new_overview)
+                        self._qdrant.upsert_page(
+                            repo_id=repo_id,
+                            filename="overview.md",
+                            title=fm_ov.get("title", "概览"),
+                            page_type="overview",
+                            content=new_overview,
+                        )
+                    except QdrantServiceError as exc:
+                        logger.error("Vector upsert failed for overview.md: %s", exc)
+
         yield _progress(
             "done", 100,
             f"Ingest complete: {len(created_files)} created, {len(updated_files)} updated",
@@ -446,6 +486,8 @@ class WikiEngine:
             return {
                 "answer": "暂无相关 Wiki 内容可以回答该问题。请先导入相关资料。",
                 "referenced_pages": [],
+                "wiki_sources": [],
+                "qdrant_sources": [],
                 "suggested_filename": None,
             }
 
@@ -474,9 +516,13 @@ class WikiEngine:
             },
         )
 
+        # wiki_sources / qdrant_sources: only include pages that were actually loaded
+        loaded = set(page_contents.keys())
         return {
             "answer": answer_result.get("answer", ""),
             "referenced_pages": answer_result.get("referenced_pages", list(page_contents.keys())),
+            "wiki_sources": [f for f in wiki_filenames if f in loaded],
+            "qdrant_sources": [f for f in qdrant_filenames if f in loaded],
             "suggested_filename": answer_result.get("suggested_filename"),
         }
 

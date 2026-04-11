@@ -127,6 +127,10 @@ Step 4: 向量索引
 Step 5: 收尾
   更新 index.md（新增/修改条目）
   追加 log.md（记录本次摄入）
+
+Step 6: 更新 overview.md
+  LLM 综合所有 Wiki 页面生成全局概览
+  → 写入 overview.md + Qdrant upsert（仅当本次有实际变更时执行）
 ```
 
 **为什么分多步而非一次调用？**

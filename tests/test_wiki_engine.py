@@ -79,9 +79,11 @@ updated: 2026-01-01
 - [E1](concept-e1.md)
 """
 
+    overview_md = "---\ntitle: 概览\ntype: overview\nupdated: 2026-01-01\n---\n\n# 概览\n\n概览内容。\n"
+
     mock_llm = MagicMock()
     mock_llm.chat_json.side_effect = [analyze_json, plan_json]
-    mock_llm.chat.side_effect = [page_md, index_md]
+    mock_llm.chat.side_effect = [page_md, index_md, overview_md]
 
     mock_qdrant = MagicMock()
 
@@ -150,6 +152,61 @@ def test_query_with_pages(tmp_data_dir):
     assert "answer" in result
     assert result["answer"]
     assert "concept.md" in result["referenced_pages"]
+
+
+def test_ingest_updates_overview(tmp_data_dir):
+    """overview.md should be updated by LLM after ingest when pages are created."""
+    base = os.path.join(tmp_data_dir, "alice", "test-ov")
+    os.makedirs(os.path.join(base, "raw"), exist_ok=True)
+    os.makedirs(os.path.join(base, "wiki"), exist_ok=True)
+
+    with open(os.path.join(base, "raw", "doc.md"), "w", encoding="utf-8") as f:
+        f.write("# Source\n\nSome content about AI.\n")
+
+    overview_path = os.path.join(base, "wiki", "overview.md")
+    for name, body in [
+        ("schema.md", "# Schema\n\nRules here.\n"),
+        ("index.md", "---\ntitle: Home\ntype: index\nupdated: 2026-01-01\n---\n\n# Index\n"),
+        ("log.md", "---\ntitle: Log\ntype: log\n---\n\n# Log\n"),
+        ("overview.md", "---\ntitle: 概览\ntype: overview\n---\n\n暂无概览内容。上传文档并摄入后，此页面将自动更新。\n"),
+    ]:
+        with open(os.path.join(base, "wiki", name), "w", encoding="utf-8") as f:
+            f.write(body)
+
+    analyze_json = {
+        "summary": "AI overview",
+        "key_entities": ["AI"],
+        "key_concepts": ["ML"],
+        "main_findings": ["AI is useful"],
+    }
+    plan_json = {
+        "pages_to_create": [
+            {"filename": "ai.md", "title": "AI", "type": "concept", "reason": "new topic"}
+        ],
+        "pages_to_update": [],
+    }
+    page_md = "---\ntitle: AI\ntype: concept\nupdated: 2026-01-01\n---\n\n# AI\n\nContent.\n"
+    index_md = "---\ntitle: 首页\ntype: index\nupdated: 2026-01-01\n---\n\n# Wiki\n\n- [AI](ai.md)\n"
+    overview_md = "---\ntitle: 概览\ntype: overview\nupdated: 2026-01-01\n---\n\n# 概览\n\n本知识库包含 AI 相关内容。\n"
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.side_effect = [analyze_json, plan_json]
+    mock_llm.chat.side_effect = [page_md, index_md, overview_md]
+
+    mock_qdrant = MagicMock()
+
+    engine = WikiEngine(mock_llm, mock_qdrant, tmp_data_dir)
+    repo = MagicMock()
+    repo.slug = "test-ov"
+    repo.id = 1
+
+    events = list(engine.ingest(repo, "alice", "doc.md"))
+
+    assert any(e.get("phase") == "done" for e in events)
+    updated_content = open(overview_path, encoding="utf-8").read()
+    assert "暂无概览内容" not in updated_content
+    assert "AI" in updated_content
+    assert mock_qdrant.upsert_page.call_count >= 2  # once for ai.md, once for overview.md
 
 
 def test_lint_empty_wiki(tmp_data_dir):
