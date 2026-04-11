@@ -1156,6 +1156,67 @@ def _register_routes(app: Flask) -> None:
         flash(f"已排队 {queued_count} 个摄入任务", "success" if queued_count else "info")
         return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
 
+    @source_bp.route("/<username>/<repo_slug>/sources/import-url", methods=["POST"])
+    @login_required
+    def import_url(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        url = request.form.get("url", "").strip()
+        if not url:
+            flash("URL 不能为空", "error")
+            return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
+
+        if not url.startswith(("http://", "https://")):
+            flash("请输入有效的 HTTP/HTTPS URL", "error")
+            return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
+
+        try:
+            import trafilatura
+            downloaded = trafilatura.fetch_url(url)
+            if not downloaded:
+                flash("无法获取页面内容，请检查 URL 是否可访问", "error")
+                return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
+            text = trafilatura.extract(
+                downloaded,
+                output_format="markdown",
+                include_links=True,
+                include_images=False,
+                no_fallback=False,
+            )
+            if not text:
+                flash("无法提取页面正文内容", "error")
+                return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
+        except Exception as exc:
+            logger.exception("URL import failed for %s", url)
+            flash(f"导入失败: {exc}", "error")
+            return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
+
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        raw_slug = slugify(parsed.netloc + parsed.path)
+        path_slug = (raw_slug or "imported")[:60]
+        filename = f"{path_slug}.md"
+
+        raw_dir = os.path.join(get_repo_path(Config.DATA_DIR, username, repo_slug), "raw")
+        os.makedirs(raw_dir, exist_ok=True)
+
+        save_name = filename
+        counter = 0
+        while os.path.exists(os.path.join(raw_dir, save_name)):
+            counter += 1
+            save_name = f"{path_slug}-{counter}.md"
+
+        header = f"---\ntitle: {url}\nsource_url: {url}\n---\n\n"
+        with open(os.path.join(raw_dir, save_name), "w", encoding="utf-8") as f:
+            f.write(header + text)
+
+        task = Task(repo_id=repo.id, type="ingest", status="queued", input_data=save_name)
+        db.session.add(task)
+        db.session.commit()
+        _sync_repo_counts(repo, username)
+        flash(f"已导入 {save_name}，摄入任务已排队（#{task.id}）", "success")
+        return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
+
     @source_bp.route("/<username>/<repo_slug>/ingest/<source_id>", methods=["POST"])
     @login_required
     def ingest(username, repo_slug, source_id):

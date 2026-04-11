@@ -348,6 +348,7 @@ GET  /{username}/{repo}/sources/{file}   → 查看原始文档
 POST /{username}/{repo}/sources/upload   → 上传文档
 POST /{username}/{repo}/sources/batch-delete → 批量删除文件
 POST /{username}/{repo}/sources/batch-ingest → 批量摄入未处理文件
+POST /{username}/{repo}/sources/import-url   → 从 URL 导入网页
 
 核心操作：
 POST /{username}/{repo}/ingest/{file}    → 触发摄入
@@ -639,6 +640,7 @@ markdown>=3.5
 pygments>=2.17
 httpx>=0.27
 pyyaml>=6.0
+trafilatura>=1.12
 ```
 
 **为什么选择这些**：

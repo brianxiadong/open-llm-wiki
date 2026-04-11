@@ -62,6 +62,26 @@
 </article>
 {% endif %}
 
+{# ── URL 导入 ── #}
+{% if is_owner %}
+<details class="url-import-section">
+  <summary>
+    <i data-lucide="link" aria-hidden="true"></i> 从 URL 导入网页
+  </summary>
+  <form method="POST"
+        action="{{ url_for('source.import_url', username=username, repo_slug=repo.slug) }}"
+        class="url-import-form">
+    <div class="url-import-row">
+      <input type="url" name="url" placeholder="https://example.com/article"
+             required style="flex:1;">
+      <button type="submit">
+        <i data-lucide="download-cloud" aria-hidden="true"></i> 导入
+      </button>
+    </div>
+  </form>
+</details>
+{% endif %}
+
 {# ── 工具栏 ── #}
 {% if sources %}
 <div class="source-toolbar">

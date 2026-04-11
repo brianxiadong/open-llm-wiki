@@ -428,3 +428,40 @@ def test_export_wiki_zip(sample_repo):
     assert resp.status_code == 200
     assert resp.content_type == "application/zip"
     assert b"PK" in resp.data  # ZIP magic bytes
+
+# -- URL import ------------------------------------------------------------
+
+def test_import_url_empty(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/sources/import-url",
+        data={"url": ""},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+
+
+def test_import_url_invalid(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/sources/import-url",
+        data={"url": "not-a-url"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+
+
+def test_import_url_mocked(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    from unittest.mock import patch
+    with patch("trafilatura.fetch_url", return_value="<html>test</html>"), \
+         patch("trafilatura.extract", return_value="# Test Page\n\nContent here."):
+        resp = client.post(
+            f"/alice/{slug}/sources/import-url",
+            data={"url": "https://example.com/test-article"},
+            follow_redirects=True,
+        )
+    assert resp.status_code == 200
