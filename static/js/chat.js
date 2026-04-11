@@ -439,7 +439,7 @@
           SESSION_KEY = data.key;
           // 清空聊天界面
           if (messages) messages.innerHTML = '';
-          if (welcome) welcome.style.display = '';
+          if (welcome) welcome.hidden = false;
           loadSessionList(data.key);
         }
       });
@@ -453,7 +453,7 @@
         if (SESSION_KEY === key) {
           SESSION_KEY = null;
           if (messages) messages.innerHTML = '';
-          if (welcome) welcome.style.display = '';
+          if (welcome) welcome.hidden = false;
         }
         loadSessionList(null);
       });
@@ -476,10 +476,10 @@
         var msgs = data.messages || [];
         if (!msgs.length) {
           if (messages) messages.innerHTML = '';
-          if (welcome) welcome.style.display = '';
+          if (welcome) welcome.hidden = false;
           return;
         }
-        if (welcome) welcome.style.display = 'none';
+        if (welcome) welcome.hidden = true;
         if (messages) messages.innerHTML = '';
         // 渲染历史消息（简单文本展示，不含证据面板）
         msgs.forEach(function(m) {
@@ -510,7 +510,7 @@
         body: JSON.stringify({ key: SESSION_KEY })
       }).then(function () {
         if (messages) messages.innerHTML = '';
-        if (welcome) welcome.style.display = '';
+        if (welcome) welcome.hidden = false;
         loadSessionList(SESSION_KEY);
       }).catch(function () {});
     });
