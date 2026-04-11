@@ -465,3 +465,61 @@ def test_import_url_mocked(sample_repo, app):
             follow_redirects=True,
         )
     assert resp.status_code == 200
+
+
+# -- Admin -----------------------------------------------------------------
+
+
+def test_admin_dashboard_as_admin(app):
+    from config import Config
+    Config.ADMIN_USERNAME = "alice"
+    client = app.test_client()
+    with app.app_context():
+        from models import User, db
+        if not User.query.filter_by(username="alice").first():
+            u = User(username="alice", display_name="Alice")
+            u.set_password("password123")
+            db.session.add(u)
+            db.session.commit()
+    client.post("/login", data={"username": "alice", "password": "password123"})
+    resp = client.get("/admin/")
+    assert resp.status_code == 200
+
+
+def test_admin_dashboard_unauthorized(client):
+    resp = client.get("/admin/", follow_redirects=False)
+    assert resp.status_code == 302
+
+
+def test_admin_dashboard_non_admin(auth_client, app):
+    from config import Config
+    Config.ADMIN_USERNAME = "other_admin_user"
+    resp = auth_client.get("/admin/")
+    assert resp.status_code == 403
+
+
+# -- Global search ---------------------------------------------------------
+
+
+def test_global_search_no_query(auth_client):
+    resp = auth_client.get("/alice/search")
+    assert resp.status_code == 200
+
+
+def test_global_search_with_query(sample_repo):
+    client, repo_info = sample_repo
+    resp = client.get("/alice/search?q=overview")
+    assert resp.status_code == 200
+
+
+def test_global_search_unauthorized(client, app):
+    with app.app_context():
+        from models import User, db
+        if not User.query.filter_by(username="alice").first():
+            u = User(username="alice", display_name="Alice")
+            u.set_password("password123")
+            db.session.add(u)
+            db.session.commit()
+    resp = client.get("/alice/search?q=test", follow_redirects=False)
+    assert resp.status_code in (302, 403)
+

@@ -222,6 +222,10 @@ def create_app() -> Flask:
         logging.warning("Qdrant service unavailable, running in degraded mode")
     app.wiki_engine = WikiEngine(app.llm, app.qdrant, Config.DATA_DIR)
 
+    @app.context_processor
+    def inject_admin():
+        return {"admin_username": Config.ADMIN_USERNAME}
+
     _register_routes(app)
     _register_error_handlers(app)
 
@@ -613,6 +617,68 @@ def _register_routes(app: Flask) -> None:
 
         flash("知识库已删除", "success")
         return redirect(url_for("repo.list_repos", username=username))
+
+    @repo_bp.route("/<username>/search")
+    def global_search(username):
+        user = User.query.filter_by(username=username).first_or_404()
+        if not current_user.is_authenticated or current_user.id != user.id:
+            abort(403)
+        query_text = request.args.get("q", "").strip()
+        results = []
+        if query_text:
+            query_lower = query_text.lower()
+            repos = Repo.query.filter_by(user_id=user.id).all()
+            for repo in repos:
+                wiki_dir = os.path.join(
+                    get_repo_path(Config.DATA_DIR, username, repo.slug), "wiki"
+                )
+                if not os.path.isdir(wiki_dir):
+                    continue
+                repo_results = []
+                for filename in sorted(os.listdir(wiki_dir)):
+                    if not filename.endswith(".md"):
+                        continue
+                    filepath = os.path.join(wiki_dir, filename)
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            content = f.read()
+                    except OSError:
+                        continue
+                    content_lower = content.lower()
+                    if query_lower not in content_lower:
+                        continue
+                    fm, _ = render_markdown(content)
+                    idx = content_lower.find(query_lower)
+                    start = max(0, idx - 80)
+                    end = min(len(content), idx + len(query_text) + 80)
+                    snippet = content[start:end].replace("\n", " ")
+                    if start > 0:
+                        snippet = "…" + snippet
+                    if end < len(content):
+                        snippet += "…"
+                    repo_results.append({
+                        "slug": filename.replace(".md", ""),
+                        "title": fm.get("title", filename.replace(".md", "")),
+                        "type": fm.get("type", "unknown"),
+                        "snippet": snippet,
+                        "match_count": content_lower.count(query_lower),
+                    })
+                if repo_results:
+                    repo_results.sort(key=lambda r: r["match_count"], reverse=True)
+                    results.append({
+                        "repo": repo,
+                        "pages": repo_results,
+                        "total_matches": sum(r["match_count"] for r in repo_results),
+                    })
+            results.sort(key=lambda r: r["total_matches"], reverse=True)
+
+        return render_template(
+            "user/search.html",
+            username=username,
+            query=query_text,
+            results=results,
+            profile_user=user,
+        )
 
     app.register_blueprint(repo_bp)
 
@@ -1646,6 +1712,55 @@ def _register_routes(app: Flask) -> None:
         return redirect(url_for("ops.lint", username=username, repo_slug=repo_slug))
 
     app.register_blueprint(ops_bp)
+
+    # ── Admin ─────────────────────────────────────────────────────────
+
+    admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
+
+    def _require_admin():
+        if not current_user.is_authenticated or current_user.username != Config.ADMIN_USERNAME:
+            abort(403)
+
+    @admin_bp.route("/")
+    @login_required
+    def dashboard():
+        _require_admin()
+
+        user_count = User.query.count()
+        repo_count = Repo.query.count()
+        task_total = Task.query.count()
+        task_done = Task.query.filter_by(status="done").count()
+        task_failed = Task.query.filter_by(status="failed").count()
+        task_running = Task.query.filter(
+            Task.status.in_(["queued", "running"])
+        ).count()
+
+        data_dir = Config.DATA_DIR
+        disk_bytes = 0
+        if os.path.isdir(data_dir):
+            try:
+                total, used, free = shutil.disk_usage(data_dir)
+                disk_bytes = used
+            except Exception:
+                pass
+
+        recent_users = (
+            User.query.order_by(User.created_at.desc()).limit(10).all()
+        )
+
+        return render_template(
+            "admin/dashboard.html",
+            user_count=user_count,
+            repo_count=repo_count,
+            task_total=task_total,
+            task_done=task_done,
+            task_failed=task_failed,
+            task_running=task_running,
+            disk_bytes=disk_bytes,
+            recent_users=recent_users,
+        )
+
+    app.register_blueprint(admin_bp)
 
 
 # ---------------------------------------------------------------------------

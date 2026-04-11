@@ -27,6 +27,19 @@
           </a>
         </li>
         <li>
+          <a href="{{ url_for('repo.global_search', username=current_user.username) }}"
+             class="nav-link" title="全局搜索">
+            <i class="lucide-search-code"></i>
+          </a>
+        </li>
+        {% if current_user.is_authenticated and current_user.username == admin_username %}
+        <li>
+          <a href="{{ url_for('admin.dashboard') }}" class="nav-link">
+            <i class="lucide-shield"></i> 管理
+          </a>
+        </li>
+        {% endif %}
+        <li>
           <details class="dropdown">
             <summary class="avatar-trigger">
               <span class="avatar-circle">{{ (current_user.display_name or current_user.username)[0]|upper }}</span>

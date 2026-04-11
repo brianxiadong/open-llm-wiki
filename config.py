@@ -38,3 +38,5 @@ class Config:
     MINERU_TIMEOUT = int(os.environ.get("MINERU_TIMEOUT", "300"))
 
     MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
+
+    ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")

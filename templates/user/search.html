@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}搜索「{{ query }}」- Open LLM Wiki{% endblock %}
+
+{% block content %}
+<h1>全局搜索</h1>
+<p class="muted">搜索 {{ profile_user.display_name or profile_user.username }} 的所有知识库</p>
+
+<form method="GET" role="search" style="margin-bottom:1.5rem;">
+  <div class="search-input-row">
+    <input type="search" name="q" value="{{ query }}" placeholder="输入关键词…"
+           autofocus autocomplete="off" aria-label="搜索关键词">
+    <button type="submit">
+      <i data-lucide="search" aria-hidden="true"></i> 搜索
+    </button>
+  </div>
+</form>
+
+{% if query %}
+  {% if results %}
+  <p class="search-results-header">
+    在 <strong>{{ results|length }}</strong> 个知识库中找到包含「{{ query }}」的页面
+  </p>
+  {% for r in results %}
+  <section class="global-search-repo">
+    <h3>
+      <a href="{{ url_for('repo.dashboard', username=username, repo_slug=r.repo.slug) }}">
+        {{ r.repo.name }}
+      </a>
+      <span class="muted" style="font-size:0.85rem;font-weight:normal;">（{{ r.pages|length }} 个页面，{{ r.total_matches }} 处匹配）</span>
+    </h3>
+    <ul class="search-results-list">
+      {% for page in r.pages %}
+      <li class="search-result-item">
+        <div class="search-result-title">
+          <a href="{{ url_for('wiki.view_page', username=username, repo_slug=r.repo.slug, page_slug=page.slug) }}">
+            {{ page.title }}
+          </a>
+          <span class="badge badge-{{ page.type }}">{{ page.type }}</span>
+          <span class="search-match-count">{{ page.match_count }} 处</span>
+        </div>
+        <div class="search-result-snippet">{{ page.snippet }}</div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+  {% else %}
+  <p>没有找到包含「{{ query }}」的页面。</p>
+  {% endif %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}管理后台 - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<h1>管理后台</h1>
+
+<div class="admin-stats-grid">
+  <div class="admin-stat-card">
+    <div class="admin-stat-value">{{ user_count }}</div>
+    <div class="admin-stat-label">用户总数</div>
+  </div>
+  <div class="admin-stat-card">
+    <div class="admin-stat-value">{{ repo_count }}</div>
+    <div class="admin-stat-label">知识库总数</div>
+  </div>
+  <div class="admin-stat-card">
+    <div class="admin-stat-value">{{ task_done }}</div>
+    <div class="admin-stat-label">成功任务</div>
+  </div>
+  <div class="admin-stat-card">
+    <div class="admin-stat-value">{{ task_failed }}</div>
+    <div class="admin-stat-label">失败任务</div>
+  </div>
+  <div class="admin-stat-card">
+    <div class="admin-stat-value">{{ task_running }}</div>
+    <div class="admin-stat-label">运行中任务</div>
+  </div>
+  <div class="admin-stat-card">
+    <div class="admin-stat-value">{{ (disk_bytes / 1024 / 1024 / 1024) | round(2) }} GB</div>
+    <div class="admin-stat-label">磁盘已用</div>
+  </div>
+</div>
+
+<h2>最近注册用户</h2>
+<table>
+  <thead>
+    <tr>
+      <th>用户名</th>
+      <th>显示名</th>
+      <th>注册时间</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for u in recent_users %}
+    <tr>
+      <td>{{ u.username }}</td>
+      <td>{{ u.display_name or '—' }}</td>
+      <td>{{ u.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td><a href="{{ url_for('repo.list_repos', username=u.username) }}">查看知识库</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

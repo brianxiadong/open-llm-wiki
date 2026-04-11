@@ -380,6 +380,12 @@ GET  /{username}/{repo}/log              → 查看操作日志（log.md）
 Wiki 编辑：
 GET/POST /{username}/{repo}/wiki/{page}/edit   → 编辑 Wiki 页面（仅 owner）
 POST     /{username}/{repo}/wiki/{page}/delete → 删除 Wiki 页面（仅 owner）
+
+全局搜索：
+GET  /{username}/search                      → 全局跨仓库搜索（仅 owner，repo.global_search）
+
+管理后台：
+GET  /admin/                                 → 管理统计后台（仅 ADMIN_USERNAME，admin.dashboard）
 ```
 
 ### 6.2 页面设计
@@ -395,6 +401,10 @@ POST     /{username}/{repo}/wiki/{page}/delete → 删除 Wiki 页面（仅 owne
 **查询界面**：上方输入框，下方显示回答（markdown 渲染）。回答中的 Wiki 引用可点击跳转。有「保存为 Wiki 页面」按钮。
 
 **关系图**：用 D3.js 力导向图展示页面间的链接关系。类似 Obsidian 的 graph view。
+
+**全局搜索页**（`templates/user/search.html`）：按知识库分组展示跨仓库关键词搜索结果，含摘要和匹配次数。
+
+**管理后台**（`templates/admin/dashboard.html`）：展示用户总数、知识库总数、任务统计、磁盘占用及最近注册用户列表。仅 ADMIN_USERNAME 可访问。
 
 ## 7. LLM 集成
 
@@ -432,6 +442,9 @@ DB_PASSWORD=****
 # Flask
 SECRET_KEY=change-me-to-a-random-string
 DATA_DIR=./data
+
+# Admin
+ADMIN_USERNAME=admin
 ```
 
 ### 7.2 Prompt 构造
