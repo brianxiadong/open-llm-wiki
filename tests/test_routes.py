@@ -703,3 +703,46 @@ def test_private_repo_query_no_login_returns_401(app, sample_repo):
         db.session.commit()
     resp = app.test_client().post(f"/alice/{slug}/query", json={"q": "test"})
     assert resp.status_code == 401
+
+
+# -- Conversation sessions -----------------------------------------------------
+
+
+def test_query_api_stores_session(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    fake = {
+        "markdown": "answer", "confidence": {"level": "low", "score": 0.1, "reasons": []},
+        "wiki_evidence": [], "chunk_evidence": [], "evidence_summary": "",
+        "referenced_pages": [], "wiki_sources": [], "qdrant_sources": [],
+    }
+    with patch.object(app.wiki_engine, "query_with_evidence", return_value=fake):
+        resp = client.post(f"/alice/{slug}/query", json={"q": "hello", "session_key": "test-sess-1"})
+    assert resp.status_code == 200
+    with app.app_context():
+        from models import ConversationSession
+        import json as _j
+        cs = ConversationSession.query.filter_by(session_key="test-sess-1").first()
+        assert cs is not None
+        msgs = _j.loads(cs.messages_json)
+        assert any(m.get("content") == "hello" for m in msgs)
+
+
+def test_clear_session(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from models import ConversationSession, User, db
+        u = User.query.filter_by(username="alice").first()
+        cs = ConversationSession(
+            repo_id=repo_info["id"], user_id=u.id,
+            session_key="clr-sess", messages_json='[{"role":"user","content":"hi"}]'
+        )
+        db.session.add(cs)
+        db.session.commit()
+    resp = client.post(f"/alice/{slug}/session/clear", json={"key": "clr-sess"})
+    assert resp.status_code == 200
+    with app.app_context():
+        from models import ConversationSession
+        cs2 = ConversationSession.query.filter_by(session_key="clr-sess").first()
+        assert cs2.messages_json == "[]"

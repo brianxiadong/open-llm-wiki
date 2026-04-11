@@ -27,6 +27,18 @@ _UNCERTAINTY_PHRASES = (
 def _contains_uncertainty(text: str) -> bool:
     return any(p in text for p in _UNCERTAINTY_PHRASES)
 
+
+def _build_history_block(history: list[dict]) -> str:
+    """将最近 N 条对话历史转换成上下文块。"""
+    if not history:
+        return ""
+    parts = []
+    for msg in history[-6:]:
+        role = "用户" if msg.get("role") == "user" else "助手"
+        content = str(msg.get("content", ""))[:500]
+        parts.append(f"{role}：{content}")
+    return "--- 对话历史 ---\n" + "\n".join(parts) + "\n\n"
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -762,6 +774,7 @@ class WikiEngine:
         username: str,
         question: str,
         wiki_base_url: str = "",
+        history: list[dict] | None = None,
     ) -> dict[str, Any]:
         """Query using dual-channel evidence retrieval with rule-based confidence scoring."""
         repo_slug = repo.slug
@@ -871,7 +884,8 @@ class WikiEngine:
             user=(
                 "根据以下 Wiki 页面和原文片段回答用户问题，使用 Markdown 格式。\n"
                 "若证据不足，请使用指定提示语。\n\n"
-                f"--- 问题 ---\n{question}\n\n"
+                + (_build_history_block(history) if history else "")
+                + f"--- 问题 ---\n{question}\n\n"
                 f"--- Wiki 内容 ---\n{context_block}"
             ),
         )

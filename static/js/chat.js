@@ -358,6 +358,26 @@
 
   /* ── Send query ───────────────────────────────────────── */
 
+  // 多轮对话 session key（每个知识库每天一个 session）
+  var SESSION_KEY = 'session_' + (cfg.repoSlug || 'default') + '_' + new Date().toISOString().slice(0, 10);
+
+  // 清空会话按钮
+  var clearSessionBtn = document.getElementById('clear-session-btn');
+  if (clearSessionBtn) {
+    clearSessionBtn.addEventListener('click', function () {
+      if (!confirm('确认清空本次对话历史？')) return;
+      fetch(cfg.clearSessionUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: SESSION_KEY })
+      }).then(function () {
+        // 清空消息列表，显示欢迎页
+        if (messages) messages.innerHTML = '';
+        if (welcome) welcome.style.display = '';
+      }).catch(function () {});
+    });
+  }
+
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     var q = input.value.trim();
@@ -375,7 +395,7 @@
       fetch(cfg.queryUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: q })
+        body: JSON.stringify({ q: q, session_key: SESSION_KEY })
       })
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -444,7 +464,7 @@
       fetch(cfg.queryUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: q, _rendered_answer: answer,
+        body: JSON.stringify({ q: q, session_key: SESSION_KEY, _rendered_answer: answer,
                                _wiki_sources: wikiSources, _qdrant_sources: qdrantSources,
                                _confidence: confidence, _wiki_evidence: wikiEvidence,
                                _chunk_evidence: chunkEvidence, _evidence_summary: evidenceSummary })

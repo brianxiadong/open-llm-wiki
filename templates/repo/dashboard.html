@@ -182,6 +182,9 @@
             </summary>
             <ul id="chat-history-dropdown" dir="rtl" style="min-width:200px;max-height:300px;overflow-y:auto;"></ul>
           </details>
+          <button type="button" id="clear-session-btn" title="清空对话历史" style="background:none;border:none;cursor:pointer;padding:0.35rem;color:var(--pico-muted-color);">
+            <i data-lucide="refresh-ccw" aria-hidden="true" style="width:16px;height:16px;"></i>
+          </button>
           <button type="submit" id="chat-submit" title="发送">
             <i data-lucide="send-horizontal" aria-hidden="true"></i>
           </button>
@@ -198,6 +201,7 @@
     queryUrl: '{{ url_for("ops.query_api", username=username, repo_slug=repo.slug) }}',
     queryStreamUrl: '{{ url_for("ops.query_stream", username=username, repo_slug=repo.slug) }}',
     saveUrl: '{{ url_for("ops.save_query_page", username=username, repo_slug=repo.slug) }}',
+    clearSessionUrl: '{{ url_for("ops.clear_session", username=username, repo_slug=repo.slug) }}',
     wikiBaseUrl: '/{{ username }}/{{ repo.slug }}/wiki/',
     repoSlug: '{{ repo.slug }}',
   };

@@ -1652,9 +1652,24 @@ def _register_routes(app: Flask) -> None:
         if not question:
             return jsonify(error="请输入问题"), 400
 
+        # -- Load conversation history ------------------------------------
+        session_key = data.get("session_key", "")
+        history: list[dict] = []
+        if session_key and current_user.is_authenticated:
+            from models import ConversationSession
+            cs = ConversationSession.query.filter_by(
+                repo_id=repo.id, user_id=current_user.id, session_key=session_key
+            ).first()
+            if cs:
+                try:
+                    history = json.loads(cs.messages_json)
+                except Exception:
+                    history = []
+
         try:
             result = current_app.wiki_engine.query_with_evidence(
-                repo, username, question, _wiki_base_url(username, repo_slug)
+                repo, username, question, _wiki_base_url(username, repo_slug),
+                history=history[-6:] if history else None,
             )
         except Exception as exc:
             logger.exception("Query failed for repo %s", repo.id)
@@ -1691,6 +1706,30 @@ def _register_routes(app: Flask) -> None:
             db.session.commit()
         except Exception as ql_exc:
             logger.warning("QueryLog write failed: %s", ql_exc)
+
+        # -- Update conversation session ----------------------------------
+        if session_key and current_user.is_authenticated:
+            try:
+                history.append({"role": "user", "content": question})
+                history.append({"role": "assistant", "content": result.get("markdown", "")[:2000]})
+                history = history[-20:]
+                from models import ConversationSession
+                cs = ConversationSession.query.filter_by(
+                    repo_id=repo.id, user_id=current_user.id, session_key=session_key
+                ).first()
+                if cs:
+                    cs.messages_json = json.dumps(history, ensure_ascii=False)
+                else:
+                    cs = ConversationSession(
+                        repo_id=repo.id,
+                        user_id=current_user.id,
+                        session_key=session_key,
+                        messages_json=json.dumps(history, ensure_ascii=False),
+                    )
+                    db.session.add(cs)
+                db.session.commit()
+            except Exception as sess_exc:
+                logger.warning("Session update failed: %s", sess_exc)
 
         def _fn_to_ref(fn: str) -> dict:
             slug = fn.replace(".md", "")
@@ -1901,6 +1940,35 @@ def _register_routes(app: Flask) -> None:
             "success" if fixed_count > 0 else "info",
         )
         return redirect(url_for("ops.lint", username=username, repo_slug=repo_slug))
+
+    @ops_bp.route("/<username>/<repo_slug>/session", methods=["GET"])
+    @login_required
+    def get_session(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        key = request.args.get("key", "")
+        if not key:
+            return jsonify(messages=[])
+        from models import ConversationSession
+        cs = ConversationSession.query.filter_by(
+            repo_id=repo.id, user_id=user.id, session_key=key
+        ).first()
+        msgs = json.loads(cs.messages_json) if cs else []
+        return jsonify(messages=msgs)
+
+    @ops_bp.route("/<username>/<repo_slug>/session/clear", methods=["POST"])
+    @login_required
+    def clear_session(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        key = (request.get_json(silent=True) or {}).get("key", "")
+        if key:
+            from models import ConversationSession
+            cs = ConversationSession.query.filter_by(
+                repo_id=repo.id, user_id=user.id, session_key=key
+            ).first()
+            if cs:
+                cs.messages_json = "[]"
+                db.session.commit()
+        return jsonify(ok=True)
 
     app.register_blueprint(ops_bp)
 
