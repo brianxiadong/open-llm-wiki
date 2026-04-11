@@ -398,10 +398,12 @@
   function switchSession(key, sessions, clickedTab) {
     if (SESSION_KEY === key) return;
     SESSION_KEY = key;
-    // 更新 active 样式
+    // 立即更新 active 样式 + 清空聊天区
     sessionList.querySelectorAll('.chat-session-tab').forEach(function(t) {
       t.classList.toggle('active', t.dataset.key === key);
     });
+    if (messages) messages.innerHTML = '';
+    if (welcome) welcome.hidden = true;
     restoreChatMessages(key);
   }
 
@@ -432,17 +434,18 @@
 
   function createNewSession() {
     if (!cfg.newSessionUrl) return;
+    // 立即清空，不等 fetch
+    if (messages) messages.innerHTML = '';
+    if (welcome) welcome.hidden = false;
     fetch(cfg.newSessionUrl, { method: 'POST', headers: {'Content-Type':'application/json'} })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.ok) {
           SESSION_KEY = data.key;
-          // 清空聊天界面
-          if (messages) messages.innerHTML = '';
-          if (welcome) welcome.hidden = false;
           loadSessionList(data.key);
         }
-      });
+      })
+      .catch(function() {});
   }
 
   function deleteSession(key) {
@@ -470,18 +473,17 @@
 
   function restoreChatMessages(key) {
     if (!cfg.getSessionUrl || !key) return;
+    // 立即清空，防止旧内容残留或 welcome 闪烁
+    if (messages) messages.innerHTML = '';
+    if (welcome) welcome.hidden = true;
     fetch(cfg.getSessionUrl + '?key=' + encodeURIComponent(key))
       .then(function(r) { return r.json(); })
       .then(function(data) {
         var msgs = data.messages || [];
         if (!msgs.length) {
-          if (messages) messages.innerHTML = '';
           if (welcome) welcome.hidden = false;
           return;
         }
-        if (welcome) welcome.hidden = true;
-        if (messages) messages.innerHTML = '';
-        // 渲染历史消息（简单文本展示，不含证据面板）
         msgs.forEach(function(m) {
           if (m.role === 'user') {
             addUserMessage(m.content, true);
@@ -491,6 +493,9 @@
           }
         });
         if (messages) messages.scrollTop = messages.scrollHeight;
+      })
+      .catch(function() {
+        if (welcome) welcome.hidden = false;
       });
   }
 
