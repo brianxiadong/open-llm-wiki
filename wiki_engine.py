@@ -588,3 +588,109 @@ class WikiEngine:
             "issues": result.get("issues", []),
             "suggestions": result.get("suggestions", []),
         }
+
+    def apply_fixes(
+        self,
+        repo: Any,
+        username: str,
+        issues: list[dict],
+    ) -> dict[str, Any]:
+        """Apply automatic fixes for lint issues where possible.
+
+        Skips contradiction issues (require human review).
+        Returns {"fixed": [...], "skipped": [...], "errors": [...]}.
+        """
+        repo_slug = repo.slug
+        wiki_dir = self._wiki_dir(username, repo_slug)
+        schema_content = _read_file(self._schema_path(username, repo_slug))
+
+        system_base = (
+            "你是一个 Wiki 维护者。修复以下 Wiki 页面的结构问题，保持原有内容不变。\n\n"
+            + (schema_content or "")
+        )
+
+        fixed: list[str] = []
+        skipped: list[str] = []
+        errors: list[str] = []
+
+        for issue in issues:
+            issue_type = issue.get("type", "")
+            page_file = issue.get("page", "")
+            description = issue.get("description", "")
+
+            if issue_type == "contradiction":
+                skipped.append(page_file or "unknown")
+                continue
+
+            if not page_file:
+                skipped.append("unknown")
+                continue
+
+            filepath = os.path.join(wiki_dir, page_file)
+            existing_content = _read_file(filepath)
+            if not existing_content:
+                errors.append(f"{page_file}: file not found")
+                continue
+
+            try:
+                if issue_type == "bad_frontmatter":
+                    fixed_content = self._chat_text(
+                        system=system_base,
+                        user=(
+                            f"请修复以下 Wiki 页面的 frontmatter 问题。\n"
+                            f"问题描述: {description}\n"
+                            "要求: 添加或修复 YAML frontmatter (title, type, updated 字段)，"
+                            "保持正文内容完全不变。\n\n"
+                            f"--- 当前内容 ({page_file}) ---\n{existing_content}"
+                        ),
+                    )
+                elif issue_type in ("orphan", "missing_link"):
+                    index_content = _read_file(self._index_path(username, repo_slug))
+                    fixed_content = self._chat_text(
+                        system=system_base,
+                        user=(
+                            f"请修复以下 Wiki 页面的链接问题。\n"
+                            f"问题类型: {issue_type}\n"
+                            f"问题描述: {description}\n"
+                            "对于孤立页面：在 index.md 中添加对应链接。"
+                            "对于缺失链接：在合适位置添加交叉引用。\n\n"
+                            f"--- 待修复页面 ({page_file}) ---\n{existing_content}\n\n"
+                            f"--- index.md ---\n{index_content or '(空)'}"
+                        ),
+                    )
+                elif issue_type == "wrong_type":
+                    fixed_content = self._chat_text(
+                        system=system_base,
+                        user=(
+                            f"请修复以下 Wiki 页面的 type 字段。\n"
+                            f"问题描述: {description}\n"
+                            "只修改 frontmatter 中的 type 字段，其余内容保持不变。\n\n"
+                            f"--- 当前内容 ({page_file}) ---\n{existing_content}"
+                        ),
+                    )
+                else:
+                    skipped.append(page_file)
+                    continue
+
+                if fixed_content:
+                    _write_file(filepath, fixed_content)
+                    if self._qdrant:
+                        try:
+                            fm, _ = render_markdown(fixed_content)
+                            self._qdrant.upsert_page(
+                                repo_id=repo.id,
+                                filename=page_file,
+                                title=fm.get("title", page_file),
+                                page_type=fm.get("type", "unknown"),
+                                content=fixed_content,
+                            )
+                        except QdrantServiceError:
+                            pass
+                    fixed.append(page_file)
+                else:
+                    errors.append(f"{page_file}: LLM returned empty content")
+            except Exception as exc:
+                logger.exception("apply_fixes failed for %s: %s", page_file, exc)
+                errors.append(f"{page_file}: {exc}")
+
+        return {"fixed": fixed, "skipped": skipped, "errors": errors}

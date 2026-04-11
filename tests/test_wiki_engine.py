@@ -258,3 +258,71 @@ def test_lint_with_pages(tmp_data_dir):
     assert len(result["issues"]) == 1
     assert result["issues"][0].get("type") == "orphan"
     assert result["suggestions"] == ["Add cross-links"]
+
+
+def test_apply_fixes_bad_frontmatter(tmp_path):
+    """apply_fixes should fix bad_frontmatter issues via LLM."""
+    import os as _os
+    wiki_dir = tmp_path / "alice" / "test-fix" / "wiki"
+    wiki_dir.mkdir(parents=True)
+    (tmp_path / "alice" / "test-fix" / "raw").mkdir(parents=True, exist_ok=True)
+
+    bad_page = wiki_dir / "bad-page.md"
+    bad_page.write_text("# Missing Frontmatter\n\nSome content here.\n")
+    (wiki_dir / "schema.md").write_text("---\ntitle: Schema\n---\n")
+    (wiki_dir / "index.md").write_text("---\ntitle: Index\ntype: index\n---\n# Index\n")
+
+    fixed_content = (
+        "---\ntitle: Missing Frontmatter\ntype: concept\nupdated: 2026-01-01\n---\n\n"
+        "# Missing Frontmatter\n\nSome content here.\n"
+    )
+    mock_llm = MagicMock()
+    mock_llm.chat.return_value = fixed_content
+    mock_qdrant = MagicMock()
+
+    engine = WikiEngine(mock_llm, mock_qdrant, str(tmp_path))
+    mock_repo = MagicMock()
+    mock_repo.slug = "test-fix"
+    mock_repo.id = 1
+
+    issues = [{"type": "bad_frontmatter", "page": "bad-page.md", "description": "Missing frontmatter"}]
+    result = engine.apply_fixes(mock_repo, "alice", issues)
+
+    assert "bad-page.md" in result["fixed"]
+    assert len(result["errors"]) == 0
+    updated = bad_page.read_text()
+    assert "title:" in updated
+
+
+def test_apply_fixes_skips_contradictions(tmp_path):
+    """apply_fixes should skip contradiction issues without calling LLM."""
+    wiki_dir = tmp_path / "alice" / "test-skip" / "wiki"
+    wiki_dir.mkdir(parents=True)
+    (tmp_path / "alice" / "test-skip" / "raw").mkdir(parents=True, exist_ok=True)
+    (wiki_dir / "schema.md").write_text("---\ntitle: Schema\n---\n")
+
+    mock_llm = MagicMock()
+    mock_qdrant = MagicMock()
+    engine = WikiEngine(mock_llm, mock_qdrant, str(tmp_path))
+    mock_repo = MagicMock()
+    mock_repo.slug = "test-skip"
+    mock_repo.id = 1
+
+    issues = [{"type": "contradiction", "page": "page-a.md", "description": "Conflicting info"}]
+    result = engine.apply_fixes(mock_repo, "alice", issues)
+
+    assert "page-a.md" in result["skipped"]
+    assert len(result["fixed"]) == 0
+    mock_llm.chat.assert_not_called()
+
+
+def test_apply_fixes_route(sample_repo, app):
+    """apply_fixes route should handle empty issues_json gracefully."""
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/apply-fixes",
+        data={"issues_json": "[]"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200

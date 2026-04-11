@@ -1338,22 +1338,49 @@ def _register_routes(app: Flask) -> None:
                 {"page_slug": None, "title": None, "message": suggestion}
             )
 
+        fixable_types = {"bad_frontmatter", "orphan", "missing_link", "wrong_type"}
+        raw_issues = raw_result.get("issues", [])
+        has_fixes = any(i.get("type") in fixable_types for i in raw_issues)
+
         return render_template(
             "ops/lint.html",
             username=username,
             repo=repo,
             report=report,
-            has_fixes=False,
+            has_fixes=has_fixes,
+            raw_issues=raw_issues,
         )
 
     @ops_bp.route("/<username>/<repo_slug>/apply-fixes", methods=["POST"])
     @login_required
     def apply_fixes(username, repo_slug):
-        _get_repo_or_404(username, repo_slug)
-        flash("自动修复功能暂未实现", "info")
-        return redirect(
-            url_for("ops.lint", username=username, repo_slug=repo_slug)
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+
+        issues_json = request.form.get("issues_json", "[]")
+        try:
+            issues = json.loads(issues_json)
+        except json.JSONDecodeError:
+            issues = []
+
+        if not issues:
+            flash("没有可修复的问题", "info")
+            return redirect(url_for("ops.lint", username=username, repo_slug=repo_slug))
+
+        try:
+            result = current_app.wiki_engine.apply_fixes(repo, username, issues)
+        except Exception as exc:
+            logger.exception("apply_fixes failed for repo %s", repo.id)
+            flash(f"修复失败: {exc}", "error")
+            return redirect(url_for("ops.lint", username=username, repo_slug=repo_slug))
+
+        fixed_count = len(result.get("fixed", []))
+        skipped_count = len(result.get("skipped", []))
+        flash(
+            f"已修复 {fixed_count} 个问题，跳过 {skipped_count} 个（矛盾类问题需人工审查）",
+            "success" if fixed_count > 0 else "info",
         )
+        return redirect(url_for("ops.lint", username=username, repo_slug=repo_slug))
 
     app.register_blueprint(ops_bp)
 

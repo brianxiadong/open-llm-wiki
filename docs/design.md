@@ -194,6 +194,19 @@ Step 6: 更新 overview.md
 
 **输出**：结构化报告，列出问题和建议修复。用户审阅后可一键应用修复。
 
+**自动修复（`apply_fixes`）**：
+
+`WikiEngine.apply_fixes()` 已实现，支持以下四种问题类型的自动修复：
+
+| 问题类型 | 修复方式 |
+|---------|---------|
+| `bad_frontmatter` | LLM 补全或修正 YAML frontmatter（title、type、updated 字段） |
+| `orphan` | LLM 在 index.md 中添加对应链接 |
+| `missing_link` | LLM 在合适位置添加交叉引用 |
+| `wrong_type` | LLM 修正 frontmatter 中的 type 字段 |
+
+`contradiction`（矛盾）类问题跳过，需人工审查。修复后自动同步至 Qdrant 向量索引。
+
 ## 5. 数据模型
 
 ### 5.1 MySQL 表结构

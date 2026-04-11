@@ -64,15 +64,30 @@
 {% if has_fixes %}
 <div style="margin-top:1.75rem;padding-top:1.25rem;border-top:1px solid var(--border);">
   <form method="POST" action="{{ url_for('ops.apply_fixes', username=username, repo_slug=repo.slug) }}"
-        data-confirm="确定要应用自动修复吗？">
+        data-confirm="确定要应用自动修复吗？"
+        onsubmit="prepareIssues(this)">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% endif %}
+    <input type="hidden" name="issues_json" id="issues-json-input" value="{{ raw_issues | tojson }}">
     <button type="submit" class="outline secondary">
       <i class="lucide-wrench" aria-hidden="true"></i>
       应用修复
     </button>
   </form>
 </div>
+<script>
+function prepareIssues(form) {
+  var input = form.querySelector('#issues-json-input');
+  if (!input.value || input.value === '[]') {
+    var issues = [];
+    {% for item in raw_issues %}
+    issues.push({{ item | tojson }});
+    {% endfor %}
+    input.value = JSON.stringify(issues);
+  }
+  return true;
+}
+</script>
 {% endif %}
 {% endblock %}
