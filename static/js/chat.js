@@ -124,14 +124,14 @@
           resetUpload();
           if (btn) { btn.innerHTML = origHtml; btn.disabled = false; }
           if (dropArea) { dropArea.style.opacity = '1'; dropArea.style.pointerEvents = 'auto'; }
-          alert(errMsg);
+          if (window.showToast) showToast(errMsg, 'error'); else alert(errMsg);
         }
       };
 
       xhr.onerror = function () {
         if (btn) { btn.innerHTML = origHtml; btn.disabled = false; }
         if (dropArea) { dropArea.style.opacity = '1'; dropArea.style.pointerEvents = 'auto'; }
-        alert('上传失败，请检查网络');
+        if (window.showToast) showToast('上传失败，请检查网络', 'error'); else alert('上传失败，请检查网络');
       };
 
       xhr.send(fd);
@@ -151,23 +151,53 @@
     scrollToBottom();
   }
 
-  function addAIMessage(html, refs, markdown) {
+  function addAIMessage(html, refs, markdown, wikiSources, qdrantSources) {
     var div = document.createElement('div');
     div.className = 'chat-msg chat-msg-ai';
 
-    var refHtml = '';
-    if (refs && refs.length) {
-      refHtml = '<div class="chat-refs"><span class="chat-refs-label">' +
-        '<i class="lucide-book-marked" aria-hidden="true"></i> 参考</span>';
-      refs.forEach(function (r) {
-        refHtml += '<a href="' + r.url + '" class="chat-ref-link">' + escapeHtml(r.title) + '</a>';
-      });
-      refHtml += '</div>';
+    // Build dual-channel source panel
+    var sourceHtml = '';
+    var hasWiki = wikiSources && wikiSources.length;
+    var hasQdrant = qdrantSources && qdrantSources.length;
+    if (hasWiki || hasQdrant) {
+      sourceHtml = '<div class="chat-sources">';
+      sourceHtml += '<div class="chat-sources-header">' +
+        '<i class="lucide-git-branch" aria-hidden="true"></i> 溯源</div>';
+      sourceHtml += '<div class="chat-sources-body">';
+
+      if (hasWiki) {
+        sourceHtml += '<div class="chat-source-channel">' +
+          '<span class="chat-source-tag chat-source-tag-wiki">' +
+          '<i class="lucide-book-open" aria-hidden="true"></i> LLM Wiki</span>';
+        wikiSources.forEach(function(r) {
+          sourceHtml += '<a href="' + r.url + '" class="chat-source-link">' +
+            escapeHtml(r.title) + '</a>';
+        });
+        sourceHtml += '</div>';
+      }
+
+      if (hasQdrant) {
+        sourceHtml += '<div class="chat-source-channel">' +
+          '<span class="chat-source-tag chat-source-tag-qdrant">' +
+          '<i class="lucide-database" aria-hidden="true"></i> 向量检索</span>';
+        qdrantSources.forEach(function(r) {
+          // mark pages that were also in wiki path
+          var inWiki = hasWiki && wikiSources.some(function(w) { return w.filename === r.filename; });
+          sourceHtml += '<a href="' + r.url + '" class="chat-source-link' +
+            (inWiki ? ' chat-source-link-overlap" title="与 LLM Wiki 通道重合"' : '"') +
+            '>' + escapeHtml(r.title) + (inWiki ? ' ↑' : '') + '</a>';
+        });
+        sourceHtml += '</div>';
+      }
+
+      sourceHtml += '</div></div>';
     }
 
     var saveBtn = '';
     if (markdown) {
       saveBtn = '<div class="chat-msg-actions">' +
+        '<button class="chat-action-btn chat-copy-btn" title="复制回答">' +
+        '<i class="lucide-copy" aria-hidden="true"></i> 复制</button>' +
         '<button class="chat-action-btn chat-save-btn" title="保存为 Wiki 页面">' +
         '<i class="lucide-bookmark-plus" aria-hidden="true"></i> 保存为页面</button></div>';
     }
@@ -176,10 +206,26 @@
       '<i class="lucide-bot" aria-hidden="true"></i></div>' +
       '<div class="chat-msg-body">' +
       '<div class="chat-msg-content rendered-content">' + html + '</div>' +
-      refHtml + saveBtn + '</div>';
+      sourceHtml + saveBtn + '</div>';
 
     messages.appendChild(div);
     initIcons(div);
+
+    var copyBtnEl = div.querySelector('.chat-copy-btn');
+    if (copyBtnEl && markdown) {
+      copyBtnEl.addEventListener('click', function () {
+        navigator.clipboard.writeText(markdown).then(function () {
+          copyBtnEl.innerHTML = '<i class="lucide-check" aria-hidden="true"></i> 已复制';
+          initIcons(copyBtnEl);
+          setTimeout(function () {
+            copyBtnEl.innerHTML = '<i class="lucide-copy" aria-hidden="true"></i> 复制';
+            initIcons(copyBtnEl);
+          }, 2000);
+        }).catch(function () {
+          if (window.showToast) showToast('复制失败，请手动选择文本', 'warning');
+        });
+      });
+    }
 
     var saveBtnEl = div.querySelector('.chat-save-btn');
     if (saveBtnEl && markdown) {
@@ -197,15 +243,31 @@
       '<i class="lucide-bot" aria-hidden="true"></i></div>' +
       '<div class="chat-msg-body"><div class="chat-msg-content">' +
       '<span class="chat-typing"><span></span><span></span><span></span></span>' +
+      '<span class="chat-wait-hint" hidden></span>' +
       '</div></div>';
     messages.appendChild(div);
     initIcons(div);
     scrollToBottom();
+
+    // Show elapsed seconds after 5s
+    var elapsed = 0;
+    var waitHint = div.querySelector('.chat-wait-hint');
+    var timer = setInterval(function () {
+      elapsed++;
+      if (elapsed >= 5 && waitHint) {
+        waitHint.hidden = false;
+        waitHint.textContent = ' 正在思考… 已等待 ' + elapsed + 's';
+      }
+    }, 1000);
+    div._waitTimer = timer;
   }
 
   function removeLoadingMessage() {
     var el = document.getElementById('chat-loading');
-    if (el) el.remove();
+    if (el) {
+      if (el._waitTimer) clearInterval(el._waitTimer);
+      el.remove();
+    }
   }
 
   function addErrorMessage(text) {
@@ -232,32 +294,114 @@
     input.style.height = 'auto';
     isLoading = true;
     submitBtn.disabled = true;
-
     addLoadingMessage();
 
-    fetch(cfg.queryUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: q })
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        removeLoadingMessage();
-        if (data.error) {
-          addErrorMessage(data.error);
-        } else {
-          addAIMessage(data.html || '', data.references || [], data.markdown || '');
+    var streamUrl = cfg.queryStreamUrl;
+    if (!streamUrl) {
+      fetch(cfg.queryUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: q })
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          removeLoadingMessage();
+          if (data.error) {
+            addErrorMessage(data.error);
+          } else {
+            addAIMessage(data.html || '', data.references || [],
+              data.markdown || '', data.wiki_sources || [], data.qdrant_sources || []);
+          }
+        })
+        .catch(function () {
+          removeLoadingMessage();
+          addErrorMessage('查询失败，请稍后重试');
+        })
+        .finally(function () {
+          isLoading = false;
+          submitBtn.disabled = false;
+          input.focus();
+        });
+      return;
+    }
+
+    var answerChunks = [];
+    var streamingEl = null;
+    var es = new EventSource(streamUrl + '?q=' + encodeURIComponent(q));
+
+    es.addEventListener('progress', function (e) {
+      var d = JSON.parse(e.data);
+      var loading = document.getElementById('chat-loading');
+      if (loading) {
+        var hint = loading.querySelector('.chat-wait-hint');
+        if (hint) { hint.hidden = false; hint.textContent = d.message || ''; }
+      }
+    });
+
+    es.addEventListener('answer_chunk', function (e) {
+      var d = JSON.parse(e.data);
+      answerChunks.push(d.chunk);
+      var loading = document.getElementById('chat-loading');
+      if (loading) {
+        var content = loading.querySelector('.chat-msg-content');
+        if (content) {
+          if (!streamingEl) {
+            content.innerHTML = '<div class="streaming-answer" style="white-space:pre-wrap"></div>';
+            streamingEl = content.querySelector('.streaming-answer');
+          }
+          streamingEl.textContent = answerChunks.join('');
         }
+      }
+    });
+
+    es.addEventListener('done', function (e) {
+      es.close();
+      removeLoadingMessage();
+      var d = JSON.parse(e.data);
+      var answer = d.answer || answerChunks.join('');
+      var wikiSources = d.wiki_sources || [];
+      var qdrantSources = d.qdrant_sources || [];
+
+      fetch(cfg.queryUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: q, _rendered_answer: answer,
+                               _wiki_sources: wikiSources, _qdrant_sources: qdrantSources })
       })
-      .catch(function () {
-        removeLoadingMessage();
-        addErrorMessage('查询失败，请稍后重试');
-      })
-      .finally(function () {
-        isLoading = false;
-        submitBtn.disabled = false;
-        input.focus();
-      });
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          addAIMessage(data.html || '', data.references || [],
+            data.markdown || '', data.wiki_sources || [], data.qdrant_sources || []);
+        })
+        .catch(function () {
+          addAIMessage('<p>' + escapeHtml(answer) + '</p>', [], answer, wikiSources, qdrantSources);
+        });
+      isLoading = false;
+      submitBtn.disabled = false;
+      input.focus();
+    });
+
+    es.addEventListener('error', function (e) {
+      if (es.readyState === EventSource.CLOSED) return;
+      es.close();
+      removeLoadingMessage();
+      var msg = '查询失败，请稍后重试';
+      try { msg = JSON.parse(e.data).message || msg; } catch (err) {}
+      addErrorMessage(msg);
+      isLoading = false;
+      submitBtn.disabled = false;
+      input.focus();
+    });
+
+    es.onerror = function () {
+      if (es.readyState === EventSource.CLOSED) return;
+      es.close();
+      removeLoadingMessage();
+      addErrorMessage('连接中断，请重试');
+      isLoading = false;
+      submitBtn.disabled = false;
+      input.focus();
+    };
   });
 
   /* ── Save answer as wiki page ─────────────────────────── */

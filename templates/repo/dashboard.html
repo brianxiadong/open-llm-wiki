@@ -77,9 +77,10 @@
       <ul class="kb-nav-list">
         {% for src in sources[:8] %}
         <li class="kb-source-item" {% if src.task_id %}data-task-id="{{ src.task_id }}"{% endif %}>
-          <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}">
+          <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
+             title="{{ src.filename }}">
             <i class="lucide-file" aria-hidden="true"></i>
-            {{ src.id }}
+            {{ src.filename }}
           </a>
           {% if src.task_status == 'queued' %}
           <span class="kb-status-badge kb-status-queued" title="排队中">排队</span>
@@ -180,6 +181,7 @@
 <script>
   window.__chatConfig = {
     queryUrl: '{{ url_for("ops.query_api", username=username, repo_slug=repo.slug) }}',
+    queryStreamUrl: '{{ url_for("ops.query_stream", username=username, repo_slug=repo.slug) }}',
     saveUrl: '{{ url_for("ops.save_query_page", username=username, repo_slug=repo.slug) }}',
     wikiBaseUrl: '/{{ username }}/{{ repo.slug }}/wiki/'
   };

@@ -94,3 +94,26 @@ class LLMClient:
                 raw[:500] if raw else "",
             )
             return {}
+
+    def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: float = 0.7,
+    ) -> Any:
+        """Stream chat completion, yields text chunks (str)."""
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": self._max_tokens,
+            "stream": True,
+        }
+        try:
+            stream = self._client.chat.completions.create(**kwargs)
+        except OpenAIError as e:
+            logger.exception("LLM chat_stream failed model=%s", self._model)
+            raise LLMClientError(str(e)) from e
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content if chunk.choices else None
+            if delta:
+                yield delta

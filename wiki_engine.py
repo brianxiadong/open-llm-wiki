@@ -527,6 +527,107 @@ class WikiEngine:
         }
 
     # -----------------------------------------------------------------------
+    # QUERY STREAM
+    # -----------------------------------------------------------------------
+
+    def query_stream(
+        self,
+        repo: Any,
+        username: str,
+        question: str,
+    ) -> Any:
+        """Stream query: yields dicts {"event": str, "data": dict}."""
+        repo_slug = repo.slug
+        repo_id = repo.id
+        wiki_dir = self._wiki_dir(username, repo_slug)
+        schema_content = _read_file(self._schema_path(username, repo_slug))
+        index_content = _read_file(self._index_path(username, repo_slug))
+        system_base = (
+            "你是一个 Wiki 知识助手。根据 Wiki 内容准确回答问题，并引用来源页面。\n\n"
+            + (schema_content or "")
+        )
+
+        yield {"event": "progress", "data": {"message": "正在检索相关页面…", "percent": 10}}
+
+        wiki_filenames: list[str] = []
+        if index_content:
+            pick_result = self._chat_json(
+                system=system_base,
+                user=(
+                    "根据用户问题，从索引中选出最相关的页面（最多 8 个）。\n"
+                    '返回 JSON: {"filenames": ["a.md", "b.md"]}\n\n'
+                    f"--- 问题 ---\n{question}\n\n--- index.md ---\n{index_content}"
+                ),
+                default={"filenames": []},
+            )
+            wiki_filenames = pick_result.get("filenames", [])
+            if isinstance(wiki_filenames, str):
+                wiki_filenames = [wiki_filenames]
+
+        qdrant_filenames: list[str] = []
+        if self._qdrant:
+            try:
+                hits = self._qdrant.search(repo_id=repo_id, query=question, limit=8)
+                qdrant_filenames = [h["filename"] for h in hits if h.get("filename")]
+            except QdrantServiceError:
+                pass
+
+        yield {"event": "progress", "data": {"message": "正在读取页面内容…", "percent": 40}}
+
+        seen: set[str] = set()
+        merged: list[str] = []
+        for fn in wiki_filenames + qdrant_filenames:
+            if fn not in seen:
+                seen.add(fn)
+                merged.append(fn)
+
+        page_contents: dict[str, str] = {}
+        for fn in merged:
+            content = _read_file(os.path.join(wiki_dir, fn))
+            if content:
+                page_contents[fn] = content
+
+        if not page_contents:
+            yield {"event": "done", "data": {
+                "answer": "暂无相关 Wiki 内容可以回答该问题。请先导入相关资料。",
+                "wiki_sources": [], "qdrant_sources": [], "referenced_pages": [],
+            }}
+            return
+
+        context_parts = [f"=== {fn} ===\n{content[:6000]}"
+                         for fn, content in page_contents.items()]
+        context_block = "\n\n".join(context_parts)
+
+        yield {"event": "progress", "data": {"message": "正在生成回答…", "percent": 60}}
+
+        messages = [
+            {"role": "system", "content": system_base},
+            {"role": "user", "content": (
+                "根据以下 Wiki 页面回答用户问题。使用 Markdown 格式。\n\n"
+                f"--- 问题 ---\n{question}\n\n"
+                f"--- Wiki 页面内容 ---\n{context_block}"
+            )},
+        ]
+
+        answer_chunks: list[str] = []
+        try:
+            for chunk in self._llm.chat_stream(messages):
+                answer_chunks.append(chunk)
+                yield {"event": "answer_chunk", "data": {"chunk": chunk}}
+        except Exception as exc:
+            logger.error("query_stream LLM error: %s", exc)
+            yield {"event": "error", "data": {"message": str(exc)}}
+            return
+
+        loaded = set(page_contents.keys())
+        yield {"event": "done", "data": {
+            "answer": "".join(answer_chunks),
+            "wiki_sources": [f for f in wiki_filenames if f in loaded],
+            "qdrant_sources": [f for f in qdrant_filenames if f in loaded],
+            "referenced_pages": list(loaded),
+        }}
+
+    # -----------------------------------------------------------------------
     # LINT
     # -----------------------------------------------------------------------
 

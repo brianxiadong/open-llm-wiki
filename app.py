@@ -1180,6 +1180,30 @@ def _register_routes(app: Flask) -> None:
         user, repo = _get_repo_or_404(username, repo_slug)
         data = request.get_json(silent=True) or {}
         question = data.get("q", "").strip()
+
+        pre_answer = data.get("_rendered_answer")
+        if pre_answer is not None:
+            _, answer_html = render_markdown(pre_answer, _wiki_base_url(username, repo_slug))
+            pre_wiki = data.get("_wiki_sources", [])
+            pre_qdrant = data.get("_qdrant_sources", [])
+
+            def _src_to_ref(fn):
+                slug = fn.replace(".md", "")
+                return {
+                    "url": url_for("wiki.view_page", username=username,
+                                   repo_slug=repo_slug, page_slug=slug),
+                    "title": fn.replace(".md", "").replace("-", " ").title(),
+                    "filename": fn,
+                }
+
+            return jsonify(
+                html=answer_html,
+                markdown=pre_answer,
+                references=[_src_to_ref(fn) for fn in pre_wiki],
+                wiki_sources=[_src_to_ref(fn) for fn in pre_wiki],
+                qdrant_sources=[_src_to_ref(fn) for fn in pre_qdrant],
+            )
+
         if not question:
             return jsonify(error="请输入问题"), 400
 
@@ -1226,6 +1250,30 @@ def _register_routes(app: Flask) -> None:
             references=references,
             wiki_sources=wiki_sources,
             qdrant_sources=qdrant_sources,
+        )
+
+    @ops_bp.route("/<username>/<repo_slug>/query/stream", methods=["GET"])
+    @login_required
+    def query_stream(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        question = request.args.get("q", "").strip()
+        if not question:
+            return jsonify(error="请输入问题"), 400
+
+        def generate():
+            try:
+                for event_dict in current_app.wiki_engine.query_stream(repo, username, question):
+                    event = event_dict["event"]
+                    data = json.dumps(event_dict["data"], ensure_ascii=False)
+                    yield f"event: {event}\ndata: {data}\n\n"
+            except Exception as exc:
+                logger.exception("query_stream error for repo %s", repo.id)
+                yield f"event: error\ndata: {json.dumps({'message': str(exc)})}\n\n"
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     @ops_bp.route("/<username>/<repo_slug>/query/save", methods=["POST"])

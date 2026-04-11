@@ -180,6 +180,33 @@ Step 6: 更新 overview.md
 
 关键洞察（来自原文档）：**好的回答可以被归档为新的 Wiki 页面。** 一次对比分析、一个发现的关联——这些不应该消失在聊天历史中。保存的回答同样会被向量化写入 Qdrant，后续查询可以检索到。
 
+#### SSE 流式路径
+
+为改善用户体验，查询新增了流式响应（Server-Sent Events）路径：
+
+```
+GET /{username}/{repo}/query/stream?q=<question>
+        │
+        ▼
+    event: progress  (message="正在检索相关页面…", percent=10)
+        │
+        ▼ (双通道检索 + 读取页面内容)
+    event: progress  (message="正在生成回答…", percent=60)
+        │
+        ▼ (LLM chat_stream，逐 token 推送)
+    event: answer_chunk  (chunk="...")  × N
+        │
+        ▼
+    event: done  (answer, wiki_sources, qdrant_sources, referenced_pages)
+        │
+        ▼ 前端用 done 中的 markdown 调用 POST /query（_rendered_answer 模式）渲染 HTML
+```
+
+- **后端**：`WikiEngine.query_stream()` 为生成器，`LLMClient.chat_stream()` 使用 `stream=True`；Flask 路由使用 `stream_with_context` + `mimetype=text/event-stream`。
+- **前端**：`chat.js` 优先使用 `EventSource`；`answer_chunk` 事件实时更新加载气泡；`done` 后调用 `POST /query`（`_rendered_answer` 模式）获取完整渲染 HTML。
+- **降级**：`queryStreamUrl` 缺失时自动回退到原 POST 轮询模式。
+- **渲染复用**：`POST /query` 若请求体含 `_rendered_answer`，则跳过 LLM 调用，直接渲染 Markdown 返回 HTML，避免重复计费。
+
 ### 4.3 Lint（维护检查）
 
 定期让 LLM 对 Wiki 做健康检查。
@@ -322,7 +349,8 @@ POST /{username}/{repo}/sources/upload   → 上传文档
 POST /{username}/{repo}/ingest/{file}    → 触发摄入
 GET  /{username}/{repo}/ingest/{task_id} → 摄入进度（SSE）
 GET  /{username}/{repo}/query            → 查询界面
-POST /{username}/{repo}/query            → 提交查询
+POST /{username}/{repo}/query            → 提交查询（完整响应 / _rendered_answer 仅渲染模式）
+GET  /{username}/{repo}/query/stream     → SSE 流式查询（EventSource）
 POST /{username}/{repo}/query/save       → 保存回答为 Wiki 页面
 POST /{username}/{repo}/lint             → 触发维护检查
 POST /{username}/{repo}/lint/apply       → 应用修复建议

@@ -310,3 +310,41 @@ def test_wiki_delete_nonexistent_page(sample_repo):
         follow_redirects=True,
     )
     assert resp.status_code == 200
+
+
+def test_query_stream_route_no_q(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.get(f"/alice/{slug}/query/stream")
+    assert resp.status_code == 400
+
+
+def test_query_stream_route_with_q(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    from unittest.mock import patch
+
+    def fake_query_stream(repo, username, question):
+        yield {"event": "progress", "data": {"message": "检索中", "percent": 10}}
+        yield {"event": "answer_chunk", "data": {"chunk": "Hello"}}
+        yield {"event": "done", "data": {"answer": "Hello", "wiki_sources": [],
+                                          "qdrant_sources": [], "referenced_pages": []}}
+
+    with patch.object(app.wiki_engine, "query_stream", side_effect=fake_query_stream):
+        resp = client.get(f"/alice/{slug}/query/stream?q=test")
+    assert resp.status_code == 200
+    assert b"event: done" in resp.data
+
+
+def test_query_api_render_only(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/query",
+        json={"q": "test", "_rendered_answer": "# Hello\n\nWorld"},
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "<h1" in data["html"]
+
