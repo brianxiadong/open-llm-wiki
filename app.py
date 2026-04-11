@@ -16,6 +16,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     stream_with_context,
     url_for,
 )
@@ -1122,6 +1123,28 @@ def _register_routes(app: Flask) -> None:
 
         return redirect(
             url_for("source.list_sources", username=username, repo_slug=repo_slug)
+        )
+
+    @source_bp.route(
+        "/<username>/<repo_slug>/sources/<source_id>/download", methods=["GET"]
+    )
+    @login_required
+    def download_source(username, repo_slug, source_id):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        raw_dir = os.path.join(
+            get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
+        )
+        filepath = os.path.join(raw_dir, source_id)
+        if not os.path.isfile(filepath):
+            flash("源文件不存在", "error")
+            return redirect(
+                url_for("source.list_sources", username=username, repo_slug=repo_slug)
+            )
+        return send_file(
+            filepath,
+            as_attachment=True,
+            download_name=source_id,
         )
 
     @source_bp.route(

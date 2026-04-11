@@ -190,6 +190,10 @@
                class="btn-sm" title="预览">
               <i class="lucide-eye" aria-hidden="true"></i>
             </a>
+            <a href="{{ url_for('source.download_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
+               class="btn-sm" title="下载原始文件" download>
+              <i class="lucide-download" aria-hidden="true"></i>
+            </a>
             {% if is_owner %}
             {% if src.task_status not in ('queued', 'running') %}
             <form method="POST" style="display:inline;"
