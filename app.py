@@ -2166,8 +2166,12 @@ def _register_routes(app: Flask) -> None:
         disk_bytes = 0
         if os.path.isdir(data_dir):
             try:
-                total, used, free = shutil.disk_usage(data_dir)
-                disk_bytes = used
+                for dirpath, _dirnames, filenames in os.walk(data_dir):
+                    for fname in filenames:
+                        try:
+                            disk_bytes += os.path.getsize(os.path.join(dirpath, fname))
+                        except OSError:
+                            pass
             except Exception:
                 pass
 
