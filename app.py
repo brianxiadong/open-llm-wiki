@@ -1595,17 +1595,25 @@ def _register_routes(app: Flask) -> None:
     @ops_bp.route(
         "/<username>/<repo_slug>/query", methods=["GET"], endpoint="query"
     )
-    @login_required
     def query_page(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not repo.is_public:
+            if not current_user.is_authenticated:
+                return redirect(url_for("auth.login", next=request.url))
+            if current_user.id != repo.user_id:
+                abort(403)
         return render_template("ops/query.html", username=username, repo=repo)
 
     @ops_bp.route(
         "/<username>/<repo_slug>/query", methods=["POST"], endpoint="query_api"
     )
-    @login_required
     def query_api(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not repo.is_public:
+            if not current_user.is_authenticated:
+                return jsonify(error="请先登录"), 401
+            if current_user.id != repo.user_id:
+                abort(403)
         data = request.get_json(silent=True) or {}
         question = data.get("q", "").strip()
 
@@ -1662,7 +1670,7 @@ def _register_routes(app: Flask) -> None:
             import json as _json
             ql = QueryLog(
                 repo_id=repo.id,
-                user_id=user.id,
+                user_id=current_user.id if current_user.is_authenticated else None,
                 question=question,
                 answer_preview=result.get("markdown", "")[:500],
                 confidence=result.get("confidence", {}).get("level", "low"),
@@ -1713,9 +1721,13 @@ def _register_routes(app: Flask) -> None:
         )
 
     @ops_bp.route("/<username>/<repo_slug>/query/stream", methods=["GET"])
-    @login_required
     def query_stream(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not repo.is_public:
+            if not current_user.is_authenticated:
+                return jsonify(error="请先登录"), 401
+            if current_user.id != repo.user_id:
+                abort(403)
         question = request.args.get("q", "").strip()
         if not question:
             return jsonify(error="请输入问题"), 400

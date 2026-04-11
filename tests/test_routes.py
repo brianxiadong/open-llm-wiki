@@ -668,3 +668,38 @@ def test_admin_audit_log_accessible(auth_client, app):
     resp = auth_client.get("/admin/audit")
     assert resp.status_code == 200
     assert "审计" in resp.data.decode("utf-8")
+
+
+# -- Public repo guest access --------------------------------------------------
+
+
+def test_public_repo_query_no_login(app, sample_repo):
+    """公开仓库未登录访客可以 POST query"""
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from models import Repo, db
+        r = Repo.query.filter_by(slug=slug).first()
+        r.is_public = True
+        db.session.commit()
+    fake = {
+        "markdown": "answer", "confidence": {"level": "low", "score": 0.1, "reasons": []},
+        "wiki_evidence": [], "chunk_evidence": [], "evidence_summary": "",
+        "referenced_pages": [], "wiki_sources": [], "qdrant_sources": [],
+    }
+    with patch.object(app.wiki_engine, "query_with_evidence", return_value=fake):
+        resp = app.test_client().post(f"/alice/{slug}/query", json={"q": "test"})
+    assert resp.status_code == 200
+
+
+def test_private_repo_query_no_login_returns_401(app, sample_repo):
+    """私有仓库未登录访客不能 POST query"""
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from models import Repo, db
+        r = Repo.query.filter_by(slug=slug).first()
+        r.is_public = False
+        db.session.commit()
+    resp = app.test_client().post(f"/alice/{slug}/query", json={"q": "test"})
+    assert resp.status_code == 401
