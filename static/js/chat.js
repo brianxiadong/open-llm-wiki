@@ -140,7 +140,7 @@
 
   /* ── Chat message rendering ───────────────────────────── */
 
-  function addUserMessage(text) {
+  function addUserMessage(text, isRestore) {
     if (welcome) welcome.hidden = true;
     var div = document.createElement('div');
     div.className = 'chat-msg chat-msg-user';
@@ -148,10 +148,10 @@
       '<div class="chat-msg-body"><div class="chat-msg-content">' + escapeHtml(text) + '</div></div>';
     messages.appendChild(div);
     initIcons(div);
-    scrollToBottom();
+    if (!isRestore) scrollToBottom();
   }
 
-  function addAIMessage(html, refs, markdown, wikiSources, qdrantSources, confidence, wikiEvidence, chunkEvidence, evidenceSummary) {
+  function addAIMessage(html, refs, markdown, wikiSources, qdrantSources, confidence, wikiEvidence, chunkEvidence, evidenceSummary, isRestore) {
     var div = document.createElement('div');
     div.className = 'chat-msg chat-msg-ai';
 
@@ -306,7 +306,7 @@
       saveBtnEl.addEventListener('click', function () { saveAsPage(markdown, saveBtnEl); });
     }
 
-    scrollToBottom();
+    if (!isRestore) scrollToBottom();
   }
 
   function addLoadingMessage() {
@@ -356,29 +356,163 @@
     scrollToBottom();
   }
 
-  /* ── Send query ───────────────────────────────────────── */
+  /* ── Session Management ──────────────────────────────────── */
 
-  // 多轮对话 session key（每个知识库每天一个 session）
-  var SESSION_KEY = 'session_' + (cfg.repoSlug || 'default') + '_' + new Date().toISOString().slice(0, 10);
+  var SESSION_KEY = null;  // 当前激活的 session key
+  var sessionBar = document.getElementById('chat-session-bar');
+  var sessionList = document.getElementById('chat-session-list');
+  var newSessionBtn = document.getElementById('new-session-btn');
 
-  // 清空会话按钮
+  function renderSessionTabs(sessions, activeKey) {
+    sessionList.innerHTML = '';
+    if (!sessions || !sessions.length) {
+      sessionList.innerHTML = '<span style="color:var(--pico-muted-color);font-size:0.82rem;padding:0 0.25rem;">暂无历史</span>';
+      return;
+    }
+    sessions.forEach(function(s) {
+      var tab = document.createElement('div');
+      tab.className = 'chat-session-tab' + (s.key === activeKey ? ' active' : '');
+      tab.dataset.key = s.key;
+      tab.innerHTML =
+        '<span class="session-title" title="' + escapeHtml(s.title) + '">' + escapeHtml(s.title) + '</span>' +
+        '<button class="session-del" title="删除" onclick="event.stopPropagation()">✕</button>';
+      tab.querySelector('.session-del').addEventListener('click', function(e) {
+        e.stopPropagation();
+        deleteSession(s.key);
+      });
+      tab.addEventListener('click', function() {
+        loadSession(s.key);
+      });
+      // 双击重命名
+      tab.querySelector('.session-title').addEventListener('dblclick', function(e) {
+        e.stopPropagation();
+        var newTitle = prompt('重命名对话', s.title);
+        if (newTitle && newTitle.trim()) renameSession(s.key, newTitle.trim());
+      });
+      sessionList.appendChild(tab);
+    });
+  }
+
+  function loadSessionList(activateKey) {
+    if (!cfg.listSessionsUrl) return;
+    fetch(cfg.listSessionsUrl)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var sessions = data.sessions || [];
+        var activeKey = activateKey || SESSION_KEY;
+        // 如果没有任何会话且没有指定 key，自动新建
+        if (!sessions.length && !activeKey) {
+          createNewSession();
+          return;
+        }
+        // 没有 active key 则用最新的
+        if (!activeKey && sessions.length) activeKey = sessions[0].key;
+        renderSessionTabs(sessions, activeKey);
+        if (activeKey !== SESSION_KEY) {
+          SESSION_KEY = activeKey;
+          restoreChatMessages(activeKey);
+        }
+      })
+      .catch(function() {
+        sessionList.innerHTML = '<span style="color:var(--pico-muted-color);font-size:0.82rem;">—</span>';
+      });
+  }
+
+  function createNewSession() {
+    if (!cfg.newSessionUrl) return;
+    fetch(cfg.newSessionUrl, { method: 'POST', headers: {'Content-Type':'application/json'} })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.ok) {
+          SESSION_KEY = data.key;
+          // 清空聊天界面
+          if (messages) messages.innerHTML = '';
+          if (welcome) welcome.style.display = '';
+          loadSessionList(data.key);
+        }
+      });
+  }
+
+  function deleteSession(key) {
+    if (!confirm('确认删除此对话？')) return;
+    var url = cfg.deleteSessionBaseUrl + encodeURIComponent(key) + '/delete';
+    fetch(url, { method: 'POST' })
+      .then(function() {
+        if (SESSION_KEY === key) {
+          SESSION_KEY = null;
+          if (messages) messages.innerHTML = '';
+          if (welcome) welcome.style.display = '';
+        }
+        loadSessionList(null);
+      });
+  }
+
+  function renameSession(key, title) {
+    var url = cfg.deleteSessionBaseUrl + encodeURIComponent(key) + '/rename';
+    fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({title: title})
+    }).then(function() { loadSessionList(SESSION_KEY); });
+  }
+
+  function restoreChatMessages(key) {
+    if (!cfg.getSessionUrl || !key) return;
+    fetch(cfg.getSessionUrl + '?key=' + encodeURIComponent(key))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var msgs = data.messages || [];
+        if (!msgs.length) {
+          if (messages) messages.innerHTML = '';
+          if (welcome) welcome.style.display = '';
+          return;
+        }
+        if (welcome) welcome.style.display = 'none';
+        if (messages) messages.innerHTML = '';
+        // 渲染历史消息（简单文本展示，不含证据面板）
+        msgs.forEach(function(m) {
+          if (m.role === 'user') {
+            addUserMessage(m.content, true);
+          } else if (m.role === 'assistant') {
+            var safeHtml = '<p>' + escapeHtml(m.content).replace(/\n/g, '<br>') + '</p>';
+            addAIMessage(safeHtml, [], m.content, [], [], null, null, null, '', true);
+          }
+        });
+        if (messages) messages.scrollTop = messages.scrollHeight;
+      });
+  }
+
+  if (newSessionBtn) {
+    newSessionBtn.addEventListener('click', createNewSession);
+  }
+
+  // 清空会话按钮改为清空当前 session 消息
   var clearSessionBtn = document.getElementById('clear-session-btn');
   if (clearSessionBtn) {
     clearSessionBtn.addEventListener('click', function () {
-      if (!confirm('确认清空本次对话历史？')) return;
+      if (!confirm('确认清空当前对话？')) return;
+      if (!SESSION_KEY || !cfg.clearSessionUrl) return;
       fetch(cfg.clearSessionUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: SESSION_KEY })
       }).then(function () {
-        // 清空消息列表，显示欢迎页
         if (messages) messages.innerHTML = '';
         if (welcome) welcome.style.display = '';
+        loadSessionList(SESSION_KEY);
       }).catch(function () {});
     });
   }
 
-  form.addEventListener('submit', function (e) {
+  // 页面加载时拉取会话列表
+  if (sessionBar && cfg.listSessionsUrl) {
+    loadSessionList(null);
+  } else {
+    // 未登录或无会话 URL，退化到日期 key
+    SESSION_KEY = 'session_' + (cfg.repoSlug || 'default') + '_' + new Date().toISOString().slice(0, 10);
+  }
+
+  /* ── Send query ───────────────────────────────────────── */
     e.preventDefault();
     var q = input.value.trim();
     if (!q || isLoading) return;

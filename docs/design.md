@@ -338,6 +338,7 @@ CREATE TABLE conversation_sessions (
     repo_id        INT NOT NULL,
     user_id        INT NOT NULL,
     session_key    VARCHAR(64) NOT NULL,
+    title          VARCHAR(255) NOT NULL DEFAULT '新对话',
     messages_json  LONGTEXT NOT NULL,
     created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -460,6 +461,10 @@ GET  /{username}/{repo}/query/stream     → SSE 流式查询（EventSource，�
 POST /{username}/{repo}/query/save       → 保存回答为 Wiki 页面
 GET  /{username}/{repo}/session?key=     → 获取会话历史
 POST /{username}/{repo}/session/clear    → 清空会话
+GET  /{username}/{repo}/sessions         → 列出该用户所有历史会话（JSON）
+POST /{username}/{repo}/sessions/new     → 创建新会话（返回 session_key）
+POST /{username}/{repo}/sessions/{key}/delete → 删除会话
+POST /{username}/{repo}/sessions/{key}/rename → 重命名会话
 POST /{username}/{repo}/lint             → 触发维护检查
 POST /{username}/{repo}/lint/apply       → 应用修复建议
 GET  /{username}/{repo}/tasks              → 任务队列看板

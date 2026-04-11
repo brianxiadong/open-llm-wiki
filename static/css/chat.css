@@ -156,6 +156,62 @@
   border-radius: var(--radius-lg); overflow: hidden;
 }
 
+/* ── Session Bar ──────────────────────────────────────────── */
+.chat-session-bar {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--pico-card-section-color, #f8f9fa);
+  flex-shrink: 0; overflow: hidden;
+}
+.chat-session-list {
+  display: flex; gap: 0.35rem; overflow-x: auto; flex: 1;
+  scrollbar-width: none;
+}
+.chat-session-list::-webkit-scrollbar { display: none; }
+.chat-session-tab {
+  display: flex; align-items: center; gap: 0.3rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 5px; border: 1px solid transparent;
+  font-size: 0.82rem; white-space: nowrap; cursor: pointer;
+  color: var(--pico-muted-color);
+  background: none; max-width: 160px;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.chat-session-tab .session-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px;
+}
+.chat-session-tab:hover {
+  background: var(--pico-card-background-color);
+  border-color: var(--border); color: var(--pico-color);
+}
+.chat-session-tab.active {
+  background: var(--pico-card-background-color);
+  border-color: var(--brand, #6366f1);
+  color: var(--pico-color); font-weight: 500;
+}
+.chat-session-tab .session-del {
+  display: none; cursor: pointer; color: var(--pico-muted-color);
+  padding: 0 0.1rem; line-height: 1;
+  background: none; border: none; font-size: 0.75rem;
+  flex-shrink: 0;
+}
+.chat-session-tab:hover .session-del,
+.chat-session-tab.active .session-del { display: inline; }
+.chat-session-tab .session-del:hover { color: var(--error, #ef4444); }
+.chat-session-new {
+  display: flex; align-items: center; gap: 0.25rem;
+  padding: 0.25rem 0.6rem; border-radius: 5px; flex-shrink: 0;
+  font-size: 0.82rem; color: var(--pico-muted-color);
+  background: none; border: 1px solid var(--border); cursor: pointer;
+  transition: all 0.15s;
+}
+.chat-session-new:hover {
+  background: var(--pico-card-background-color);
+  color: var(--brand, #6366f1); border-color: var(--brand, #6366f1);
+}
+
 .chat-messages {
   flex: 1; overflow-y: auto; padding: 1.5rem;
   display: flex; flex-direction: column; gap: 1rem;

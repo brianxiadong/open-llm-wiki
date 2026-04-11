@@ -1852,11 +1852,14 @@ def _register_routes(app: Flask) -> None:
                 ).first()
                 if cs:
                     cs.messages_json = json.dumps(history, ensure_ascii=False)
+                    if cs.title == "新对话":
+                        cs.title = question[:60]
                 else:
                     cs = ConversationSession(
                         repo_id=repo.id,
                         user_id=current_user.id,
                         session_key=session_key,
+                        title=question[:60],
                         messages_json=json.dumps(history, ensure_ascii=False),
                     )
                     db.session.add(cs)
@@ -2087,6 +2090,69 @@ def _register_routes(app: Flask) -> None:
         ).first()
         msgs = json.loads(cs.messages_json) if cs else []
         return jsonify(messages=msgs)
+
+    @ops_bp.route("/<username>/<repo_slug>/sessions", methods=["GET"])
+    @login_required
+    def list_sessions(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        from models import ConversationSession
+        sessions = (
+            ConversationSession.query
+            .filter_by(repo_id=repo.id, user_id=user.id)
+            .order_by(ConversationSession.updated_at.desc())
+            .limit(50)
+            .all()
+        )
+        return jsonify(sessions=[{
+            "key": s.session_key,
+            "title": s.title,
+            "updated_at": s.updated_at.strftime("%Y-%m-%d %H:%M"),
+            "message_count": len(json.loads(s.messages_json or "[]")) // 2,
+        } for s in sessions])
+
+    @ops_bp.route("/<username>/<repo_slug>/sessions/new", methods=["POST"])
+    @login_required
+    def new_session(username, repo_slug):
+        import uuid
+        user, repo = _get_repo_or_404(username, repo_slug)
+        from models import ConversationSession
+        key = "sess_" + uuid.uuid4().hex[:16]
+        cs = ConversationSession(
+            repo_id=repo.id, user_id=user.id,
+            session_key=key, title="新对话", messages_json="[]"
+        )
+        db.session.add(cs)
+        db.session.commit()
+        return jsonify(ok=True, key=key, title="新对话")
+
+    @ops_bp.route("/<username>/<repo_slug>/sessions/<session_key>/delete", methods=["POST"])
+    @login_required
+    def delete_session(username, repo_slug, session_key):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        from models import ConversationSession
+        cs = ConversationSession.query.filter_by(
+            repo_id=repo.id, user_id=user.id, session_key=session_key
+        ).first()
+        if cs:
+            db.session.delete(cs)
+            db.session.commit()
+        return jsonify(ok=True)
+
+    @ops_bp.route("/<username>/<repo_slug>/sessions/<session_key>/rename", methods=["POST"])
+    @login_required
+    def rename_session(username, repo_slug, session_key):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        title = (request.get_json(silent=True) or {}).get("title", "").strip()
+        if not title:
+            return jsonify(error="标题不能为空"), 400
+        from models import ConversationSession
+        cs = ConversationSession.query.filter_by(
+            repo_id=repo.id, user_id=user.id, session_key=session_key
+        ).first()
+        if cs:
+            cs.title = title[:100]
+            db.session.commit()
+        return jsonify(ok=True)
 
     @ops_bp.route("/<username>/<repo_slug>/session/clear", methods=["POST"])
     @login_required

@@ -92,6 +92,7 @@ class ConversationSession(db.Model):
     repo_id = db.Column(db.Integer, db.ForeignKey("repos.id"), nullable=False, index=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     session_key = db.Column(db.String(64), nullable=False, index=True)
+    title = db.Column(db.String(255), nullable=False, default="新对话")
     messages_json = db.Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=False, default="[]")
     created_at = db.Column(db.DateTime, nullable=False, default=_utc_now)
     updated_at = db.Column(db.DateTime, nullable=False, default=_utc_now, onupdate=_utc_now)
