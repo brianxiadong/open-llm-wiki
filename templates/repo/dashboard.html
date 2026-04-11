@@ -29,8 +29,10 @@
         <li><a href="{{ url_for('ops.task_queue', username=username, repo_slug=repo.slug) }}"><i class="lucide-list-todo"></i> 任务队列</a></li>
         <li><a href="{{ url_for('wiki.graph', username=username, repo_slug=repo.slug) }}"><i class="lucide-git-branch"></i> 关系图谱</a></li>
         <li><a href="{{ url_for('ops.lint', username=username, repo_slug=repo.slug) }}"><i class="lucide-shield-check"></i> 维护检查</a></li>
-        <li><a href="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}"><i class="lucide-settings"></i> 设置</a></li>
-        <li>
+        <li><a href="{{ url_for('ops.insights', username=username, repo_slug=repo.slug) }}"><i class="lucide-search-x"></i> 知识缺口分析</a></li>
+        <li><a href="{{ url_for('ops.entity_check', username=username, repo_slug=repo.slug) }}"><i class="lucide-git-merge"></i> 实体去重检查</a></li>
+        <li><a href="{{ url_for('wiki.semantic_search', username=username, repo_slug=repo.slug) }}"><i class="lucide-brain"></i> 语义检索</a></li>
+        <li><a href="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}"><i class="lucide-settings"></i> 设置</a></li>        <li>
           <a href="{{ url_for('wiki.export_zip', username=username, repo_slug=repo.slug) }}">
             <i class="lucide-download" aria-hidden="true"></i> 导出 Wiki (ZIP)
           </a>
@@ -42,6 +44,11 @@
 </div>
 
 {# ── Two-Panel Layout ───────────────────────────────────── #}
+{% if readme_html %}
+<div class="kb-readme rendered-content" style="margin:0 0 1rem;padding:0.75rem 1rem;background:var(--pico-card-background-color);border-radius:8px;border:1px solid var(--pico-muted-border-color);font-size:0.9rem;">
+  {{ readme_html|safe }}
+</div>
+{% endif %}
 <div class="kb-layout">
 
   {# ── Left Sidebar ──────────────────────────────────────── #}

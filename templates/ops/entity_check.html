@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}实体去重检查 - {{ repo.name }}{% endblock %}
+
+{% block content %}
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li>实体去重检查</li>
+  </ul>
+</nav>
+
+<div class="page-header">
+  <h2 style="display:flex;align-items:center;gap:0.5rem;margin:0">
+    <i class="lucide-git-merge" style="font-size:1.4rem;color:var(--brand)" aria-hidden="true"></i>
+    实体去重检查
+  </h2>
+  <a href="?analyze=1" class="action-btn action-btn-primary">
+    <i class="lucide-sparkles" aria-hidden="true"></i> 开始检测
+  </a>
+</div>
+
+{% if result %}
+<article>
+  <header><h3>检测结果（{{ result.total_issues }} 组潜在重复）</h3></header>
+  {% if result.duplicate_groups %}
+  {% for grp in result.duplicate_groups %}
+  <div style="padding:0.75rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;margin-bottom:0.75rem;">
+    <div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.4rem;">
+      {% for pg in grp.pages %}
+      <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=pg.replace('.md','')) }}"
+         class="badge badge-muted" style="font-size:0.82rem;">{{ pg }}</a>
+      {% endfor %}
+    </div>
+    <p style="margin:0;font-size:0.9rem;color:var(--pico-muted-color);">{{ grp.reason }}</p>
+    <p style="margin:0.3rem 0 0;font-size:0.85rem;">💡 建议：{{ grp.suggestion }}</p>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p style="color:var(--pico-muted-color);">未发现重复实体页面，知识库结构良好。</p>
+  {% endif %}
+</article>
+{% else %}
+<article>
+  <p style="color:var(--pico-muted-color);">点击「开始检测」，AI 将扫描 Wiki 中可能指代同一概念的重复页面并给出合并建议。</p>
+</article>
+{% endif %}
+{% endblock %}

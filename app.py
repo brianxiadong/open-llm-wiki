@@ -634,6 +634,17 @@ def _register_routes(app: Flask) -> None:
         raw_dir = os.path.join(base, "raw")
         sources = _enrich_sources(raw_dir, repo) if os.path.isdir(raw_dir) else []
 
+        # README
+        readme_html = ""
+        readme_path = os.path.join(base, "README.md")
+        if os.path.isfile(readme_path):
+            try:
+                with open(readme_path, "r", encoding="utf-8") as f:
+                    raw_readme = f.read()
+                _, readme_html = render_markdown(raw_readme, _wiki_base_url(username, repo_slug))
+            except Exception:
+                pass
+
         return render_template(
             "repo/dashboard.html",
             username=username,
@@ -643,6 +654,7 @@ def _register_routes(app: Flask) -> None:
             page_content=page_content,
             active_page=active_page,
             is_owner=_is_owner(repo),
+            readme_html=readme_html,
         )
 
     @repo_bp.route(
@@ -672,6 +684,12 @@ def _register_routes(app: Flask) -> None:
                 with open(schema_path, "w", encoding="utf-8") as f:
                     f.write(content)
                 flash("Schema 已保存", "success")
+            elif action == "update_readme":
+                readme_content = request.form.get("readme", "")
+                readme_path = os.path.join(base, "README.md")
+                with open(readme_path, "w", encoding="utf-8") as f:
+                    f.write(readme_content)
+                flash("README 已保存", "success")
             return redirect(
                 url_for("repo.settings", username=username, repo_slug=repo_slug)
             )
@@ -681,11 +699,18 @@ def _register_routes(app: Flask) -> None:
             with open(schema_path, "r", encoding="utf-8") as f:
                 schema_content = f.read()
 
+        readme_content = ""
+        readme_path = os.path.join(base, "README.md")
+        if os.path.isfile(readme_path):
+            with open(readme_path, "r", encoding="utf-8") as f:
+                readme_content = f.read()
+
         return render_template(
             "repo/settings.html",
             username=username,
             repo=repo,
             schema_content=schema_content,
+            readme_content=readme_content,
         )
 
     @repo_bp.route("/<username>/<repo_slug>/delete", methods=["POST"])
@@ -1119,6 +1144,20 @@ def _register_routes(app: Flask) -> None:
                 "Content-Disposition": f'attachment; filename="{repo_slug}-wiki.zip"',
             },
         )
+
+    @wiki_bp.route("/<username>/<repo_slug>/search/semantic")
+    @login_required
+    def semantic_search(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        q = request.args.get("q", "").strip()
+        results = []
+        if q and current_app.qdrant:
+            try:
+                results = current_app.qdrant.search_chunks(repo_id=repo.id, query=q, limit=15)
+            except Exception as exc:
+                flash(f"语义检索失败：{exc}", "error")
+        return render_template("wiki/semantic_search.html", username=username, repo=repo,
+                               q=q, results=results)
 
     app.register_blueprint(wiki_bp)
 
@@ -2041,6 +2080,41 @@ def _register_routes(app: Flask) -> None:
                 cs.messages_json = "[]"
                 db.session.commit()
         return jsonify(ok=True)
+
+    @ops_bp.route("/<username>/<repo_slug>/insights")
+    @login_required
+    def insights(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        from models import QueryLog
+        low_conf_logs = (
+            QueryLog.query.filter_by(repo_id=repo.id, confidence="low")
+            .order_by(QueryLog.created_at.desc())
+            .limit(50)
+            .all()
+        )
+        gaps = None
+        if request.args.get("analyze"):
+            query_log_data = [{"question": q.question, "confidence": q.confidence} for q in low_conf_logs]
+            try:
+                gaps = current_app.wiki_engine.find_gaps(repo, username, query_log_data)
+            except Exception as exc:
+                flash(f"分析失败：{exc}", "error")
+        return render_template("ops/insights.html", username=username, repo=repo,
+                               low_conf_logs=low_conf_logs, gaps=gaps)
+
+    @ops_bp.route("/<username>/<repo_slug>/entity-check")
+    @login_required
+    def entity_check(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        result = None
+        if request.args.get("analyze"):
+            try:
+                result = current_app.wiki_engine.find_entity_duplicates(repo, username)
+            except Exception as exc:
+                flash(f"检测失败：{exc}", "error")
+        return render_template("ops/entity_check.html", username=username, repo=repo, result=result)
 
     app.register_blueprint(ops_bp)
 

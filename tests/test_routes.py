@@ -773,3 +773,40 @@ def test_clear_session(sample_repo, app):
         from models import ConversationSession
         cs2 = ConversationSession.query.filter_by(session_key="clr-sess").first()
         assert cs2.messages_json == "[]"
+
+
+# -- README, insights, entity check, semantic search ---------------------------
+
+
+def test_save_and_show_readme(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "update_readme", "readme": "# 说明\n\n这是测试知识库。"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    resp2 = client.get(f"/alice/{slug}")
+    assert "说明" in resp2.data.decode("utf-8")
+
+
+def test_insights_page_accessible(sample_repo):
+    client, repo_info = sample_repo
+    resp = client.get(f"/alice/{repo_info['slug']}/insights")
+    assert resp.status_code == 200
+    assert "知识缺口" in resp.data.decode("utf-8")
+
+
+def test_entity_check_page_accessible(sample_repo):
+    client, repo_info = sample_repo
+    resp = client.get(f"/alice/{repo_info['slug']}/entity-check")
+    assert resp.status_code == 200
+    assert "实体去重" in resp.data.decode("utf-8")
+
+
+def test_semantic_search_accessible(sample_repo):
+    client, repo_info = sample_repo
+    resp = client.get(f"/alice/{repo_info['slug']}/search/semantic?q=test")
+    assert resp.status_code == 200
+    assert "语义检索" in resp.data.decode("utf-8")

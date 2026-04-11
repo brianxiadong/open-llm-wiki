@@ -73,6 +73,17 @@
   </form>
 </article>
 
+<article>
+  <header><h3>知识库说明（README）</h3></header>
+  <p style="color:var(--pico-muted-color);font-size:0.88rem;">用 Markdown 描述这个知识库的用途、内容范围、使用说明等。将显示在知识库首页。</p>
+  <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
+    <input type="hidden" name="action" value="update_readme">
+    <textarea name="readme" rows="7" placeholder="## 关于本知识库&#10;&#10;（用 Markdown 编写说明…）"
+              style="width:100%;font-family:monospace;font-size:0.88rem;">{{ readme_content or '' }}</textarea>
+    <button type="submit" class="action-btn action-btn-primary" style="margin-top:0.5rem;">保存 README</button>
+  </form>
+</article>
+
 <article class="danger-zone">
   <header><h3>删除知识库</h3></header>
   <p>删除后，该知识库下的所有页面、来源文件与向量数据将被永久移除，且<strong>无法恢复</strong>。请谨慎操作。</p>

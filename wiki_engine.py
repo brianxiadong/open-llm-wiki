@@ -923,6 +923,79 @@ class WikiEngine:
     # LINT
     # -----------------------------------------------------------------------
 
+    def find_gaps(
+        self,
+        repo: Any,
+        username: str,
+        query_logs: list[dict],
+    ) -> dict[str, Any]:
+        """分析查询日志和现有 Wiki，找出知识缺口并提出补充建议。"""
+        wiki_dir = self._wiki_dir(username, repo.slug)
+        pages = list_wiki_pages(wiki_dir)
+        schema_content = _read_file(self._schema_path(username, repo.slug))
+
+        pages_summary = "\n".join(
+            f"- {p['filename']}: {p['title']} (type: {p['type']})"
+            for p in pages
+            if p["filename"] not in ("log.md", "schema.md")
+        )
+        low_conf_q = "\n".join(f"- {q['question']}" for q in query_logs[:30])
+
+        return self._chat_json(
+            system=(
+                "你是一个知识库分析师。根据用户的问题历史和当前 Wiki 内容，找出知识缺口。\n\n"
+                + (schema_content or "")
+            ),
+            user=(
+                "分析以下低置信度问题（Wiki 无法很好回答的问题）和现有 Wiki 页面，"
+                "识别知识缺口并给出具体补充建议。\n\n"
+                '返回 JSON：\n'
+                '{"gaps": [{"topic": "主题名称", "description": "缺口说明", '
+                '"suggested_sources": ["建议来源"], "priority": "high|medium|low"}], '
+                '"summary": "总体分析"}\n\n'
+                f"--- 低置信度问题 ---\n{low_conf_q or '(无)'}\n\n"
+                f"--- 现有 Wiki 页面 ---\n{pages_summary or '(空)'}"
+            ),
+            default={"gaps": [], "summary": "暂无分析数据"},
+        )
+
+    def find_entity_duplicates(
+        self,
+        repo: Any,
+        username: str,
+    ) -> dict[str, Any]:
+        """识别 Wiki 中可能重复或指代同一概念的页面。"""
+        wiki_dir = self._wiki_dir(username, repo.slug)
+        pages = list_wiki_pages(wiki_dir)
+        schema_content = _read_file(self._schema_path(username, repo.slug))
+
+        pages_detail = []
+        for p in pages:
+            if p["filename"] in ("log.md", "schema.md", "index.md"):
+                continue
+            content = _read_file(os.path.join(wiki_dir, p["filename"]))
+            fm, _ = render_markdown(content) if content else ({}, "")
+            tags = fm.get("tags", [])
+            pages_detail.append(
+                f"- {p['filename']}: {p['title']} (type: {p['type']}, tags: {tags})"
+            )
+
+        return self._chat_json(
+            system=(
+                "你是一个 Wiki 质量审查员。识别可能重复的页面并建议合并。\n\n"
+                + (schema_content or "")
+            ),
+            user=(
+                "分析以下 Wiki 页面列表，找出可能指代同一概念或高度重叠的页面组。\n\n"
+                '返回 JSON：\n'
+                '{"duplicate_groups": [{"pages": ["a.md", "b.md"], '
+                '"reason": "重复原因", "suggestion": "建议操作"}], '
+                '"total_issues": 0}\n\n'
+                f"--- Wiki 页面列表 ---\n" + "\n".join(pages_detail)
+            ),
+            default={"duplicate_groups": [], "total_issues": 0},
+        )
+
     def lint(
         self,
         repo: Any,

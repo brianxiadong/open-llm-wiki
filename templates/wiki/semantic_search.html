@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}语义检索 - {{ repo.name }}{% endblock %}
+
+{% block content %}
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li>语义检索</li>
+  </ul>
+</nav>
+
+<div class="page-header">
+  <h2 style="display:flex;align-items:center;gap:0.5rem;margin:0">
+    <i class="lucide-brain" style="font-size:1.4rem;color:var(--brand)" aria-hidden="true"></i>
+    语义检索
+  </h2>
+</div>
+
+<article>
+  <form method="GET" style="display:flex;gap:0.5rem;margin-bottom:1.25rem;">
+    <input type="text" name="q" value="{{ q }}" placeholder="输入任意描述，按语义相似度搜索原文片段…"
+           style="flex:1;" autofocus>
+    <button type="submit" class="action-btn action-btn-primary">搜索</button>
+  </form>
+
+  {% if q %}
+  <p style="color:var(--pico-muted-color);font-size:0.88rem;margin-bottom:0.75rem;">
+    找到 {{ results|length }} 个相关原文片段
+  </p>
+  {% if results %}
+  <div style="display:flex;flex-direction:column;gap:0.75rem;">
+    {% for r in results %}
+    <div style="padding:0.75rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.35rem;flex-wrap:wrap;gap:0.3rem;">
+        <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=r.filename.replace('.md','')) }}"
+           style="font-weight:600;">{{ r.page_title or r.filename }}</a>
+        <span style="font-size:0.8rem;color:var(--pico-muted-color);">
+          相似度 {{ (r.score * 100)|round|int }}%
+          {% if r.heading %} &middot; § {{ r.heading }}{% endif %}
+        </span>
+      </div>
+      <p style="margin:0;font-size:0.88rem;color:var(--pico-secondary-color,#555);
+                overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;">
+        {{ r.chunk_text[:400] }}
+      </p>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color:var(--pico-muted-color);">未找到相关片段。请先摄入文档以建立语义索引，或尝试不同的描述方式。</p>
+  {% endif %}
+  {% else %}
+  <p style="color:var(--pico-muted-color);">输入自然语言描述，系统将通过向量相似度匹配最相关的原文片段。与关键词搜索互补。</p>
+  {% endif %}
+</article>
+{% endblock %}

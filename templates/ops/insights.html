@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}知识缺口分析 - {{ repo.name }}{% endblock %}
+
+{% block content %}
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li>知识缺口分析</li>
+  </ul>
+</nav>
+
+<div class="page-header">
+  <h2 style="display:flex;align-items:center;gap:0.5rem;margin:0">
+    <i class="lucide-search-x" style="font-size:1.4rem;color:var(--brand)" aria-hidden="true"></i>
+    知识缺口分析
+  </h2>
+  <a href="?analyze=1" class="action-btn action-btn-primary">
+    <i class="lucide-sparkles" aria-hidden="true"></i> 开始分析
+  </a>
+</div>
+
+<article>
+  <header><h3>低置信度问题（{{ low_conf_logs|length }} 条）</h3></header>
+  {% if low_conf_logs %}
+  <ul style="font-size:0.9rem;margin:0;padding-left:1.2rem;">
+    {% for q in low_conf_logs[:25] %}
+    <li style="margin-bottom:0.3rem;">
+      <span style="color:var(--pico-muted-color);font-size:0.82rem;">{{ q.created_at.strftime('%m-%d') }}</span>
+      {{ q.question }}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p style="color:var(--pico-muted-color);">暂无低置信度查询记录。当知识库回答不确定的问题时，记录会出现在这里。</p>
+  {% endif %}
+</article>
+
+{% if gaps %}
+<article>
+  <header>
+    <h3>AI 分析结果</h3>
+  </header>
+  <p>{{ gaps.summary }}</p>
+  {% if gaps.gaps %}
+  <div style="display:flex;flex-direction:column;gap:0.75rem;margin-top:1rem;">
+    {% for gap in gaps.gaps %}
+    <div style="padding:0.75rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;">
+      <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem;">
+        <strong>{{ gap.topic }}</strong>
+        <span class="badge" style="background:{% if gap.priority=='high' %}var(--error){% elif gap.priority=='medium' %}var(--warning,#f59e0b){% else %}var(--pico-muted-color){% endif %};color:#fff;font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:3px;">
+          {{ gap.priority }}
+        </span>
+      </div>
+      <p style="margin:0;font-size:0.9rem;color:var(--pico-muted-color);">{{ gap.description }}</p>
+      {% if gap.suggested_sources %}
+      <p style="margin:0.3rem 0 0;font-size:0.85rem;">💡 建议来源：{{ gap.suggested_sources|join('、') }}</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color:var(--pico-muted-color);">未发现明显知识缺口，知识库覆盖较为全面。</p>
+  {% endif %}
+</article>
+{% endif %}
+{% endblock %}
