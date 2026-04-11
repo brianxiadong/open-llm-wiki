@@ -363,6 +363,17 @@
   var sessionList = document.getElementById('chat-session-list');
   var newSessionBtn = document.getElementById('new-session-btn');
 
+  function updateSessionTabTitle(question) {
+    if (!SESSION_KEY) return;
+    var tab = sessionList && sessionList.querySelector('.chat-session-tab[data-key="' + SESSION_KEY + '"]');
+    if (!tab) return;
+    var titleEl = tab.querySelector('.session-title');
+    if (!titleEl || titleEl.textContent !== '新对话') return;
+    var title = question.slice(0, 20);
+    titleEl.textContent = title;
+    titleEl.title = title;
+  }
+
   function renderSessionTabs(sessions, activeKey) {
     sessionList.innerHTML = '';
     if (!sessions || !sessions.length) {
@@ -568,6 +579,7 @@
     if (!q || isLoading) return;
 
     addUserMessage(q);
+    updateSessionTabTitle(q);
     input.value = '';
     input.style.height = 'auto';
     isLoading = true;
