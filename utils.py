@@ -316,3 +316,13 @@ SCHEMA_TEMPLATES = {
     "product": ("产品文档", SCHEMA_PRODUCT_MD),
     "tech_notes": ("技术笔记", SCHEMA_TECH_NOTES_MD),
 }
+
+
+def file_md5(path: str) -> str:
+    """计算文件的 MD5 哈希，用于重复检测。"""
+    import hashlib
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()

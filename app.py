@@ -35,6 +35,7 @@ from utils import (
     SCHEMA_TEMPLATES,
     ensure_repo_dirs,
     extract_links,
+    file_md5,
     get_backlinks,
     get_repo_path,
     list_raw_sources,
@@ -1240,7 +1241,28 @@ def _register_routes(app: Flask) -> None:
         saved_name = None
 
         if ext in ("md", "txt"):
-            uploaded.save(os.path.join(raw_dir, safe_name))
+            dest_path = os.path.join(raw_dir, safe_name)
+            # 检测重复：先保存到临时文件，计算 MD5
+            tmp_check = dest_path + ".uploading"
+            uploaded.save(tmp_check)
+            new_md5 = file_md5(tmp_check)
+            dup_name = None
+            for existing in os.listdir(raw_dir):
+                if existing.startswith(".") or existing == safe_name or existing.endswith(".uploading"):
+                    continue
+                ep = os.path.join(raw_dir, existing)
+                if os.path.isfile(ep):
+                    try:
+                        if file_md5(ep) == new_md5:
+                            dup_name = existing
+                            break
+                    except Exception:
+                        pass
+            if dup_name:
+                os.remove(tmp_check)
+                flash(f"文件内容与已有文件「{dup_name}」重复，跳过上传。", "warning")
+                return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
+            os.rename(tmp_check, dest_path)
             saved_name = safe_name
         elif ext in MINERU_EXTENSIONS:
             temp_dir = os.path.join(base, "temp")

@@ -810,3 +810,27 @@ def test_semantic_search_accessible(sample_repo):
     resp = client.get(f"/alice/{repo_info['slug']}/search/semantic?q=test")
     assert resp.status_code == 200
     assert "语义检索" in resp.data.decode("utf-8")
+
+
+# -- Duplicate source detection ------------------------------------------------
+
+
+def test_duplicate_upload_warns(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    content = b"# Duplicate Content\n\nSame text here.\n"
+    resp1 = client.post(
+        f"/alice/{slug}/sources/upload",
+        data={"file": (io.BytesIO(content), "dup-test.md")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert resp1.status_code == 200
+    resp2 = client.post(
+        f"/alice/{slug}/sources/upload",
+        data={"file": (io.BytesIO(content), "dup-test2.md")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert resp2.status_code == 200
+    assert "重复" in resp2.data.decode("utf-8")
