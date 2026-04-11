@@ -316,7 +316,7 @@ CREATE TABLE tasks (
 CREATE TABLE query_logs (
     id               INT AUTO_INCREMENT PRIMARY KEY,
     repo_id          INT NOT NULL,
-    user_id          INT NOT NULL,
+    user_id          INT NULL,
     question         TEXT NOT NULL,
     answer_preview   TEXT,
     confidence       VARCHAR(16) NOT NULL DEFAULT 'low',
@@ -330,6 +330,51 @@ CREATE TABLE query_logs (
     INDEX idx_ql_user (user_id),
     CONSTRAINT fk_ql_repo FOREIGN KEY (repo_id) REFERENCES repos(id),
     CONSTRAINT fk_ql_user FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Wave 3 新增：多轮对话会话表
+CREATE TABLE conversation_sessions (
+    id             INT AUTO_INCREMENT PRIMARY KEY,
+    repo_id        INT NOT NULL,
+    user_id        INT NOT NULL,
+    session_key    VARCHAR(64) NOT NULL,
+    messages_json  LONGTEXT NOT NULL,
+    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_cs_repo (repo_id),
+    INDEX idx_cs_user (user_id),
+    INDEX idx_cs_key (session_key),
+    CONSTRAINT fk_cs_repo FOREIGN KEY (repo_id) REFERENCES repos(id),
+    CONSTRAINT fk_cs_user FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Wave 3 新增：审计日志表
+CREATE TABLE audit_logs (
+    id            INT AUTO_INCREMENT PRIMARY KEY,
+    user_id       INT,
+    username      VARCHAR(64),
+    action        VARCHAR(64) NOT NULL,
+    resource_type VARCHAR(32),
+    resource_id   VARCHAR(128),
+    detail        TEXT,
+    ip            VARCHAR(64),
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_al_user (user_id),
+    INDEX idx_al_action (action),
+    INDEX idx_al_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Wave 3 新增：API Token 表
+CREATE TABLE api_tokens (
+    id           INT AUTO_INCREMENT PRIMARY KEY,
+    user_id      INT NOT NULL,
+    name         VARCHAR(128) NOT NULL,
+    token_hash   VARCHAR(256) NOT NULL UNIQUE,
+    last_used_at DATETIME,
+    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_active    TINYINT(1) NOT NULL DEFAULT 1,
+    INDEX idx_at_user (user_id),
+    CONSTRAINT fk_at_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
@@ -375,29 +420,32 @@ POST /register                           → 注册
 GET  /logout                             → 登出
 
 用户：
-GET  /{username}/settings                → 个人设置页（显示名称、密码）
-POST /{username}/settings/profile        → 修改显示名称
-POST /{username}/settings/password       → 修改密码
+GET  /user/settings                      → 个人设置页（显示名称、密码）
+GET  /user/settings/tokens               → API Token 管理页
+POST /user/settings/tokens/create        → 创建 API Token
+POST /user/settings/tokens/{id}/revoke   → 吊销 API Token
 
 仓库管理：
 GET  /                                   → 首页（已登录则跳转仓库列表）
 GET  /{username}                         → 用户的仓库列表
 POST /{username}/repos                   → 创建新仓库
-GET  /{username}/{repo}                  → 仓库面板（Wiki 概览）
+GET  /{username}/{repo}                  → 仓库面板（Wiki 概览 + README）
 POST /{username}/{repo}/delete           → 删除仓库
 GET  /{username}/{repo}/settings         → 仓库设置
+POST /{username}/{repo}/import.zip       → 从 ZIP 导入/恢复整个知识库
 
 Wiki 浏览：
-GET  /{username}/{repo}/wiki             → Wiki 页面列表
-GET  /{username}/{repo}/wiki/{page}      → 查看 Wiki 页面
+GET  /{username}/{repo}/wiki/{page}      → 查看 Wiki 页面（公开库可访客访问）
 GET  /{username}/{repo}/wiki/search      → Wiki 全文关键词搜索
 GET  /{username}/{repo}/wiki/export.zip  → 导出 Wiki 为 ZIP
 GET  /{username}/{repo}/graph            → 链接关系图
+GET  /{username}/{repo}/search/semantic  → 语义检索（向量相似度）
 
 原始文档：
 GET  /{username}/{repo}/sources          → 原始文档列表
 GET  /{username}/{repo}/sources/{file}   → 查看原始文档
-POST /{username}/{repo}/sources/upload   → 上传文档
+POST /{username}/{repo}/sources/upload   → 上传文档（含重复检测）
+GET  /{username}/{repo}/sources/{id}/download → 下载原始文件
 POST /{username}/{repo}/sources/batch-delete → 批量删除文件
 POST /{username}/{repo}/sources/batch-ingest → 批量摄入未处理文件
 POST /{username}/{repo}/sources/import-url   → 从 URL 导入网页
@@ -406,18 +454,18 @@ POST /{username}/{repo}/sources/import-url   → 从 URL 导入网页
 POST /{username}/{repo}/ingest/{file}    → 触发摄入
 GET  /{username}/{repo}/ingest/{task_id} → 摄入进度（SSE）
 POST /api/tasks/{task_id}/retry          → 重试失败任务
-GET  /{username}/{repo}/query            → 查询界面
-POST /{username}/{repo}/query            → 提交查询（完整响应 / _rendered_answer 仅渲染模式）
-GET  /{username}/{repo}/query/stream     → SSE 流式查询（EventSource）
+GET  /{username}/{repo}/query            → 查询界面（公开库可访客访问）
+POST /{username}/{repo}/query            → 提交查询（含多轮会话上下文）
+GET  /{username}/{repo}/query/stream     → SSE 流式查询（EventSource，公开库可访客访问）
 POST /{username}/{repo}/query/save       → 保存回答为 Wiki 页面
+GET  /{username}/{repo}/session?key=     → 获取会话历史
+POST /{username}/{repo}/session/clear    → 清空会话
 POST /{username}/{repo}/lint             → 触发维护检查
 POST /{username}/{repo}/lint/apply       → 应用修复建议
-GET  /{username}/{repo}/tasks              → 任务队列看板（实时进度）
+GET  /{username}/{repo}/tasks              → 任务队列看板
 GET  /api/tasks/{task_id}/status           → 任务状态 JSON API
-
-Schema：
-GET  /{username}/{repo}/schema           → 查看 Schema
-POST /{username}/{repo}/schema           → 更新 Schema
+GET  /{username}/{repo}/insights           → 知识缺口分析（基于 query_logs）
+GET  /{username}/{repo}/entity-check       → 实体去重检查
 
 操作历史：
 GET  /{username}/{repo}/log              → 查看操作日志（log.md）

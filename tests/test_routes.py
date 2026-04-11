@@ -670,6 +670,24 @@ def test_admin_audit_log_accessible(auth_client, app):
     assert "审计" in resp.data.decode("utf-8")
 
 
+def test_admin_health_accessible(auth_client, app):
+    with app.app_context():
+        from config import Config
+        Config.ADMIN_USERNAME = "alice"
+    resp = auth_client.get("/admin/health")
+    assert resp.status_code == 200
+    assert "健康" in resp.data.decode("utf-8")
+
+
+def test_admin_query_stats_accessible(auth_client, app):
+    with app.app_context():
+        from config import Config
+        Config.ADMIN_USERNAME = "alice"
+    resp = auth_client.get("/admin/query-stats")
+    assert resp.status_code == 200
+    assert "查询统计" in resp.data.decode("utf-8")
+
+
 # -- Public repo guest access --------------------------------------------------
 
 

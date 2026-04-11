@@ -2196,6 +2196,60 @@ def _register_routes(app: Flask) -> None:
         logs = AuditLog.query.order_by(AuditLog.created_at.desc()).paginate(page=page, per_page=50)
         return render_template("admin/audit.html", logs=logs)
 
+    @admin_bp.route("/health")
+    @login_required
+    def health_detail():
+        _require_admin()
+        import httpx as _httpx
+        checks: dict = {}
+        services = {
+            "qdrant": Config.QDRANT_URL + "/healthz",
+            "embedding": Config.EMBEDDING_API_BASE.rstrip("/") + "/models",
+            "mineru": Config.MINERU_API_URL + "/health",
+        }
+        for name, url in services.items():
+            try:
+                r = _httpx.get(url, timeout=5)
+                checks[name] = {
+                    "status": "ok" if r.status_code < 400 else "error",
+                    "latency_ms": round(r.elapsed.total_seconds() * 1000),
+                }
+            except Exception as exc:
+                checks[name] = {"status": "error", "error": str(exc)[:80]}
+        checks["task_queue"] = {
+            "queued": Task.query.filter_by(status="queued").count(),
+            "running": Task.query.filter_by(status="running").count(),
+            "failed": Task.query.filter_by(status="failed").count(),
+        }
+        return render_template("admin/health.html", checks=checks)
+
+    @admin_bp.route("/query-stats")
+    @login_required
+    def query_stats():
+        _require_admin()
+        from models import QueryLog
+        from sqlalchemy import func
+        total = QueryLog.query.count()
+        by_conf = db.session.query(
+            QueryLog.confidence, func.count(QueryLog.id)
+        ).group_by(QueryLog.confidence).all()
+        by_repo = (
+            db.session.query(Repo.name, func.count(QueryLog.id))
+            .join(QueryLog, QueryLog.repo_id == Repo.id)
+            .group_by(Repo.id)
+            .order_by(func.count(QueryLog.id).desc())
+            .limit(10)
+            .all()
+        )
+        recent_low = (
+            QueryLog.query.filter_by(confidence="low")
+            .order_by(QueryLog.created_at.desc())
+            .limit(20)
+            .all()
+        )
+        return render_template("admin/query_stats.html", total=total,
+                               by_conf=by_conf, by_repo=by_repo, recent_low=recent_low)
+
     app.register_blueprint(admin_bp)
 
 

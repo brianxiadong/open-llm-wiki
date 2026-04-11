@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}服务健康 - 管理后台{% endblock %}
+
+{% block content %}
+<h1>服务健康</h1>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+  <a href="{{ url_for('admin.dashboard') }}" class="action-btn">← 返回概览</a>
+  <a href="{{ url_for('admin.query_stats') }}" class="action-btn">查询统计</a>
+  <a href="{{ url_for('admin.audit_log') }}" class="action-btn">审计日志</a>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem;">
+  {% for name, info in checks.items() %}
+  <article style="padding:1rem;margin:0;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+      <strong style="text-transform:uppercase;font-size:0.88rem;letter-spacing:0.04em;">{{ name }}</strong>
+      {% if info.get('status') == 'ok' %}
+      <span style="background:#10b981;color:#fff;font-size:0.75rem;padding:0.15rem 0.45rem;border-radius:3px;">OK</span>
+      {% elif info.get('status') == 'error' %}
+      <span style="background:var(--error,#ef4444);color:#fff;font-size:0.75rem;padding:0.15rem 0.45rem;border-radius:3px;">ERROR</span>
+      {% else %}
+      <span style="background:var(--pico-muted-color);color:#fff;font-size:0.75rem;padding:0.15rem 0.45rem;border-radius:3px;">—</span>
+      {% endif %}
+    </div>
+    {% if info.get('latency_ms') is not none %}
+    <p style="margin:0;font-size:0.85rem;color:var(--pico-muted-color);">延迟: {{ info.latency_ms }}ms</p>
+    {% endif %}
+    {% if info.get('error') %}
+    <p style="margin:0;font-size:0.82rem;color:var(--error,#ef4444);">{{ info.error }}</p>
+    {% endif %}
+    {% if info.get('queued') is not none %}
+    <div style="font-size:0.85rem;color:var(--pico-muted-color);">
+      <span>排队: {{ info.queued }}</span> &middot;
+      <span>运行中: {{ info.running }}</span> &middot;
+      <span>失败: {{ info.failed }}</span>
+    </div>
+    {% endif %}
+  </article>
+  {% endfor %}
+</div>
+{% endblock %}

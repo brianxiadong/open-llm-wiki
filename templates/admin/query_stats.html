@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}查询统计 - 管理后台{% endblock %}
+
+{% block content %}
+<h1>查询统计</h1>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+  <a href="{{ url_for('admin.dashboard') }}" class="action-btn">← 返回概览</a>
+  <a href="{{ url_for('admin.health_detail') }}" class="action-btn">服务健康</a>
+  <a href="{{ url_for('admin.audit_log') }}" class="action-btn">审计日志</a>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1rem;margin-bottom:1.5rem;">
+  <article style="padding:1rem;margin:0;text-align:center;">
+    <div style="font-size:2rem;font-weight:700;">{{ total }}</div>
+    <div style="color:var(--pico-muted-color);font-size:0.88rem;">查询总数</div>
+  </article>
+  {% for conf, count in by_conf %}
+  <article style="padding:1rem;margin:0;text-align:center;">
+    <div style="font-size:2rem;font-weight:700;">{{ count }}</div>
+    <div style="color:var(--pico-muted-color);font-size:0.88rem;">
+      {{ '高置信度' if conf == 'high' else ('中置信度' if conf == 'medium' else '低置信度') }}
+    </div>
+  </article>
+  {% endfor %}
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;flex-wrap:wrap;">
+  <article>
+    <header><h3>按知识库（Top 10）</h3></header>
+    {% if by_repo %}
+    <table>
+      <thead><tr><th>知识库</th><th>查询次数</th></tr></thead>
+      <tbody>
+        {% for repo_name, count in by_repo %}
+        <tr><td>{{ repo_name }}</td><td>{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--pico-muted-color);">暂无数据</p>
+    {% endif %}
+  </article>
+
+  <article>
+    <header><h3>最近低置信度问题（{{ recent_low|length }} 条）</h3></header>
+    {% if recent_low %}
+    <ul style="font-size:0.88rem;padding-left:1.2rem;margin:0;">
+      {% for q in recent_low %}
+      <li style="margin-bottom:0.3rem;">
+        <span style="color:var(--pico-muted-color);font-size:0.8rem;">{{ q.created_at.strftime('%m-%d') }}</span>
+        {{ q.question[:80] }}{% if q.question|length > 80 %}…{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p style="color:var(--pico-muted-color);">暂无低置信度查询</p>
+    {% endif %}
+  </article>
+</div>
+{% endblock %}
