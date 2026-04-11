@@ -395,18 +395,6 @@
     if (activeTab) activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
-  function switchSession(key, sessions, clickedTab) {
-    if (SESSION_KEY === key) return;
-    SESSION_KEY = key;
-    // 立即更新 active 样式 + 清空聊天区
-    sessionList.querySelectorAll('.chat-session-tab').forEach(function(t) {
-      t.classList.toggle('active', t.dataset.key === key);
-    });
-    if (messages) messages.innerHTML = '';
-    if (welcome) welcome.hidden = true;
-    restoreChatMessages(key);
-  }
-
   function loadSessionList(activateKey) {
     if (!cfg.listSessionsUrl) return;
     fetch(cfg.listSessionsUrl)
@@ -414,17 +402,23 @@
       .then(function(data) {
         var sessions = data.sessions || [];
         var activeKey = activateKey || SESSION_KEY;
-        // 如果没有任何会话且没有指定 key，自动新建
         if (!sessions.length && !activeKey) {
           createNewSession();
           return;
         }
-        // 没有 active key 则用最新的
         if (!activeKey && sessions.length) activeKey = sessions[0].key;
         renderSessionTabs(sessions, activeKey);
         if (activeKey !== SESSION_KEY) {
           SESSION_KEY = activeKey;
-          restoreChatMessages(activeKey);
+          var sess = sessions.find(function(s) { return s.key === activeKey; });
+          if (sess && sess.message_count > 0) {
+            if (messages) messages.innerHTML = '';
+            if (welcome) welcome.hidden = true;
+            restoreChatMessages(activeKey);
+          } else {
+            if (messages) messages.innerHTML = '';
+            if (welcome) welcome.hidden = false;
+          }
         }
       })
       .catch(function() {
@@ -434,7 +428,6 @@
 
   function createNewSession() {
     if (!cfg.newSessionUrl) return;
-    // 立即清空，不等 fetch
     if (messages) messages.innerHTML = '';
     if (welcome) welcome.hidden = false;
     fetch(cfg.newSessionUrl, { method: 'POST', headers: {'Content-Type':'application/json'} })
@@ -442,10 +435,52 @@
       .then(function(data) {
         if (data.ok) {
           SESSION_KEY = data.key;
+          // SESSION_KEY 已更新，loadSessionList 不会重复触发 restoreChatMessages
           loadSessionList(data.key);
         }
       })
       .catch(function() {});
+  }
+
+  function switchSession(key, sessions) {
+    if (SESSION_KEY === key) return;
+    SESSION_KEY = key;
+    sessionList.querySelectorAll('.chat-session-tab').forEach(function(t) {
+      t.classList.toggle('active', t.dataset.key === key);
+    });
+    if (messages) messages.innerHTML = '';
+    var sess = sessions.find(function(s) { return s.key === key; });
+    if (sess && sess.message_count > 0) {
+      if (welcome) welcome.hidden = true;
+      restoreChatMessages(key);
+    } else {
+      if (welcome) welcome.hidden = false;
+    }
+  }
+
+  function restoreChatMessages(key) {
+    if (!cfg.getSessionUrl || !key) return;
+    fetch(cfg.getSessionUrl + '?key=' + encodeURIComponent(key))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var msgs = data.messages || [];
+        if (!msgs.length) {
+          if (welcome) welcome.hidden = false;
+          return;
+        }
+        msgs.forEach(function(m) {
+          if (m.role === 'user') {
+            addUserMessage(m.content, true);
+          } else if (m.role === 'assistant') {
+            var safeHtml = '<p>' + escapeHtml(m.content).replace(/\n/g, '<br>') + '</p>';
+            addAIMessage(safeHtml, [], m.content, [], [], null, null, null, '', true);
+          }
+        });
+        if (messages) messages.scrollTop = messages.scrollHeight;
+      })
+      .catch(function() {
+        if (welcome) welcome.hidden = false;
+      });
   }
 
   function deleteSession(key) {
@@ -473,9 +508,6 @@
 
   function restoreChatMessages(key) {
     if (!cfg.getSessionUrl || !key) return;
-    // 立即清空，防止旧内容残留或 welcome 闪烁
-    if (messages) messages.innerHTML = '';
-    if (welcome) welcome.hidden = true;
     fetch(cfg.getSessionUrl + '?key=' + encodeURIComponent(key))
       .then(function(r) { return r.json(); })
       .then(function(data) {
