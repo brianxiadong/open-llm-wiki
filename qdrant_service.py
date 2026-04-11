@@ -224,6 +224,190 @@ class QdrantService:
         except Exception as e:
             logger.warning("Qdrant delete_page failed filename=%s: %s", filename, e)
 
+    # ── Chunk-level indexing ──────────────────────────────────────────────────
+
+    def _chunk_collection_name(self, repo_id: int) -> str:
+        return f"repo_{repo_id}_chunks"
+
+    @staticmethod
+    def _stable_chunk_point_id(repo_id: int, filename: str, chunk_id: str) -> int:
+        digest = hashlib.md5(f"{repo_id}:{filename}:{chunk_id}".encode()).hexdigest()
+        return int(digest[:16], 16)
+
+    def split_page_into_chunks(self, content: str) -> list[dict]:
+        """Split Markdown content into section chunks (400-800 chars each).
+
+        Returns list of {"chunk_id": str, "heading": str, "chunk_text": str, "position": int}.
+        """
+        import re as _re
+
+        lines = content.split("\n")
+        sections: list[tuple[str, list[str]]] = []
+        current_heading = ""
+        current_lines: list[str] = []
+        for line in lines:
+            m = _re.match(r"^#{1,4}\s+(.+)", line)
+            if m:
+                if current_lines:
+                    sections.append((current_heading, current_lines))
+                current_heading = m.group(1).strip()
+                current_lines = []
+            else:
+                current_lines.append(line)
+        if current_lines:
+            sections.append((current_heading, current_lines))
+
+        chunks: list[dict] = []
+        position = 0
+        pending_heading = ""
+        pending_text = ""
+        last_heading = sections[-1][0] if sections else None
+
+        for heading, body_lines in sections:
+            text = "\n".join(body_lines).strip()
+            if not text:
+                continue
+            combined = pending_text + ("\n" + text if pending_text else text)
+            combined_heading = pending_heading or heading
+            if len(combined) < 400 and heading != last_heading:
+                pending_heading = combined_heading
+                pending_text = combined
+                continue
+            if len(combined) <= 800:
+                chunks.append({"chunk_id": str(position), "heading": combined_heading,
+                               "chunk_text": combined[:800], "position": position})
+                position += 1
+                pending_heading = ""
+                pending_text = ""
+            else:
+                if pending_text:
+                    chunks.append({"chunk_id": str(position), "heading": pending_heading,
+                                   "chunk_text": pending_text[:800], "position": position})
+                    position += 1
+                    pending_heading = ""
+                    pending_text = ""
+                for i in range(0, len(text), 800):
+                    piece = text[i:i + 800]
+                    chunks.append({"chunk_id": str(position), "heading": heading,
+                                   "chunk_text": piece, "position": position})
+                    position += 1
+        if pending_text:
+            chunks.append({"chunk_id": str(position), "heading": pending_heading,
+                           "chunk_text": pending_text[:800], "position": position})
+        return chunks
+
+    def ensure_chunk_collection(self, repo_id: int) -> None:
+        name = self._chunk_collection_name(repo_id)
+        try:
+            if self._qdrant.collection_exists(collection_name=name):
+                return
+            self._qdrant.create_collection(
+                collection_name=name,
+                vectors_config=VectorParams(
+                    size=self._embedding_dimensions,
+                    distance=Distance.COSINE,
+                ),
+            )
+            logger.info("Qdrant created chunk collection name=%s", name)
+        except Exception as e:
+            raise QdrantServiceError(str(e)) from e
+
+    def upsert_page_chunks(
+        self,
+        repo_id: int,
+        filename: str,
+        title: str,
+        page_type: str,
+        content: str,
+    ) -> None:
+        chunks = self.split_page_into_chunks(content)
+        if not chunks:
+            return
+        self.ensure_chunk_collection(repo_id)
+        collection = self._chunk_collection_name(repo_id)
+        points = []
+        for chunk in chunks:
+            try:
+                vector = self._embed(chunk["chunk_text"])
+            except QdrantServiceError:
+                logger.warning("Chunk embed failed filename=%s chunk_id=%s", filename, chunk["chunk_id"])
+                continue
+            point_id = self._stable_chunk_point_id(repo_id, filename, chunk["chunk_id"])
+            points.append(PointStruct(
+                id=point_id,
+                vector=vector,
+                payload={
+                    "repo_id": repo_id,
+                    "filename": filename,
+                    "page_title": title,
+                    "page_type": page_type,
+                    "chunk_id": f"{filename}#{chunk['chunk_id']}",
+                    "heading": chunk["heading"],
+                    "chunk_text": chunk["chunk_text"][:800],
+                    "position": chunk["position"],
+                },
+            ))
+        if points:
+            try:
+                self._qdrant.upsert(collection_name=collection, points=points)
+            except Exception as e:
+                raise QdrantServiceError(str(e)) from e
+
+    def search_chunks(
+        self, repo_id: int, query: str, limit: int = 8
+    ) -> list[dict[str, Any]]:
+        collection = self._chunk_collection_name(repo_id)
+        try:
+            if not self._qdrant.collection_exists(collection_name=collection):
+                return []
+        except Exception:
+            return []
+        try:
+            vector = self._embed(query)
+            results = self._qdrant.search(
+                collection_name=collection,
+                query_vector=vector,
+                limit=limit,
+            )
+        except Exception as e:
+            raise QdrantServiceError(str(e)) from e
+        out = []
+        for r in results:
+            pl = r.payload or {}
+            out.append({
+                "chunk_id": pl.get("chunk_id", ""),
+                "filename": pl.get("filename", ""),
+                "page_title": pl.get("page_title", ""),
+                "page_type": pl.get("page_type", ""),
+                "heading": pl.get("heading", ""),
+                "chunk_text": pl.get("chunk_text", ""),
+                "position": pl.get("position", 0),
+                "score": r.score,
+            })
+        return out
+
+    def delete_page_chunks(self, repo_id: int, filename: str) -> None:
+        collection = self._chunk_collection_name(repo_id)
+        try:
+            if not self._qdrant.collection_exists(collection_name=collection):
+                return
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+            self._qdrant.delete(
+                collection_name=collection,
+                points_selector=Filter(
+                    must=[FieldCondition(key="filename", match=MatchValue(value=filename))]
+                ),
+            )
+        except Exception as e:
+            logger.warning("delete_page_chunks failed filename=%s: %s", filename, e)
+
+    def delete_chunk_collection(self, repo_id: int) -> None:
+        name = self._chunk_collection_name(repo_id)
+        try:
+            self._qdrant.delete_collection(collection_name=name)
+        except Exception as e:
+            logger.warning("delete_chunk_collection failed repo_id=%s: %s", repo_id, e)
+
     def delete_collection(self, repo_id: int) -> None:
         name = self._collection_name(repo_id)
         logger.info("Qdrant delete_collection repo_id=%s name=%s", repo_id, name)
