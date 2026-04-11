@@ -1081,6 +1081,11 @@ def _register_routes(app: Flask) -> None:
                     with open(os.path.join(raw_dir, md_name), "w", encoding="utf-8") as f:
                         f.write(md_content)
                     saved_name = md_name
+                    # 保存原始文件供下载
+                    originals_dir = os.path.join(raw_dir, "originals")
+                    os.makedirs(originals_dir, exist_ok=True)
+                    import shutil as _shutil
+                    _shutil.copy2(temp_path, os.path.join(originals_dir, safe_name))
             except MineruClientError as exc:
                 logger.exception("MinerU parse failed for %s", safe_name)
                 flash(f"文件解析失败: {exc}", "error")
@@ -1135,6 +1140,22 @@ def _register_routes(app: Flask) -> None:
         raw_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
         )
+        # 优先返回原始文件（PDF/Word 等），如果存在的话
+        stem = os.path.splitext(source_id)[0]
+        originals_dir = os.path.join(raw_dir, "originals")
+        original_file = None
+        if os.path.isdir(originals_dir):
+            for fname in os.listdir(originals_dir):
+                if os.path.splitext(fname)[0] == stem:
+                    original_file = os.path.join(originals_dir, fname)
+                    break
+        if original_file and os.path.isfile(original_file):
+            return send_file(
+                original_file,
+                as_attachment=True,
+                download_name=os.path.basename(original_file),
+            )
+        # 没有原始文件则下载 .md 文件
         filepath = os.path.join(raw_dir, source_id)
         if not os.path.isfile(filepath):
             flash("源文件不存在", "error")

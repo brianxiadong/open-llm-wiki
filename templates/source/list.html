@@ -191,7 +191,7 @@
               <i class="lucide-eye" aria-hidden="true"></i>
             </a>
             <a href="{{ url_for('source.download_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
-               class="btn-sm" title="下载原始文件" download>
+               class="btn-sm" title="下载原始文件（PDF/Word 等）" download>
               <i class="lucide-download" aria-hidden="true"></i>
             </a>
             {% if is_owner %}
