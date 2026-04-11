@@ -3,7 +3,7 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from models import db, User, Repo, Task, load_user
+from models import db, User, Repo, Task, load_user, ConversationSession, AuditLog, ApiToken
 
 
 def test_user_create(app):
@@ -159,3 +159,38 @@ def test_query_log_creation(sample_repo, app):
         assert fetched is not None
         assert fetched.confidence == "medium"
         assert fetched.wiki_hit_count == 2
+
+
+def test_conversation_session_creation(sample_repo, app):
+    with app.app_context():
+        u = User.query.filter_by(username="alice").first()
+        s = ConversationSession(
+            repo_id=sample_repo[1]["id"], user_id=u.id,
+            session_key="test-key-1", messages_json="[]"
+        )
+        db.session.add(s)
+        db.session.commit()
+        fetched = ConversationSession.query.filter_by(session_key="test-key-1").first()
+        assert fetched is not None
+        assert fetched.messages_json == "[]"
+
+
+def test_audit_log_creation(app):
+    with app.app_context():
+        log = AuditLog(action="login", username="alice", ip="127.0.0.1")
+        db.session.add(log)
+        db.session.commit()
+        fetched = AuditLog.query.filter_by(action="login").first()
+        assert fetched is not None
+        assert fetched.username == "alice"
+
+
+def test_api_token_creation(sample_repo, app):
+    with app.app_context():
+        u = User.query.filter_by(username="alice").first()
+        t = ApiToken(user_id=u.id, name="ci-token", token_hash="abc123hash")
+        db.session.add(t)
+        db.session.commit()
+        fetched = ApiToken.query.filter_by(name="ci-token").first()
+        assert fetched is not None
+        assert fetched.is_active is True
