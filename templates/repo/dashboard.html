@@ -30,6 +30,11 @@
         <li><a href="{{ url_for('wiki.graph', username=username, repo_slug=repo.slug) }}"><i class="lucide-git-branch"></i> 关系图谱</a></li>
         <li><a href="{{ url_for('ops.lint', username=username, repo_slug=repo.slug) }}"><i class="lucide-shield-check"></i> 维护检查</a></li>
         <li><a href="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}"><i class="lucide-settings"></i> 设置</a></li>
+        <li>
+          <a href="{{ url_for('wiki.export_zip', username=username, repo_slug=repo.slug) }}">
+            <i class="lucide-download" aria-hidden="true"></i> 导出 Wiki (ZIP)
+          </a>
+        </li>
       </ul>
     </details>
     {% endif %}

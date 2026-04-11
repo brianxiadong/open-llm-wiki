@@ -339,16 +339,20 @@ Wiki 浏览：
 GET  /{username}/{repo}/wiki             → Wiki 页面列表
 GET  /{username}/{repo}/wiki/{page}      → 查看 Wiki 页面
 GET  /{username}/{repo}/wiki/search      → Wiki 全文关键词搜索
+GET  /{username}/{repo}/wiki/export.zip  → 导出 Wiki 为 ZIP
 GET  /{username}/{repo}/graph            → 链接关系图
 
 原始文档：
 GET  /{username}/{repo}/sources          → 原始文档列表
 GET  /{username}/{repo}/sources/{file}   → 查看原始文档
 POST /{username}/{repo}/sources/upload   → 上传文档
+POST /{username}/{repo}/sources/batch-delete → 批量删除文件
+POST /{username}/{repo}/sources/batch-ingest → 批量摄入未处理文件
 
 核心操作：
 POST /{username}/{repo}/ingest/{file}    → 触发摄入
 GET  /{username}/{repo}/ingest/{task_id} → 摄入进度（SSE）
+POST /api/tasks/{task_id}/retry          → 重试失败任务
 GET  /{username}/{repo}/query            → 查询界面
 POST /{username}/{repo}/query            → 提交查询（完整响应 / _rendered_answer 仅渲染模式）
 GET  /{username}/{repo}/query/stream     → SSE 流式查询（EventSource）

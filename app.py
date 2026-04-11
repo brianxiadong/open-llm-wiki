@@ -832,6 +832,32 @@ def _register_routes(app: Flask) -> None:
             is_owner=_is_owner(repo),
         )
 
+    @wiki_bp.route("/<username>/<repo_slug>/wiki/export.zip")
+    @login_required
+    def export_zip(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        import io
+        import zipfile as _zipfile
+        wiki_dir = os.path.join(
+            get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
+        )
+        buf = io.BytesIO()
+        with _zipfile.ZipFile(buf, "w", _zipfile.ZIP_DEFLATED) as zf:
+            if os.path.isdir(wiki_dir):
+                for fname in sorted(os.listdir(wiki_dir)):
+                    if fname.endswith(".md"):
+                        fpath = os.path.join(wiki_dir, fname)
+                        zf.write(fpath, fname)
+        buf.seek(0)
+        return Response(
+            buf.read(),
+            mimetype="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{repo_slug}-wiki.zip"',
+            },
+        )
+
     app.register_blueprint(wiki_bp)
 
     # ── Source ────────────────────────────────────────────────────────
@@ -1091,6 +1117,45 @@ def _register_routes(app: Flask) -> None:
             url_for("source.list_sources", username=username, repo_slug=repo_slug)
         )
 
+    @source_bp.route("/<username>/<repo_slug>/sources/batch-ingest", methods=["POST"])
+    @login_required
+    def batch_ingest(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        raw_dir = os.path.join(
+            get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
+        )
+        selected = request.form.getlist("files")
+        ingested_files = {
+            t.input_data
+            for t in Task.query.filter_by(repo_id=repo.id, type="ingest", status="done").all()
+            if t.input_data
+        }
+        queued_files = {
+            t.input_data
+            for t in Task.query.filter(
+                Task.repo_id == repo.id,
+                Task.type == "ingest",
+                Task.status.in_(["queued", "running"]),
+            ).all()
+            if t.input_data
+        }
+        all_sources = list_raw_sources(raw_dir)
+        queued_count = 0
+        for src in all_sources:
+            fn = src["filename"]
+            if selected and fn not in selected:
+                continue
+            if fn in ingested_files or fn in queued_files:
+                continue
+            task = Task(repo_id=repo.id, type="ingest", status="queued", input_data=fn)
+            db.session.add(task)
+            queued_count += 1
+        if queued_count:
+            db.session.commit()
+        flash(f"已排队 {queued_count} 个摄入任务", "success" if queued_count else "info")
+        return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
+
     @source_bp.route("/<username>/<repo_slug>/ingest/<source_id>", methods=["POST"])
     @login_required
     def ingest(username, repo_slug, source_id):
@@ -1213,6 +1278,25 @@ def _register_routes(app: Flask) -> None:
             progress_msg=task.progress_msg,
             input_data=task.input_data,
         )
+
+    @ops_bp.route("/api/tasks/<int:task_id>/retry", methods=["POST"])
+    @login_required
+    def retry_task(task_id):
+        task = Task.query.get_or_404(task_id)
+        repo = db.session.get(Repo, task.repo_id)
+        if repo is None:
+            abort(404)
+        if current_user.id != repo.user_id:
+            abort(403)
+        if task.status != "failed":
+            return jsonify(error="只能重试失败的任务"), 400
+        task.status = "queued"
+        task.progress = 0
+        task.progress_msg = ""
+        task.started_at = None
+        task.finished_at = None
+        db.session.commit()
+        return jsonify(ok=True, task_id=task.id)
 
     @ops_bp.route(
         "/<username>/<repo_slug>/query", methods=["GET"], endpoint="query"

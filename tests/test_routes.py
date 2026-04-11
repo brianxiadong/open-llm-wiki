@@ -369,3 +369,62 @@ def test_wiki_search_no_results(sample_repo):
     slug = repo_info["slug"]
     resp = client.get(f"/alice/{slug}/wiki/search?q=zzznomatchxxx")
     assert resp.status_code == 200
+
+
+# -- Batch ingest ----------------------------------------------------------
+
+def test_batch_ingest_empty(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(f"/alice/{slug}/sources/batch-ingest",
+                       data={}, follow_redirects=True)
+    assert resp.status_code == 200
+
+
+# -- Retry task ------------------------------------------------------------
+
+def test_retry_task_not_failed(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from models import Task, db
+        task = Task(repo_id=repo_info["id"], type="ingest", status="queued", input_data="test.md")
+        db.session.add(task)
+        db.session.commit()
+        tid = task.id
+    resp = client.post(f"/api/tasks/{tid}/retry")
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "error" in data
+
+
+def test_retry_task_failed(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from models import Task, db
+        task = Task(repo_id=repo_info["id"], type="ingest", status="failed",
+                    input_data="fail.md", progress_msg="error")
+        db.session.add(task)
+        db.session.commit()
+        tid = task.id
+    resp = client.post(f"/api/tasks/{tid}/retry")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data.get("ok") is True
+    with app.app_context():
+        from models import Task
+        t = Task.query.get(tid)
+        assert t.status == "queued"
+        assert t.progress == 0
+
+
+# -- Export ZIP ------------------------------------------------------------
+
+def test_export_wiki_zip(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.get(f"/alice/{slug}/wiki/export.zip")
+    assert resp.status_code == 200
+    assert resp.content_type == "application/zip"
+    assert b"PK" in resp.data  # ZIP magic bytes

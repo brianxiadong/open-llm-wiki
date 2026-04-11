@@ -75,6 +75,10 @@
       <i class="lucide-trash-2" aria-hidden="true"></i>
       批量删除
     </button>
+    <button type="button" id="batch-ingest-btn" class="btn-sm btn-sm-primary">
+      <i class="lucide-zap" aria-hidden="true"></i>
+      批量摄入未处理
+    </button>
     {% endif %}
   </div>
   <div class="source-toolbar-right">
@@ -102,7 +106,8 @@
 
 {# ── 文件列表（不用 form 包裹，避免嵌套 form 问题） ── #}
 <div id="batch-data" data-action="{{ url_for('source.batch_delete', username=username, repo_slug=repo.slug) }}"
-     data-confirm="确定要删除选中的文件吗？此操作不可撤销。">
+     data-confirm="确定要删除选中的文件吗？此操作不可撤销。"
+     data-ingest-action="{{ url_for('source.batch_ingest', username=username, repo_slug=repo.slug) }}">
 </div>
 <article style="padding:0;">
   <div style="overflow-x:auto;">
@@ -176,6 +181,7 @@
             {% endif %}
             <button type="button" class="btn-sm rename-btn" title="重命名"
                     data-id="{{ src.id }}"
+                    data-filename="{{ src.filename }}"
                     data-url="{{ url_for('source.rename_source', username=username, repo_slug=repo.slug, source_id=src.id) }}">
               <i class="lucide-pencil" aria-hidden="true"></i>
             </button>
@@ -303,7 +309,7 @@
           } else {
             var errMsg = '上传失败';
             try { errMsg = JSON.parse(xhr.responseText).error || errMsg; } catch(ex) {}
-            alert(errMsg);
+            if (window.showToast) showToast(errMsg, 'error'); else alert(errMsg);
             if (submitBtn) { submitBtn.innerHTML = origHtml; submitBtn.disabled = false; }
             fileInput.value = '';
             fileSelected.style.display = 'none';
@@ -311,7 +317,7 @@
           }
         };
         xhr.onerror = function() {
-          alert('网络错误，上传失败');
+          if (window.showToast) showToast('网络错误，上传失败', 'error'); else alert('网络错误，上传失败');
           if (submitBtn) { submitBtn.innerHTML = origHtml; submitBtn.disabled = false; }
         };
         xhr.send(fd);
@@ -347,6 +353,23 @@
       var form = document.createElement('form');
       form.method = 'POST';
       form.action = meta.dataset.action;
+      document.querySelectorAll('.source-cb:checked').forEach(function(cb) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'files'; inp.value = cb.value;
+        form.appendChild(inp);
+      });
+      document.body.appendChild(form);
+      form.submit();
+    });
+  }
+
+  var batchIngestBtn = document.getElementById('batch-ingest-btn');
+  if (batchIngestBtn) {
+    batchIngestBtn.addEventListener('click', function() {
+      var meta = document.getElementById('batch-data');
+      var form = document.createElement('form');
+      form.method = 'POST';
+      form.action = meta.dataset.ingestAction;
       document.querySelectorAll('.source-cb:checked').forEach(function(cb) {
         var inp = document.createElement('input');
         inp.type = 'hidden'; inp.name = 'files'; inp.value = cb.value;
@@ -412,7 +435,7 @@
       var form = document.getElementById('rename-form');
       var input = document.getElementById('rename-input');
       form.action = btn.dataset.url;
-      input.value = btn.dataset.id;
+      input.value = btn.dataset.filename || btn.dataset.id;
       input.select();
       dialog.showModal();
     });

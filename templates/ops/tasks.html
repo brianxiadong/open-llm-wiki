@@ -58,6 +58,12 @@
             <span class="badge badge-error">
               <i class="lucide-x" aria-hidden="true"></i> 失败
             </span>
+            {% if is_owner %}
+            <button class="outline contrast retry-task-btn" style="font-size:0.8rem;padding:0.2rem 0.6rem;"
+                    data-task-id="{{ t.id }}">
+              <i data-lucide="refresh-cw" aria-hidden="true"></i> 重试
+            </button>
+            {% endif %}
             {% else %}
             <span class="badge badge-muted">{{ t.status }}</span>
             {% endif %}
@@ -151,5 +157,18 @@
     });
   }, 1000);
 })();
+
+document.querySelectorAll('.retry-task-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var tid = btn.dataset.taskId;
+    fetch('/api/tasks/' + tid + '/retry', {method: 'POST'})
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.ok) { window.location.reload(); }
+        else { alert(d.error || '重试失败'); }
+      })
+      .catch(function() { alert('网络错误'); });
+  });
+});
 </script>
 {% endblock %}
