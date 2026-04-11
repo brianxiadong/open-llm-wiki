@@ -782,6 +782,56 @@ def _register_routes(app: Flask) -> None:
             url_for("repo.dashboard", username=username, repo_slug=repo_slug)
         )
 
+    @wiki_bp.route("/<username>/<repo_slug>/wiki/search")
+    def search(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        query_text = request.args.get("q", "").strip()
+        results = []
+        if query_text:
+            wiki_dir = os.path.join(
+                get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
+            )
+            if os.path.isdir(wiki_dir):
+                query_lower = query_text.lower()
+                for filename in sorted(os.listdir(wiki_dir)):
+                    if not filename.endswith(".md"):
+                        continue
+                    filepath = os.path.join(wiki_dir, filename)
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            content = f.read()
+                    except OSError:
+                        continue
+                    content_lower = content.lower()
+                    if query_lower not in content_lower:
+                        continue
+                    fm, _ = render_markdown(content)
+                    idx = content_lower.find(query_lower)
+                    start = max(0, idx - 100)
+                    end = min(len(content), idx + len(query_text) + 100)
+                    snippet = content[start:end].replace("\n", " ")
+                    if start > 0:
+                        snippet = "…" + snippet
+                    if end < len(content):
+                        snippet += "…"
+                    results.append({
+                        "slug": filename.replace(".md", ""),
+                        "title": fm.get("title", filename.replace(".md", "")),
+                        "type": fm.get("type", "unknown"),
+                        "snippet": snippet,
+                        "match_count": content_lower.count(query_lower),
+                    })
+            results.sort(key=lambda r: r["match_count"], reverse=True)
+
+        return render_template(
+            "wiki/search.html",
+            username=username,
+            repo=repo,
+            query=query_text,
+            results=results,
+            is_owner=_is_owner(repo),
+        )
+
     app.register_blueprint(wiki_bp)
 
     # ── Source ────────────────────────────────────────────────────────

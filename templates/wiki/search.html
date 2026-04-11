@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}搜索「{{ query }}」- {{ repo.name }} - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li>Wiki 搜索</li>
+  </ul>
+</nav>
+
+<div class="wiki-search-container">
+  <h2>Wiki 搜索</h2>
+
+  <form method="GET" class="wiki-search-form" role="search">
+    <div class="search-input-row">
+      <input type="search" name="q" value="{{ query }}" placeholder="输入关键词…"
+             autofocus autocomplete="off" aria-label="搜索关键词">
+      <button type="submit">
+        <i data-lucide="search" aria-hidden="true"></i> 搜索
+      </button>
+    </div>
+  </form>
+
+  {% if query %}
+  <div class="search-results-header">
+    {% if results %}
+    找到 <strong>{{ results|length }}</strong> 个页面包含「{{ query }}」
+    {% else %}
+    没有找到包含「{{ query }}」的页面
+    {% endif %}
+  </div>
+
+  {% if results %}
+  <ul class="search-results-list">
+    {% for r in results %}
+    <li class="search-result-item">
+      <div class="search-result-title">
+        <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=r.slug) }}">
+          {{ r.title }}
+        </a>
+        <span class="badge badge-{{ r.type }}">{{ r.type }}</span>
+        <span class="search-match-count">{{ r.match_count }} 处匹配</span>
+      </div>
+      <div class="search-result-snippet">{{ r.snippet }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

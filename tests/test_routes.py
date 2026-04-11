@@ -348,3 +348,24 @@ def test_query_api_render_only(sample_repo):
     data = resp.get_json()
     assert "<h1" in data["html"]
 
+
+def test_wiki_search_no_query(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.get(f"/alice/{slug}/wiki/search")
+    assert resp.status_code == 200
+
+
+def test_wiki_search_with_query(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.get(f"/alice/{slug}/wiki/search?q=概览")
+    assert resp.status_code == 200
+    assert "概览".encode() in resp.data
+
+
+def test_wiki_search_no_results(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.get(f"/alice/{slug}/wiki/search?q=zzznomatchxxx")
+    assert resp.status_code == 200

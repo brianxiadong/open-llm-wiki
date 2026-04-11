@@ -166,6 +166,11 @@ article header, article footer { padding: 0; margin: 0; background: none; border
   font-size: 0.82rem; color: var(--text-muted);
 }
 .repo-stat i { font-size: 0.9rem; }
+.repo-stat-active {
+  color: var(--brand); font-weight: 600;
+  animation: pulse-badge 1.5s infinite;
+}
+@keyframes pulse-badge { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 .repo-updated { font-size: 0.8rem; color: var(--text-muted); }
 
 /* ── Dashboard ───────────────────────────────────────────── */
@@ -555,3 +560,18 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
   .stat-pills { justify-content: center; }
   .page-header { flex-direction: column; align-items: flex-start; }
 }
+
+/* Wiki search */
+.wiki-search-container { max-width: 800px; margin: 0 auto; }
+.wiki-search-form { margin-bottom: 1.5rem; }
+.search-input-row { display: flex; gap: 0.5rem; }
+.search-input-row input[type="search"] { flex: 1; }
+.search-results-header { color: var(--pico-muted-color); margin-bottom: 1rem; font-size: 0.9rem; }
+.search-results-list { list-style: none; padding: 0; }
+.search-result-item { padding: 1rem 0; border-bottom: 1px solid var(--pico-muted-border-color); }
+.search-result-item:last-child { border-bottom: none; }
+.search-result-title { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
+.search-result-title a { font-weight: 600; }
+.search-match-count { font-size: 0.8rem; color: var(--pico-muted-color); margin-left: auto; }
+.search-result-snippet { font-size: 0.88rem; color: var(--pico-muted-color); line-height: 1.5; }
+

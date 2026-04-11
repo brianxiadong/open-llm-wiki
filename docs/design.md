@@ -338,6 +338,7 @@ GET  /{username}/{repo}/settings         → 仓库设置
 Wiki 浏览：
 GET  /{username}/{repo}/wiki             → Wiki 页面列表
 GET  /{username}/{repo}/wiki/{page}      → 查看 Wiki 页面
+GET  /{username}/{repo}/wiki/search      → Wiki 全文关键词搜索
 GET  /{username}/{repo}/graph            → 链接关系图
 
 原始文档：
