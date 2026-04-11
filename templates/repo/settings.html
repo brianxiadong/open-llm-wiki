@@ -57,6 +57,22 @@
   </form>
 </article>
 
+<article>
+  <header><h3>导入 Wiki（ZIP）</h3></header>
+  <p style="color:var(--pico-muted-color);font-size:0.9rem;">从导出的 ZIP 文件恢复或迁移知识库。ZIP 中需包含 <code>wiki/</code> 目录。</p>
+  <form method="POST" enctype="multipart/form-data"
+        action="{{ url_for('repo.import_zip', username=username, repo_slug=repo.slug) }}">
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+      <input type="file" name="file" accept=".zip" required style="flex:1;min-width:200px;">
+      <select name="mode" style="width:auto;">
+        <option value="merge">合并（保留现有页面）</option>
+        <option value="replace">替换（清空后导入）</option>
+      </select>
+      <button type="submit" class="action-btn action-btn-primary">导入</button>
+    </div>
+  </form>
+</article>
+
 <article class="danger-zone">
   <header><h3>删除知识库</h3></header>
   <p>删除后，该知识库下的所有页面、来源文件与向量数据将被永久移除，且<strong>无法恢复</strong>。请谨慎操作。</p>

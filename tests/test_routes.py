@@ -705,6 +705,33 @@ def test_private_repo_query_no_login_returns_401(app, sample_repo):
     assert resp.status_code == 401
 
 
+# -- Import ZIP ----------------------------------------------------------------
+
+
+def test_import_zip_route(sample_repo, app):
+    import io
+    import zipfile
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("wiki/test-import-page.md", "---\ntitle: Test Import\ntype: concept\n---\n\n# Test Import\n")
+    buf.seek(0)
+    resp = client.post(
+        f"/alice/{slug}/import.zip",
+        data={"file": (buf, "export.zip"), "mode": "merge"},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    import os
+    from config import Config
+    from utils import get_repo_path
+    with app.app_context():
+        base = get_repo_path(Config.DATA_DIR, "alice", slug)
+        assert os.path.isfile(os.path.join(base, "wiki", "test-import-page.md"))
+
+
 # -- Conversation sessions -----------------------------------------------------
 
 

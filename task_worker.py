@@ -127,6 +127,8 @@ class TaskWorker:
             try:
                 if task.type == "ingest":
                     self._run_ingest(task, repo, owner)
+                elif task.type == "rebuild_index":
+                    self._run_rebuild_index(task, repo, owner)
                 else:
                     task.status = "failed"
                     task.progress_msg = f"Unknown task type: {task.type}"
@@ -174,3 +176,48 @@ class TaskWorker:
         db.session.commit()
 
         logger.info("Task %d completed: %s", task.id, task.progress_msg)
+
+    def _run_rebuild_index(self, task, repo, owner) -> None:
+        """重建 Qdrant page + chunk 索引，用于 import_zip 后回填。"""
+        from models import db
+        from utils import list_wiki_pages, get_repo_path
+        from config import Config
+        import os
+
+        base = get_repo_path(Config.DATA_DIR, owner.username, repo.slug)
+        wiki_dir = os.path.join(base, "wiki")
+
+        if not os.path.isdir(wiki_dir):
+            task.status = "done"
+            task.progress_msg = "wiki dir not found"
+            task.finished_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            db.session.commit()
+            return
+
+        pages = list_wiki_pages(wiki_dir)
+        rebuilt = 0
+        qdrant = self._app.qdrant
+        for page in pages:
+            fpath = os.path.join(wiki_dir, page["filename"])
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if qdrant:
+                    qdrant.upsert_page(
+                        repo_id=repo.id, filename=page["filename"],
+                        title=page["title"], page_type=page["type"], content=content,
+                    )
+                    qdrant.upsert_page_chunks(
+                        repo_id=repo.id, filename=page["filename"],
+                        title=page["title"], page_type=page["type"], content=content,
+                    )
+                rebuilt += 1
+            except Exception as exc:
+                logger.warning("rebuild_index failed for %s: %s", page["filename"], exc)
+
+        task.status = "done"
+        task.progress_msg = f"Rebuilt index for {rebuilt}/{len(pages)} pages"
+        from datetime import datetime, timezone
+        task.finished_at = datetime.now(timezone.utc)
+        db.session.commit()
+        logger.info("Task %d rebuild_index done: %d/%d", task.id, rebuilt, len(pages))

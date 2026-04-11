@@ -776,6 +776,78 @@ def _register_routes(app: Flask) -> None:
             profile_user=user,
         )
 
+    @repo_bp.route("/<username>/<repo_slug>/import.zip", methods=["POST"])
+    @login_required
+    def import_zip(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        f = request.files.get("file")
+        if not f or not f.filename.endswith(".zip"):
+            flash("请上传 .zip 文件", "error")
+            return redirect(url_for("repo.settings", username=username, repo_slug=repo_slug))
+
+        import zipfile
+        import uuid as _uuid
+        mode = request.form.get("mode", "merge")
+        base = get_repo_path(Config.DATA_DIR, username, repo_slug)
+        tmp = os.path.join(base, f"temp_import_{_uuid.uuid4().hex[:8]}")
+        os.makedirs(tmp, exist_ok=True)
+        try:
+            zip_path = os.path.join(tmp, "upload.zip")
+            f.save(zip_path)
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(tmp)
+            os.remove(zip_path)
+
+            wiki_src = os.path.join(tmp, "wiki")
+            raw_src = os.path.join(tmp, "raw")
+            if not os.path.isdir(wiki_src):
+                for sub in os.listdir(tmp):
+                    candidate = os.path.join(tmp, sub, "wiki")
+                    if os.path.isdir(candidate):
+                        wiki_src = candidate
+                        raw_src = os.path.join(tmp, sub, "raw")
+                        break
+
+            if not os.path.isdir(wiki_src):
+                flash("ZIP 中未找到 wiki/ 目录", "error")
+                return redirect(url_for("repo.settings", username=username, repo_slug=repo_slug))
+
+            wiki_dst = os.path.join(base, "wiki")
+            raw_dst = os.path.join(base, "raw")
+            os.makedirs(wiki_dst, exist_ok=True)
+            os.makedirs(raw_dst, exist_ok=True)
+
+            if mode == "replace":
+                for fn in os.listdir(wiki_dst):
+                    fp = os.path.join(wiki_dst, fn)
+                    if os.path.isfile(fp):
+                        os.remove(fp)
+
+            imported_wiki = 0
+            for fn in os.listdir(wiki_src):
+                if fn.endswith(".md"):
+                    shutil.copy2(os.path.join(wiki_src, fn), os.path.join(wiki_dst, fn))
+                    imported_wiki += 1
+            if os.path.isdir(raw_src):
+                for fn in os.listdir(raw_src):
+                    src_fp = os.path.join(raw_src, fn)
+                    if os.path.isfile(src_fp):
+                        shutil.copy2(src_fp, os.path.join(raw_dst, fn))
+
+            task = Task(repo_id=repo.id, type="rebuild_index", status="queued", input_data="import_zip")
+            db.session.add(task)
+            repo.page_count = len(list_wiki_pages(wiki_dst))
+            db.session.commit()
+            _audit("import_zip", "repo", repo.id, f"mode={mode} pages={imported_wiki}")
+            flash(f"导入完成，共 {imported_wiki} 个 Wiki 页面。索引重建已加入队列。", "success")
+        except Exception as exc:
+            logger.exception("import_zip failed")
+            flash(f"导入失败：{exc}", "error")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        return redirect(url_for("repo.dashboard", username=username, repo_slug=repo_slug))
+
     app.register_blueprint(repo_bp)
 
     # ── Wiki ──────────────────────────────────────────────────────────
