@@ -5,30 +5,45 @@
 {% block content %}
 <div class="auth-container">
   <article>
-    <header>
-      <h2>注册</h2>
-    </header>
+    <div class="auth-brand">
+      <i class="lucide-user-plus" aria-hidden="true"></i>
+      <h2>创建账号</h2>
+      <p>注册 Open LLM Wiki，开始建立与管理你的知识库</p>
+    </div>
+
     <form method="POST" action="{{ url_for('auth.register') }}">
       {% if csrf_token is defined %}
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       {% endif %}
-      <label for="username">用户名</label>
-      <input type="text" id="username" name="username" placeholder="字母、数字和下划线" required autofocus>
 
-      <label for="display_name">显示名称</label>
-      <input type="text" id="display_name" name="display_name" placeholder="用于页面展示的名称">
+      <label for="username">
+        <i class="lucide-user" style="font-size: 0.9rem" aria-hidden="true"></i>
+        用户名
+      </label>
+      <input type="text" id="username" name="username" placeholder="字母、数字和下划线" required autofocus autocomplete="username" pattern="[a-zA-Z0-9_]+" title="仅支持字母、数字与下划线">
 
-      <label for="password">密码</label>
-      <input type="password" id="password" name="password" placeholder="至少 8 位字符" required minlength="8">
+      <label for="display_name">
+        <i class="lucide-id-card" style="font-size: 0.9rem" aria-hidden="true"></i>
+        显示名称
+      </label>
+      <input type="text" id="display_name" name="display_name" placeholder="用于界面展示的名称（可选）" autocomplete="nickname">
 
-      <label for="confirm_password">确认密码</label>
-      <input type="password" id="confirm_password" name="confirm_password" placeholder="再次输入密码" required minlength="8">
+      <label for="password">
+        <i class="lucide-lock" style="font-size: 0.9rem" aria-hidden="true"></i>
+        密码
+      </label>
+      <input type="password" id="password" name="password" placeholder="至少 8 位字符" required minlength="8" autocomplete="new-password">
 
-      <button type="submit">注册</button>
+      <label for="confirm_password">
+        <i class="lucide-lock" style="font-size: 0.9rem" aria-hidden="true"></i>
+        确认密码
+      </label>
+      <input type="password" id="confirm_password" name="confirm_password" placeholder="请再次输入密码" required minlength="8" autocomplete="new-password">
+
+      <button type="submit" style="width: 100%; margin-top: 0.25rem">注册</button>
     </form>
-    <footer>
-      <p class="auth-footer">已有账号？<a href="{{ url_for('auth.login') }}">去登录</a></p>
-    </footer>
+
+    <p class="auth-footer">已有账号？<a href="{{ url_for('auth.login') }}">去登录</a></p>
   </article>
 </div>
 {% endblock %}

@@ -1,4 +1,4 @@
-.PHONY: init dev prod migrate check test lint format clean deploy
+.PHONY: init dev prod migrate check test test-e2e inspect lint format clean deploy
 
 init:
 	python3 -m venv .venv
@@ -19,7 +19,16 @@ check:
 	.venv/bin/python manage.py check
 
 test:
-	.venv/bin/pytest tests/ -v
+	.venv/bin/pytest tests/ -v --ignore=tests/test_e2e.py
+
+test-e2e:
+	bash scripts/ab-e2e-test.sh
+
+test-e2e-local:
+	bash scripts/ab-e2e-test.sh http://localhost:5000
+
+inspect:
+	bash scripts/ab-inspect.sh
 
 lint:
 	.venv/bin/ruff check .

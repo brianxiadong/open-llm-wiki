@@ -3,8 +3,8 @@
 {% block title %}{{ page.title }} - {{ repo.name }} - Open LLM Wiki{% endblock %}
 
 {% block content %}
-<nav aria-label="breadcrumb">
-  <ul>
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
     <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
     <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">Wiki</a></li>
     <li>{{ page.title }}</li>
@@ -12,20 +12,25 @@
 </nav>
 
 <div class="wiki-page-layout">
-  <article class="wiki-page-main">
+  <article class="wiki-page-main wiki-content">
     <header class="page-meta-bar">
       <span class="badge badge-{{ page.type }}">{{ page.type_label or page.type }}</span>
-      <small>创建于 {{ page.created_at.strftime('%Y-%m-%d') if page.created_at }}</small>
-      <small>更新于 {{ page.updated_at.strftime('%Y-%m-%d') if page.updated_at }}</small>
+      <span class="page-meta-item">
+        <i class="lucide-calendar" aria-hidden="true"></i>
+        创建于 {{ page.created_at.strftime('%Y-%m-%d') if page.created_at else '—' }}
+      </span>
+      <span class="page-meta-item">
+        <i class="lucide-clock" aria-hidden="true"></i>
+        更新于 {{ page.updated_at.strftime('%Y-%m-%d') if page.updated_at else '—' }}
+      </span>
       {% if page.sources %}
-      <div class="page-sources">
-        <small>来源：</small>
+      <span class="page-meta-item">
+        <i class="lucide-link" aria-hidden="true"></i>
+        <span>来源：</span>
         {% for src in page.sources %}
-        <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}">
-          <small>{{ src.filename }}</small>
-        </a>
+        <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}">{{ src.filename }}</a>{% if not loop.last %}、{% endif %}
         {% endfor %}
-      </div>
+      </span>
       {% endif %}
     </header>
 
@@ -34,8 +39,11 @@
     </div>
   </article>
 
-  <aside class="wiki-page-sidebar">
-    <h4>反向链接</h4>
+  <aside class="wiki-page-sidebar" aria-labelledby="backlinks-heading">
+    <h4 id="backlinks-heading" class="sidebar-heading">
+      <i class="lucide-arrow-left" aria-hidden="true"></i>
+      反向链接
+    </h4>
     {% if backlinks %}
     <ul class="backlinks-list">
       {% for link in backlinks %}
@@ -47,7 +55,7 @@
       {% endfor %}
     </ul>
     {% else %}
-    <p><small class="muted">暂无其他页面链接到此页面</small></p>
+    <p class="muted" style="margin:0;font-size:0.88rem;">暂无其他页面链接到此页面</p>
     {% endif %}
   </aside>
 </div>

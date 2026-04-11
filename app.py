@@ -28,6 +28,7 @@ from llm_client import LLMClient
 from mineru_client import MineruClient
 from models import Repo, Task, User, db, login_manager
 from qdrant_service import QdrantService
+from task_worker import TaskWorker
 from utils import (
     DEFAULT_SCHEMA_MD,
     ensure_repo_dirs,
@@ -43,8 +44,8 @@ from wiki_engine import WikiEngine
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_EXTENSIONS = {"md", "txt", "pdf", "docx", "pptx", "png", "jpg", "jpeg"}
-MINERU_EXTENSIONS = {"pdf", "docx", "pptx", "png", "jpg", "jpeg"}
+ALLOWED_EXTENSIONS = {"md", "txt", "pdf", "doc", "docx", "pptx", "png", "jpg", "jpeg"}
+MINERU_EXTENSIONS = {"pdf", "doc", "docx", "pptx", "png", "jpg", "jpeg"}
 TYPE_LABELS = {
     "concept": "概念",
     "guide": "指南",
@@ -90,15 +91,29 @@ def _is_owner(repo: Repo) -> bool:
 def _enrich_sources(raw_dir: str, repo: Repo) -> list[dict]:
     sources = list_raw_sources(raw_dir)
     ingested_files: set[str] = set()
-    for t in Task.query.filter_by(repo_id=repo.id, type="ingest", status="done").all():
+    active_tasks: dict[str, dict] = {}
+    for t in Task.query.filter_by(repo_id=repo.id, type="ingest").all():
         if t.input_data:
-            ingested_files.add(t.input_data)
+            if t.status == "done":
+                ingested_files.add(t.input_data)
+            elif t.status in ("queued", "running"):
+                active_tasks[t.input_data] = {
+                    "status": t.status,
+                    "progress": t.progress or 0,
+                    "progress_msg": t.progress_msg or "",
+                    "task_id": t.id,
+                }
 
     for s in sources:
         s["id"] = s["filename"]
         kb = s["size_kb"]
         s["size_display"] = f"{kb:.1f} KB" if kb < 1024 else f"{kb / 1024:.1f} MB"
         s["ingested"] = s["filename"] in ingested_files
+        task_info = active_tasks.get(s["filename"], {})
+        s["task_status"] = task_info.get("status", "")
+        s["task_progress"] = task_info.get("progress", 0)
+        s["task_progress_msg"] = task_info.get("progress_msg", "")
+        s["task_id"] = task_info.get("task_id", 0)
         filepath = os.path.join(raw_dir, s["filename"])
         try:
             mtime = os.path.getmtime(filepath)
@@ -120,6 +135,45 @@ def _sync_repo_counts(repo: Repo, username: str) -> None:
     repo.source_count = len(list_raw_sources(os.path.join(base, "raw")))
     repo.page_count = len(list_wiki_pages(os.path.join(base, "wiki")))
     db.session.commit()
+
+
+def _purge_source_wiki(app, repo, username: str, source_filename: str) -> int:
+    """Delete wiki pages derived from source_filename and their Qdrant vectors.
+
+    Returns the number of wiki pages removed.
+    """
+    from utils import render_markdown
+    base = get_repo_path(Config.DATA_DIR, username, repo.slug)
+    wiki_dir = os.path.join(base, "wiki")
+    if not os.path.isdir(wiki_dir):
+        return 0
+
+    removed = 0
+    stem = os.path.splitext(source_filename)[0].lower()
+    for fname in os.listdir(wiki_dir):
+        if not fname.endswith(".md"):
+            continue
+        fpath = os.path.join(wiki_dir, fname)
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                content = f.read()
+            fm, _ = render_markdown(content)
+            page_source = fm.get("source", "")
+            # Match by source frontmatter field or filename prefix
+            if (page_source and (
+                    page_source == source_filename
+                    or os.path.splitext(page_source)[0].lower() == stem)
+                ) or fname.startswith(stem + "-") or fname == stem + ".md":
+                os.remove(fpath)
+                try:
+                    app.qdrant.delete_page(repo.id, fname)
+                except Exception:
+                    pass
+                removed += 1
+                logger.info("Purged wiki page %s (source: %s)", fname, source_filename)
+        except Exception:
+            pass
+    return removed
 
 
 def _wiki_base_url(username: str, repo_slug: str) -> str:
@@ -171,6 +225,12 @@ def create_app() -> Flask:
     _register_error_handlers(app)
 
     os.makedirs(Config.DATA_DIR, exist_ok=True)
+
+    if not app.config.get("TESTING"):
+        worker = TaskWorker(app)
+        worker.start()
+        app.task_worker = worker
+
     return app
 
 
@@ -459,11 +519,15 @@ def _register_routes(app: Flask) -> None:
                     active_page = p
                     break
 
+        raw_dir = os.path.join(base, "raw")
+        sources = _enrich_sources(raw_dir, repo) if os.path.isdir(raw_dir) else []
+
         return render_template(
             "repo/dashboard.html",
             username=username,
             repo=repo,
             pages=pages,
+            sources=sources,
             page_content=page_content,
             active_page=active_page,
             is_owner=_is_owner(repo),
@@ -718,16 +782,40 @@ def _register_routes(app: Flask) -> None:
         os.makedirs(raw_dir, exist_ok=True)
         ext = _file_ext(safe_name)
 
+        saved_name = None
+
         if ext in ("md", "txt"):
             uploaded.save(os.path.join(raw_dir, safe_name))
-            flash(f"文件 {safe_name} 上传成功", "success")
+            saved_name = safe_name
         elif ext in MINERU_EXTENSIONS:
             temp_dir = os.path.join(base, "temp")
             os.makedirs(temp_dir, exist_ok=True)
             temp_path = os.path.join(temp_dir, safe_name)
             uploaded.save(temp_path)
+
+            # Convert .doc → .docx via LibreOffice before sending to MinerU
+            parse_path = temp_path
+            converted_path = None
+            if ext == "doc":
+                import subprocess
+                try:
+                    result_conv = subprocess.run(
+                        ["soffice", "--headless", "--convert-to", "docx",
+                         "--outdir", temp_dir, temp_path],
+                        capture_output=True, timeout=60,
+                    )
+                    docx_path = os.path.splitext(temp_path)[0] + ".docx"
+                    if result_conv.returncode == 0 and os.path.isfile(docx_path):
+                        parse_path = docx_path
+                        converted_path = docx_path
+                    else:
+                        logger.warning("LibreOffice conversion failed for %s: %s",
+                                       safe_name, result_conv.stderr.decode())
+                except Exception as conv_exc:
+                    logger.warning("LibreOffice conversion error for %s: %s", safe_name, conv_exc)
+
             try:
-                result = current_app.mineru.parse_file(temp_path)
+                result = current_app.mineru.parse_file(parse_path)
                 md_content = (
                     result.get("md_content")
                     or result.get("markdown")
@@ -739,21 +827,138 @@ def _register_routes(app: Flask) -> None:
                     md_name = os.path.splitext(safe_name)[0] + ".md"
                     with open(os.path.join(raw_dir, md_name), "w", encoding="utf-8") as f:
                         f.write(md_content)
-                    flash(f"文件 {safe_name} 已解析并保存为 {md_name}", "success")
+                    saved_name = md_name
             except MineruClientError as exc:
                 logger.exception("MinerU parse failed for %s", safe_name)
-                if os.path.isfile(temp_path):
-                    shutil.move(temp_path, os.path.join(raw_dir, safe_name))
-                flash(f"文件解析失败: {exc}，原始文件已保存", "error")
+                flash(f"文件解析失败: {exc}", "error")
+                saved_name = None
             finally:
                 if os.path.isfile(temp_path):
                     os.remove(temp_path)
+                if converted_path and os.path.isfile(converted_path):
+                    os.remove(converted_path)
                 if os.path.isdir(temp_dir) and not os.listdir(temp_dir):
                     os.rmdir(temp_dir)
         else:
             flash("不支持的文件格式", "error")
 
         _sync_repo_counts(repo, username)
+
+        is_xhr = request.headers.get("X-Requested-With") == "XMLHttpRequest" or "XMLHttpRequest" in (request.headers.get("X-Requested-With", ""))
+        if not is_xhr:
+            is_xhr = "application/json" in request.accept_mimetypes
+
+        if saved_name:
+            task = Task(
+                repo_id=repo.id,
+                type="ingest",
+                status="queued",
+                input_data=saved_name,
+            )
+            db.session.add(task)
+            db.session.commit()
+
+            if is_xhr:
+                return jsonify(ok=True, filename=saved_name, task_id=task.id)
+
+            flash(
+                f"文件 {saved_name} 上传成功，摄入任务已排队（#{task.id}）",
+                "success",
+            )
+        elif is_xhr:
+            return jsonify(ok=False, error="上传失败"), 400
+
+        return redirect(
+            url_for("source.list_sources", username=username, repo_slug=repo_slug)
+        )
+
+    @source_bp.route(
+        "/<username>/<repo_slug>/sources/<source_id>/delete", methods=["POST"]
+    )
+    @login_required
+    def delete_source(username, repo_slug, source_id):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        raw_dir = os.path.join(
+            get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
+        )
+        filepath = os.path.join(raw_dir, source_id)
+        if os.path.isfile(filepath):
+            os.remove(filepath)
+            removed = _purge_source_wiki(current_app._get_current_object(), repo, username, source_id)
+            flash(f"已删除 {source_id}（清理了 {removed} 个关联 Wiki 页面）", "success")
+        else:
+            flash("文件不存在", "error")
+        _sync_repo_counts(repo, username)
+        return redirect(
+            url_for("source.list_sources", username=username, repo_slug=repo_slug)
+        )
+
+    @source_bp.route(
+        "/<username>/<repo_slug>/sources/<source_id>/rename", methods=["POST"]
+    )
+    @login_required
+    def rename_source(username, repo_slug, source_id):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        new_name = request.form.get("new_name", "").strip()
+        if not new_name:
+            flash("文件名不能为空", "error")
+            return redirect(
+                url_for(
+                    "source.list_sources", username=username, repo_slug=repo_slug
+                )
+            )
+        safe_new = secure_filename(new_name)
+        if not safe_new:
+            flash("文件名包含非法字符", "error")
+            return redirect(
+                url_for(
+                    "source.list_sources", username=username, repo_slug=repo_slug
+                )
+            )
+        raw_dir = os.path.join(
+            get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
+        )
+        old_path = os.path.join(raw_dir, source_id)
+        new_path = os.path.join(raw_dir, safe_new)
+        if not os.path.isfile(old_path):
+            flash("源文件不存在", "error")
+        elif os.path.exists(new_path):
+            flash(f"{safe_new} 已存在", "error")
+        else:
+            os.rename(old_path, new_path)
+            # Queue re-ingest so wiki reflects the renamed source
+            task = Task(repo_id=repo.id, type="ingest", status="queued", input_data=safe_new)
+            db.session.add(task)
+            db.session.commit()
+            flash(f"已重命名为 {safe_new}，已排队重新摄入（#{task.id}）", "success")
+        return redirect(
+            url_for("source.list_sources", username=username, repo_slug=repo_slug)
+        )
+
+    @source_bp.route(
+        "/<username>/<repo_slug>/sources/batch-delete", methods=["POST"]
+    )
+    @login_required
+    def batch_delete(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        filenames = request.form.getlist("files")
+        raw_dir = os.path.join(
+            get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
+        )
+        deleted = 0
+        purged_wiki = 0
+        app_obj = current_app._get_current_object()
+        for fn in filenames:
+            fp = os.path.join(raw_dir, secure_filename(fn))
+            if os.path.isfile(fp):
+                os.remove(fp)
+                purged_wiki += _purge_source_wiki(app_obj, repo, username, secure_filename(fn))
+                deleted += 1
+        _sync_repo_counts(repo, username)
+        flash(f"已删除 {deleted} 个文件，清理了 {purged_wiki} 个关联 Wiki 页面", "success")
         return redirect(
             url_for("source.list_sources", username=username, repo_slug=repo_slug)
         )
@@ -773,17 +978,13 @@ def _register_routes(app: Flask) -> None:
                 url_for("source.list_sources", username=username, repo_slug=repo_slug)
             )
 
-        task = Task(repo_id=repo.id, type="ingest", status="pending", input_data=source_id)
+        task = Task(repo_id=repo.id, type="ingest", status="queued", input_data=source_id)
         db.session.add(task)
         db.session.commit()
 
+        flash(f"摄入任务已排队（#{task.id}）", "success")
         return redirect(
-            url_for(
-                "ops.ingest_progress",
-                username=username,
-                repo_slug=repo_slug,
-                task_id=task.id,
-            )
+            url_for("ops.task_queue", username=username, repo_slug=repo_slug)
         )
 
     app.register_blueprint(source_bp)
@@ -809,62 +1010,80 @@ def _register_routes(app: Flask) -> None:
     @ops_bp.route("/task/<int:task_id>/stream")
     @login_required
     def task_stream(task_id):
+        """SSE endpoint that polls task progress from DB (worker runs in background)."""
         task = Task.query.get_or_404(task_id)
         repo = Repo.query.get_or_404(task.repo_id)
-        owner = User.query.get_or_404(repo.user_id)
-
         if current_user.id != repo.user_id:
             abort(403)
 
-        source_filename = task.input_data
-        repo_id = repo.id
-        owner_username = owner.username
+        import time
+
+        last_msg = ""
 
         def generate():
-            task_obj = db.session.get(Task, task_id)
-            task_obj.status = "running"
-            db.session.commit()
+            nonlocal last_msg
+            while True:
+                db.session.expire_all()
+                t = db.session.get(Task, task_id)
+                if not t:
+                    yield _sse("error_event", message="Task not found")
+                    return
 
-            try:
-                for event in current_app.wiki_engine.ingest(
-                    repo, owner_username, source_filename
-                ):
-                    phase = event.get("phase", "")
-                    progress = event.get("progress", 0)
-                    message = event.get("message", "")
+                msg = t.progress_msg or ""
+                pct = t.progress or 0
 
-                    if phase == "done":
-                        yield _sse("progress", percent=100, message=message)
-                        yield _sse("step", message=message, status="done")
-                        yield _sse("done", message=message)
-                    elif phase == "error":
-                        yield _sse("step", message=message, status="error")
-                        yield _sse("error_event", message=message)
-                    else:
-                        yield _sse("progress", percent=progress, message=message)
-                        yield _sse("step", message=message, status="running")
+                if msg != last_msg:
+                    yield _sse("progress", percent=pct, message=msg)
+                    yield _sse("step", message=msg, status="running")
+                    last_msg = msg
 
-                task_obj = db.session.get(Task, task_id)
-                task_obj.status = "done"
-                task_obj.finished_at = datetime.now(timezone.utc)
-                db.session.commit()
+                if t.status == "done":
+                    yield _sse("progress", percent=100, message=msg)
+                    yield _sse("done", message=msg)
+                    return
+                elif t.status == "failed":
+                    yield _sse("error_event", message=msg or "Task failed")
+                    return
 
-                repo_obj = db.session.get(Repo, repo_id)
-                _sync_repo_counts(repo_obj, owner_username)
-
-            except Exception as exc:
-                logger.exception("Ingest task %s failed", task_id)
-                task_obj = db.session.get(Task, task_id)
-                task_obj.status = "failed"
-                task_obj.finished_at = datetime.now(timezone.utc)
-                task_obj.output_data = str(exc)
-                db.session.commit()
-                yield _sse("error_event", message=str(exc))
+                time.sleep(1)
 
         return Response(
             stream_with_context(generate()),
             mimetype="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @ops_bp.route("/<username>/<repo_slug>/tasks")
+    @login_required
+    def task_queue(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        tasks = (
+            Task.query.filter_by(repo_id=repo.id)
+            .order_by(Task.created_at.desc())
+            .limit(50)
+            .all()
+        )
+        return render_template(
+            "ops/tasks.html",
+            username=username,
+            repo=repo,
+            tasks=tasks,
+            is_owner=_is_owner(repo),
+        )
+
+    @ops_bp.route("/api/tasks/<int:task_id>/status")
+    @login_required
+    def task_status_api(task_id):
+        task = Task.query.get_or_404(task_id)
+        repo = Repo.query.get_or_404(task.repo_id)
+        if current_user.id != repo.user_id:
+            abort(403)
+        return jsonify(
+            id=task.id,
+            status=task.status,
+            progress=task.progress,
+            progress_msg=task.progress_msg,
+            input_data=task.input_data,
         )
 
     @ops_bp.route(

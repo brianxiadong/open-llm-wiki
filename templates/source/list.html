@@ -3,79 +3,461 @@
 {% block title %}文档管理 - {{ repo.name }} - Open LLM Wiki{% endblock %}
 
 {% block content %}
-<nav aria-label="breadcrumb">
-  <ul>
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
     <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
     <li>文档管理</li>
   </ul>
 </nav>
 
-<h2>文档管理</h2>
+<header class="page-header">
+  <h2 style="margin:0;display:flex;align-items:center;gap:0.5rem;font-size:1.5rem;">
+    <i class="lucide-folder-open" aria-hidden="true"></i>
+    文档管理
+    {% if sources %}
+    <span class="badge badge-muted" style="font-size:0.75rem;">{{ sources|length }} 个文件</span>
+    {% endif %}
+  </h2>
+  <div class="page-header-actions">
+    {% if is_owner %}
+    <button type="button" class="action-btn action-btn-primary" onclick="document.getElementById('upload-zone').scrollIntoView({behavior:'smooth'})">
+      <i class="lucide-upload" aria-hidden="true"></i>
+      上传文档
+    </button>
+    {% endif %}
+  </div>
+</header>
 
+{# ── 上传区域 ── #}
 {% if is_owner %}
-<article>
-  <form method="POST" action="{{ url_for('source.upload', username=username, repo_slug=repo.slug) }}"
+<article class="upload-card" id="upload-zone" style="margin-bottom:1.5rem;">
+  <form method="POST" id="upload-form"
+        action="{{ url_for('source.upload', username=username, repo_slug=repo.slug) }}"
         enctype="multipart/form-data">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% endif %}
-    <div class="upload-row">
-      <input type="file" name="file" accept=".md,.txt,.pdf,.docx,.pptx,.png,.jpg,.jpeg" required>
-      <button type="submit">上传文档</button>
+    <div class="drop-zone" id="drop-zone">
+      <i class="lucide-cloud-upload" aria-hidden="true" style="font-size:2rem;color:var(--brand);"></i>
+      <p style="margin:0.5rem 0 0;font-weight:500;">拖拽文件到此处，或点击选择</p>
+      <p class="upload-hint" style="margin:0.25rem 0 0;">Markdown、TXT、PDF、DOCX、PPTX、PNG、JPG</p>
+      <input type="file" name="file" id="file-input"
+             accept=".md,.txt,.pdf,.doc,.docx,.pptx,.png,.jpg,.jpeg" required
+             style="display:none;">
     </div>
-    <small>支持格式：Markdown、TXT、PDF、DOCX、PPTX、PNG、JPG</small>
+    <div id="file-selected" style="display:none;margin-top:0.75rem;">
+      <div style="display:flex;align-items:center;gap:0.5rem;justify-content:center;">
+        <i class="lucide-file" aria-hidden="true"></i>
+        <span id="file-name-display"></span>
+        <button type="button" id="clear-file" class="btn-sm" style="padding:0.15rem 0.5rem;">
+          <i class="lucide-x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <button type="submit" class="action-btn action-btn-primary" style="margin-top:0.75rem;">
+        <i class="lucide-upload" aria-hidden="true"></i>
+        确认上传
+      </button>
+    </div>
   </form>
 </article>
 {% endif %}
 
+{# ── 工具栏 ── #}
 {% if sources %}
-<figure>
-  <table role="grid">
-    <thead>
-      <tr>
-        <th>文件名</th>
-        <th>大小</th>
-        <th>状态</th>
-        <th>上传时间</th>
-        <th>操作</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for src in sources %}
-      <tr>
-        <td>
-          <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}">
-            {{ src.filename }}
-          </a>
-        </td>
-        <td>{{ src.size_display }}</td>
-        <td>
-          {% if src.ingested %}
-          <span class="badge badge-source">已摄入</span>
-          {% else %}
-          <span class="badge badge-muted">未摄入</span>
+<div class="source-toolbar">
+  <div class="source-toolbar-left">
+    {% if is_owner %}
+    <label class="source-select-all">
+      <input type="checkbox" id="select-all"> 全选
+    </label>
+    <button type="button" id="batch-delete-btn" class="btn-sm" disabled
+            style="color:var(--error);border-color:var(--error);">
+      <i class="lucide-trash-2" aria-hidden="true"></i>
+      批量删除
+    </button>
+    {% endif %}
+  </div>
+  <div class="source-toolbar-right">
+    <div class="source-filter">
+      <i class="lucide-filter" aria-hidden="true"></i>
+      <select id="status-filter">
+        <option value="all">全部状态</option>
+        <option value="ingested">已摄入</option>
+        <option value="pending">未摄入</option>
+      </select>
+    </div>
+    <div class="source-sort">
+      <i class="lucide-arrow-up-down" aria-hidden="true"></i>
+      <select id="sort-by">
+        <option value="name-asc">名称 A→Z</option>
+        <option value="name-desc">名称 Z→A</option>
+        <option value="size-asc">大小 小→大</option>
+        <option value="size-desc">大小 大→小</option>
+        <option value="date-desc">时间 新→旧</option>
+        <option value="date-asc">时间 旧→新</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+{# ── 文件列表（不用 form 包裹，避免嵌套 form 问题） ── #}
+<div id="batch-data" data-action="{{ url_for('source.batch_delete', username=username, repo_slug=repo.slug) }}"
+     data-confirm="确定要删除选中的文件吗？此操作不可撤销。">
+</div>
+<article style="padding:0;">
+  <div style="overflow-x:auto;">
+    <table class="source-table" role="grid">
+      <thead>
+        <tr>
+          {% if is_owner %}<th style="width:2.5rem;"></th>{% endif %}
+          <th>文件名</th>
+          <th>大小</th>
+          <th>类型</th>
+          <th>状态</th>
+          <th>上传时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="source-tbody">
+        {% for src in sources %}
+        <tr data-filename="{{ src.filename }}"
+            data-size="{{ src.size_kb }}"
+            data-status="{{ 'ingested' if src.ingested else 'pending' }}"
+            data-date="{{ src.created_at.strftime('%Y%m%d%H%M') if src.created_at else '0' }}">
+          {% if is_owner %}
+          <td>
+            <input type="checkbox" name="files" value="{{ src.filename }}" class="source-cb">
+          </td>
           {% endif %}
-        </td>
-        <td>{{ src.created_at.strftime('%Y-%m-%d %H:%M') if src.created_at }}</td>
-        <td class="source-actions">
-          <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
-             role="button" class="outline small-btn">查看</a>
-          {% if not src.ingested and is_owner %}
-          <form method="POST" action="{{ url_for('source.ingest', username=username, repo_slug=repo.slug, source_id=src.id) }}"
-                style="display:inline">
-            <button type="submit" class="outline small-btn">摄入</button>
-          </form>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</figure>
+          <td>
+            <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
+               class="source-filename">
+              <i class="lucide-file-text" aria-hidden="true"></i>
+              {{ src.filename }}
+            </a>
+          </td>
+          <td class="source-size">{{ src.size_display }}</td>
+          <td>
+            {% set ext = src.filename.rsplit('.', 1)[-1].upper() if '.' in src.filename else '?' %}
+            <span class="badge badge-muted">{{ ext }}</span>
+          </td>
+          <td data-task-id="{{ src.task_id or '' }}">
+            {% if src.task_status == 'queued' %}
+            <span class="badge badge-muted"><i class="lucide-clock" aria-hidden="true"></i> 排队中</span>
+            {% elif src.task_status == 'running' %}
+            <span class="badge badge-running">
+              <i class="lucide-loader" aria-hidden="true"></i> 处理中
+              {% if src.task_progress %}<b class="badge-pct"> {{ src.task_progress }}%</b>{% endif %}
+            </span>
+            <div class="task-progress-row" style="margin-top:4px;">
+              <progress class="task-progress-bar" value="{{ src.task_progress }}" max="100"></progress>
+              <span class="task-progress-pct">{{ src.task_progress }}%</span>
+            </div>
+            {% elif src.ingested %}
+            <span class="badge badge-source"><i class="lucide-check" aria-hidden="true"></i> 已摄入</span>
+            {% else %}
+            <span class="badge badge-muted">待摄入</span>
+            {% endif %}
+          </td>
+          <td class="source-date">{{ src.created_at.strftime('%Y-%m-%d %H:%M') if src.created_at else '-' }}</td>
+          <td class="source-actions">
+            <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
+               class="btn-sm" title="预览">
+              <i class="lucide-eye" aria-hidden="true"></i>
+            </a>
+            {% if is_owner %}
+            {% if src.task_status not in ('queued', 'running') %}
+            <form method="POST" style="display:inline;"
+                  action="{{ url_for('source.ingest', username=username, repo_slug=repo.slug, source_id=src.id) }}">
+              <button type="submit" class="btn-sm btn-sm-primary" title="{{ '重新摄入' if src.ingested else '摄入' }}">
+                <i class="lucide-sparkles" aria-hidden="true"></i>
+              </button>
+            </form>
+            {% endif %}
+            <button type="button" class="btn-sm rename-btn" title="重命名"
+                    data-id="{{ src.id }}"
+                    data-url="{{ url_for('source.rename_source', username=username, repo_slug=repo.slug, source_id=src.id) }}">
+              <i class="lucide-pencil" aria-hidden="true"></i>
+            </button>
+            <button type="button" class="btn-sm delete-one-btn" title="删除"
+                    style="color:var(--error);border-color:var(--error);"
+                    data-url="{{ url_for('source.delete_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
+                    data-name="{{ src.filename }}">
+              <i class="lucide-trash-2" aria-hidden="true"></i>
+            </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>
+
 {% else %}
 <article class="empty-state">
+  <i class="lucide-file-plus" aria-hidden="true"></i>
   <h3>还没有文档</h3>
   <p>上传文档后，可以将其摄入为 Wiki 页面。</p>
 </article>
 {% endif %}
+
+{# ── 重命名弹窗 ── #}
+<dialog id="rename-dialog">
+  <article style="min-width:340px;">
+    <header style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+      <h3 style="margin:0;font-size:1.1rem;">
+        <i class="lucide-pencil" aria-hidden="true"></i> 重命名文件
+      </h3>
+      <button type="button" class="flash-close" onclick="document.getElementById('rename-dialog').close()" aria-label="关闭">&times;</button>
+    </header>
+    <form method="POST" id="rename-form">
+      <label for="rename-input">新文件名</label>
+      <input type="text" id="rename-input" name="new_name" required>
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">
+        <button type="button" class="btn-sm" onclick="document.getElementById('rename-dialog').close()">取消</button>
+        <button type="submit" class="btn-sm btn-sm-primary">确认</button>
+      </div>
+    </form>
+  </article>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  /* ── 拖拽上传 ── */
+  var dropZone = document.getElementById('drop-zone');
+  var fileInput = document.getElementById('file-input');
+  var fileSelected = document.getElementById('file-selected');
+  var fileNameDisplay = document.getElementById('file-name-display');
+  var clearBtn = document.getElementById('clear-file');
+
+  if (dropZone && fileInput) {
+    dropZone.addEventListener('click', function() { fileInput.click(); });
+
+    ['dragenter', 'dragover'].forEach(function(evt) {
+      dropZone.addEventListener(evt, function(e) {
+        e.preventDefault(); e.stopPropagation();
+        dropZone.classList.add('drop-active');
+      });
+    });
+    ['dragleave', 'drop'].forEach(function(evt) {
+      dropZone.addEventListener(evt, function(e) {
+        e.preventDefault(); e.stopPropagation();
+        dropZone.classList.remove('drop-active');
+      });
+    });
+    dropZone.addEventListener('drop', function(e) {
+      if (e.dataTransfer.files.length) {
+        fileInput.files = e.dataTransfer.files;
+        showSelected();
+      }
+    });
+    fileInput.addEventListener('change', showSelected);
+
+    function showSelected() {
+      if (fileInput.files.length) {
+        fileNameDisplay.textContent = fileInput.files[0].name +
+          ' (' + (fileInput.files[0].size / 1024).toFixed(1) + ' KB)';
+        fileSelected.style.display = 'block';
+        dropZone.style.display = 'none';
+      }
+    }
+    if (clearBtn) {
+      clearBtn.addEventListener('click', function() {
+        fileInput.value = '';
+        fileSelected.style.display = 'none';
+        dropZone.style.display = 'flex';
+      });
+    }
+
+    /* AJAX upload */
+    var uploadForm = document.getElementById('upload-form');
+    if (uploadForm) {
+      uploadForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        if (!fileInput.files.length) return;
+
+        var submitBtn = uploadForm.querySelector('button[type="submit"]');
+        var origHtml = submitBtn ? submitBtn.innerHTML : '';
+        if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '⏳ 上传中…'; }
+
+        var fd = new FormData();
+        fd.append('file', fileInput.files[0]);
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', uploadForm.action, true);
+        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+
+        xhr.upload.addEventListener('progress', function(ev) {
+          if (ev.lengthComputable && submitBtn) {
+            submitBtn.innerHTML = '⏳ 上传 ' + Math.round(ev.loaded / ev.total * 100) + '%';
+          }
+        });
+
+        xhr.onload = function() {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            if (submitBtn) submitBtn.innerHTML = '✓ 上传成功，处理中…';
+            setTimeout(function() { window.location.reload(); }, 1200);
+          } else {
+            var errMsg = '上传失败';
+            try { errMsg = JSON.parse(xhr.responseText).error || errMsg; } catch(ex) {}
+            alert(errMsg);
+            if (submitBtn) { submitBtn.innerHTML = origHtml; submitBtn.disabled = false; }
+            fileInput.value = '';
+            fileSelected.style.display = 'none';
+            dropZone.style.display = 'flex';
+          }
+        };
+        xhr.onerror = function() {
+          alert('网络错误，上传失败');
+          if (submitBtn) { submitBtn.innerHTML = origHtml; submitBtn.disabled = false; }
+        };
+        xhr.send(fd);
+      });
+    }
+  }
+
+  /* ── 全选 / 批量删除 ── */
+  var selectAll = document.getElementById('select-all');
+  var batchBtn = document.getElementById('batch-delete-btn');
+  var checkboxes = document.querySelectorAll('.source-cb');
+
+  function updateBatchBtn() {
+    if (!batchBtn) return;
+    var checked = document.querySelectorAll('.source-cb:checked').length;
+    batchBtn.disabled = checked === 0;
+    batchBtn.textContent = checked > 0 ? '批量删除 (' + checked + ')' : '批量删除';
+  }
+
+  if (selectAll) {
+    selectAll.addEventListener('change', function() {
+      var visible = document.querySelectorAll('#source-tbody tr:not([style*="display: none"]) .source-cb');
+      visible.forEach(function(cb) { cb.checked = selectAll.checked; });
+      updateBatchBtn();
+    });
+  }
+  checkboxes.forEach(function(cb) { cb.addEventListener('change', updateBatchBtn); });
+
+  if (batchBtn) {
+    batchBtn.addEventListener('click', function() {
+      var meta = document.getElementById('batch-data');
+      if (!confirm(meta.dataset.confirm)) return;
+      var form = document.createElement('form');
+      form.method = 'POST';
+      form.action = meta.dataset.action;
+      document.querySelectorAll('.source-cb:checked').forEach(function(cb) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'files'; inp.value = cb.value;
+        form.appendChild(inp);
+      });
+      document.body.appendChild(form);
+      form.submit();
+    });
+  }
+
+  /* ── 筛选 ── */
+  var statusFilter = document.getElementById('status-filter');
+  if (statusFilter) {
+    statusFilter.addEventListener('change', function() {
+      var val = statusFilter.value;
+      document.querySelectorAll('#source-tbody tr').forEach(function(tr) {
+        if (val === 'all') { tr.style.display = ''; }
+        else { tr.style.display = tr.dataset.status === val ? '' : 'none'; }
+      });
+    });
+  }
+
+  /* ── 排序 ── */
+  var sortBy = document.getElementById('sort-by');
+  if (sortBy) {
+    sortBy.addEventListener('change', function() {
+      var tbody = document.getElementById('source-tbody');
+      var rows = Array.from(tbody.querySelectorAll('tr'));
+      var parts = sortBy.value.split('-');
+      var key = parts[0], dir = parts[1] === 'asc' ? 1 : -1;
+
+      rows.sort(function(a, b) {
+        var va, vb;
+        if (key === 'name') {
+          va = a.dataset.filename.toLowerCase();
+          vb = b.dataset.filename.toLowerCase();
+          return va < vb ? -dir : va > vb ? dir : 0;
+        } else if (key === 'size') {
+          return (parseFloat(a.dataset.size) - parseFloat(b.dataset.size)) * dir;
+        } else {
+          return (parseInt(a.dataset.date) - parseInt(b.dataset.date)) * dir;
+        }
+      });
+      rows.forEach(function(r) { tbody.appendChild(r); });
+    });
+  }
+
+  /* ── 单文件删除 ── */
+  document.querySelectorAll('.delete-one-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      if (!confirm('确定要删除 ' + btn.dataset.name + ' 吗？')) return;
+      var form = document.createElement('form');
+      form.method = 'POST'; form.action = btn.dataset.url;
+      document.body.appendChild(form);
+      form.submit();
+    });
+  });
+
+  /* ── 重命名弹窗 ── */
+  document.querySelectorAll('.rename-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var dialog = document.getElementById('rename-dialog');
+      var form = document.getElementById('rename-form');
+      var input = document.getElementById('rename-input');
+      form.action = btn.dataset.url;
+      input.value = btn.dataset.id;
+      input.select();
+      dialog.showModal();
+    });
+  });
+
+  /* ── 处理中进度轮询 ── */
+  (function pollSourceProgress() {
+    var activeCells = document.querySelectorAll('td[data-task-id]:not([data-task-id=""])');
+    if (!activeCells.length) return;
+
+    function tick() {
+      var cells = document.querySelectorAll('td[data-task-id]:not([data-task-id=""])');
+      if (!cells.length) return;
+      cells.forEach(function(td) {
+        var tid = td.dataset.taskId;
+        fetch('/api/tasks/' + tid + '/status')
+          .then(function(r) { return r.json(); })
+          .then(function(d) {
+            var badge = td.querySelector('.badge');
+            var bar = td.querySelector('.task-progress-bar');
+            var pct = td.querySelector('.task-progress-pct');
+            var bpct = td.querySelector('.badge-pct');
+            if (bar) bar.value = d.progress;
+            if (pct) pct.textContent = d.progress + '%';
+            if (bpct) bpct.textContent = ' ' + d.progress + '%';
+            if (d.status === 'done') {
+              td.removeAttribute('data-task-id');
+              td.innerHTML = '<span class="badge badge-source"><i class="lucide-check"></i> 已摄入</span>';
+              if (typeof lucide !== 'undefined') lucide.createIcons();
+            } else if (d.status === 'failed') {
+              td.removeAttribute('data-task-id');
+              td.innerHTML = '<span class="badge badge-error" title="' + (d.progress_msg || '') + '"><i class="lucide-x"></i> 失败</span>';
+              if (typeof lucide !== 'undefined') lucide.createIcons();
+            } else if (d.status === 'running' && badge) {
+              badge.innerHTML = '<i class="lucide-loader"></i> 处理中<b class="badge-pct"> ' + d.progress + '%</b>';
+              if (typeof lucide !== 'undefined') lucide.createIcons();
+            }
+          }).catch(function() {});
+      });
+      if (document.querySelectorAll('td[data-task-id]:not([data-task-id=""])').length) {
+        setTimeout(tick, 2000);
+      }
+    }
+    setTimeout(tick, 1500);
+  })();
+})();
+</script>
 {% endblock %}

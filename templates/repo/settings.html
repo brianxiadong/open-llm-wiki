@@ -3,13 +3,16 @@
 {% block title %}设置 - {{ repo.name }} - Open LLM Wiki{% endblock %}
 
 {% block content %}
-<h2>知识库设置</h2>
-<nav aria-label="breadcrumb">
-  <ul>
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
     <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
     <li>设置</li>
   </ul>
 </nav>
+
+<header class="page-header">
+  <h2>知识库设置</h2>
+</header>
 
 <article>
   <header><h3>基本信息</h3></header>
@@ -23,14 +26,14 @@
     <input type="text" id="name" name="name" value="{{ repo.name }}" required>
 
     <label for="description">描述</label>
-    <textarea id="description" name="description" rows="3">{{ repo.description or '' }}</textarea>
+    <textarea id="description" name="description" rows="4" placeholder="简要描述该知识库的用途">{{ repo.description or '' }}</textarea>
 
     <button type="submit">保存修改</button>
   </form>
 </article>
 
 <article>
-  <header><h3>Schema 编辑</h3></header>
+  <header><h3>Wiki Schema</h3></header>
   <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -38,18 +41,18 @@
     <input type="hidden" name="action" value="update_schema">
 
     <label for="schema_content">schema.md</label>
-    <textarea id="schema_content" name="schema_content" rows="12" class="code-textarea">{{ schema_content or '' }}</textarea>
-    <small>定义知识库的页面类型、属性和关系规则</small>
+    <textarea id="schema_content" name="schema_content" rows="14" class="code-textarea" placeholder="在此编辑 Wiki 结构约定…">{{ schema_content or '' }}</textarea>
+    <small>定义页面类型、前置元数据与关联规则，将影响后续生成与校验行为。</small>
 
-    <button type="submit">保存 Schema</button>
+    <button type="submit" class="mt-2">保存 Schema</button>
   </form>
 </article>
 
 <article class="danger-zone">
-  <header><h3>危险操作</h3></header>
-  <p>删除知识库后，所有页面和文档将永久丢失，且无法恢复。</p>
+  <header><h3>删除知识库</h3></header>
+  <p>删除后，该知识库下的所有页面、来源文件与向量数据将被永久移除，且<strong>无法恢复</strong>。请谨慎操作。</p>
   <form method="POST" action="{{ url_for('repo.delete', username=username, repo_slug=repo.slug) }}"
-        class="delete-form" data-confirm="确定要删除知识库「{{ repo.name }}」吗？此操作不可逆。">
+        data-confirm="确定要删除知识库「{{ repo.name }}」吗？此操作不可逆。">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% endif %}

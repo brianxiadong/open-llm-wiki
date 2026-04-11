@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}任务队列 - {{ repo.name }} - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
+    <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
+    <li>任务队列</li>
+  </ul>
+</nav>
+
+<header class="page-header">
+  <h2 style="margin:0;display:flex;align-items:center;gap:0.5rem;font-size:1.5rem;">
+    <i class="lucide-list-todo" aria-hidden="true"></i>
+    任务队列
+  </h2>
+  <div class="page-header-actions"></div>
+</header>
+
+{% if tasks %}
+<article style="padding:0;">
+  <div style="overflow-x:auto;">
+    <table class="source-table" role="grid">
+      <thead>
+        <tr>
+          <th style="width:3rem;">#</th>
+          <th>文件</th>
+          <th>状态</th>
+          <th style="min-width:200px;">进度</th>
+          <th>创建时间</th>
+          <th>耗时</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in tasks %}
+        <tr class="task-row" data-task-id="{{ t.id }}" data-status="{{ t.status }}">
+          <td>{{ t.id }}</td>
+          <td class="source-filename">
+            <i class="lucide-file-text" aria-hidden="true"></i>
+            {{ t.input_data }}
+          </td>
+          <td>
+            {% if t.status == 'queued' %}
+            <span class="badge badge-muted">
+              <i class="lucide-clock" aria-hidden="true"></i> 排队中
+            </span>
+            {% elif t.status == 'running' %}
+            <span class="badge badge-running">
+              <i class="lucide-loader" aria-hidden="true"></i> 处理中
+              {% if t.progress %}<b class="badge-pct"> {{ t.progress }}%</b>{% endif %}
+            </span>
+            {% elif t.status == 'done' %}
+            <span class="badge badge-source">
+              <i class="lucide-check" aria-hidden="true"></i> 完成
+            </span>
+            {% elif t.status == 'failed' %}
+            <span class="badge badge-error">
+              <i class="lucide-x" aria-hidden="true"></i> 失败
+            </span>
+            {% else %}
+            <span class="badge badge-muted">{{ t.status }}</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="task-progress-cell">
+              <div class="task-progress-row">
+                <progress class="task-progress-bar" value="{{ t.progress }}" max="100"></progress>
+                <span class="task-progress-pct">{{ t.progress }}%</span>
+              </div>
+              <small class="task-progress-msg">{{ t.progress_msg or '' }}</small>
+            </div>
+          </td>
+          <td>{{ t.created_at.strftime('%m-%d %H:%M') if t.created_at }}</td>
+          <td>
+            {% if t.finished_at and t.started_at %}
+              {% set delta = (t.finished_at - t.started_at).total_seconds()|int %}
+              {% if delta >= 60 %}{{ (delta // 60) }}分{{ delta % 60 }}秒
+              {% else %}{{ delta }}秒{% endif %}
+            {% elif t.status == 'running' and t.started_at %}
+              <span class="task-elapsed" data-start="{{ t.started_at.strftime('%Y-%m-%dT%H:%M:%S') }}Z">…</span>
+            {% else %}-{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>
+{% else %}
+<article class="empty-state">
+  <i class="lucide-inbox" aria-hidden="true"></i>
+  <h3>暂无任务</h3>
+  <p>上传文档后，摄入任务将自动排队执行。</p>
+</article>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  var activeRows = document.querySelectorAll('.task-row[data-status="queued"], .task-row[data-status="running"]');
+  if (!activeRows.length) return;
+
+  function pollTasks() {
+    activeRows.forEach(function(row) {
+      var tid = row.dataset.taskId;
+      fetch('/api/tasks/' + tid + '/status')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          var bar = row.querySelector('.task-progress-bar');
+          var pct = row.querySelector('.task-progress-pct');
+          var msg = row.querySelector('.task-progress-msg');
+          var badge = row.querySelector('.badge');
+          if (bar) bar.value = d.progress;
+          if (pct) pct.textContent = d.progress + '%';
+          if (msg) msg.textContent = d.progress_msg || '';
+          row.dataset.status = d.status;
+
+          if (d.status === 'done') {
+            badge.className = 'badge badge-source';
+            badge.innerHTML = '<i class="lucide-check" aria-hidden="true"></i> 完成';
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+          } else if (d.status === 'failed') {
+            badge.className = 'badge badge-error';
+            badge.innerHTML = '<i class="lucide-x" aria-hidden="true"></i> 失败';
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+          } else if (d.status === 'running') {
+            badge.className = 'badge badge-running';
+            badge.innerHTML = '<i class="lucide-loader" aria-hidden="true"></i> 处理中' + (d.progress ? '<b class="badge-pct"> ' + d.progress + '%</b>' : '');
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+          }
+        })
+        .catch(function() {});
+    });
+
+    activeRows = document.querySelectorAll('.task-row[data-status="queued"], .task-row[data-status="running"]');
+    if (activeRows.length) setTimeout(pollTasks, 2000);
+  }
+
+  setTimeout(pollTasks, 1500);
+
+  /* Elapsed time ticker */
+  setInterval(function() {
+    document.querySelectorAll('.task-elapsed').forEach(function(el) {
+      var start = new Date(el.dataset.start);
+      var now = new Date();
+      var s = Math.floor((now - start) / 1000);
+      if (s >= 60) el.textContent = Math.floor(s/60) + '分' + (s%60) + '秒';
+      else el.textContent = s + '秒';
+    });
+  }, 1000);
+})();
+</script>
+{% endblock %}

@@ -3,29 +3,39 @@
 {% block title %}{{ source.filename }} - {{ repo.name }} - Open LLM Wiki{% endblock %}
 
 {% block content %}
-<nav aria-label="breadcrumb">
-  <ul>
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
     <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
     <li><a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}">文档管理</a></li>
     <li>{{ source.filename }}</li>
   </ul>
 </nav>
 
-<div class="source-header">
-  <h2>{{ source.filename }}</h2>
-  {% if not source.ingested and is_owner %}
-  <form method="POST" action="{{ url_for('source.ingest', username=username, repo_slug=repo.slug, source_id=source.id) }}">
-    {% if csrf_token is defined %}
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<header class="page-header">
+  <h2 style="margin:0;display:flex;align-items:center;gap:0.5rem;font-size:1.35rem;word-break:break-all;">
+    <i class="lucide-file-text" aria-hidden="true"></i>
+    {{ source.filename }}
+  </h2>
+  <div class="page-header-actions">
+    {% if not source.ingested and is_owner %}
+    <form method="POST" action="{{ url_for('source.ingest', username=username, repo_slug=repo.slug, source_id=source.id) }}">
+      {% if csrf_token is defined %}
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% endif %}
+      <button type="submit" class="action-btn action-btn-primary">
+        <i class="lucide-sparkles" aria-hidden="true"></i>
+        摄入到 Wiki
+      </button>
+    </form>
+    {% elif source.ingested %}
+    <span class="badge badge-source">已摄入</span>
     {% endif %}
-    <button type="submit">摄入到 Wiki</button>
-  </form>
-  {% elif source.ingested %}
-  <span class="badge badge-source">已摄入</span>
-  {% endif %}
-</div>
+  </div>
+</header>
 
-<article class="rendered-content">
-  {{ content|safe }}
+<article>
+  <div class="rendered-content">
+    {{ content|safe }}
+  </div>
 </article>
 {% endblock %}

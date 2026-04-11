@@ -34,7 +34,7 @@ def test_llm_chat_success():
         out = client.chat([{"role": "user", "content": "hi"}])
 
     assert out == "hello from model"
-    mock_openai_cls.assert_called_once_with(base_url="http://localhost/v1", api_key="sk-test")
+    mock_openai_cls.assert_called_once_with(base_url="http://localhost/v1", api_key="sk-test", timeout=180.0)
     mock_openai_cls.return_value.chat.completions.create.assert_called_once()
     call_kw = mock_openai_cls.return_value.chat.completions.create.call_args.kwargs
     assert call_kw["model"] == "gpt-test"
@@ -105,7 +105,7 @@ def _httpx_client_context(mock_instance: MagicMock) -> MagicMock:
 
 
 def test_mineru_parse_file_success():
-    body = {"markdown": "# ok", "meta": {"pages": 1}}
+    body = {"results": {"test": {"md_content": "# parsed"}}}
     mock_resp = MagicMock()
     mock_resp.json.return_value = body
     mock_resp.raise_for_status = MagicMock()
@@ -125,11 +125,11 @@ def test_mineru_parse_file_success():
     finally:
         Path(path).unlink(missing_ok=True)
 
-    assert out == body
+    assert out["md_content"] == "# parsed"
     mock_http.post.assert_called_once()
     call_kw = mock_http.post.call_args
     assert "/file_parse" in call_kw[0][0]
-    assert call_kw[1]["params"] == {"return_md": "true"}
+    assert call_kw[1]["data"] == {"return_md": "true"}
 
 
 def test_mineru_parse_file_not_found():

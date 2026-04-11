@@ -30,14 +30,21 @@ def render_markdown(text: str, wiki_base_url: str = "") -> tuple[dict, str]:
     """
     frontmatter: dict = {}
     content = text
-    if text.startswith("---"):
-        parts = text.split("---", 2)
+    normalized = text.lstrip()
+    if normalized.startswith("```"):
+        first_nl = normalized.find("\n")
+        if first_nl != -1:
+            normalized = normalized[first_nl + 1:].lstrip()
+    if normalized.startswith("---"):
+        parts = normalized.split("---", 2)
         if len(parts) >= 3:
             try:
                 frontmatter = yaml.safe_load(parts[1]) or {}
             except yaml.YAMLError:
                 pass
             content = parts[2]
+            if content.rstrip().endswith("```"):
+                content = content.rstrip()[:-3]
 
     if wiki_base_url:
         content = re.sub(

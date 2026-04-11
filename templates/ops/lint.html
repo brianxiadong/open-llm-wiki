@@ -3,14 +3,20 @@
 {% block title %}维护检查 - {{ repo.name }} - Open LLM Wiki{% endblock %}
 
 {% block content %}
-<nav aria-label="breadcrumb">
-  <ul>
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
     <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
     <li>维护检查</li>
   </ul>
 </nav>
 
-<h2>维护检查报告</h2>
+<header class="page-header">
+  <h2 style="margin:0;display:flex;align-items:center;gap:0.5rem;font-size:1.5rem;">
+    <i class="lucide-shield-check" aria-hidden="true"></i>
+    维护检查报告
+  </h2>
+  <div class="page-header-actions"></div>
+</header>
 
 {% set sections = [
   ('contradictions', '矛盾内容', '发现以下内容之间存在矛盾'),
@@ -21,45 +27,52 @@
   ('suggestions', '改进建议', '以下建议可以帮助提升知识库质量')
 ] %}
 
+<div class="lint-report-stack">
 {% for key, title, desc in sections %}
-<article class="lint-section">
-  <details {% if report.get(key) %}open{% endif %}>
-    <summary>
-      {{ title }}
-      {% if report.get(key) %}
-      <span class="badge">{{ report[key]|length }}</span>
-      {% else %}
-      <span class="badge badge-muted">0</span>
-      {% endif %}
-    </summary>
+<details class="lint-section" {% if report.get(key) %}open{% endif %}>
+  <summary>
+    {{ title }}
     {% if report.get(key) %}
-    <p><small>{{ desc }}</small></p>
-    <ul>
+    <span class="badge badge-analysis">{{ report[key]|length }}</span>
+    {% else %}
+    <span class="badge badge-muted">0</span>
+    {% endif %}
+  </summary>
+  <div style="padding:0.5rem 0 0.25rem;">
+    {% if report.get(key) %}
+    <p class="muted" style="margin:0 0 0.75rem;font-size:0.88rem;">{{ desc }}</p>
+    <ul style="margin:0;padding-left:1.25rem;">
       {% for item in report[key] %}
-      <li>
+      <li style="margin-bottom:0.35rem;">
         {% if item.page_slug %}
         <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=item.page_slug) }}">
           {{ item.title or item.page_slug }}
         </a>
         {% endif %}
-        {% if item.message %}<span> &mdash; {{ item.message }}</span>{% endif %}
+        {% if item.message %}<span> — {{ item.message }}</span>{% endif %}
       </li>
       {% endfor %}
     </ul>
     {% else %}
-    <p><small class="muted">未发现问题</small></p>
+    <p class="muted" style="margin:0;font-size:0.88rem;">未发现问题</p>
     {% endif %}
-  </details>
-</article>
+  </div>
+</details>
 {% endfor %}
+</div>
 
 {% if has_fixes %}
-<form method="POST" action="{{ url_for('ops.apply_fixes', username=username, repo_slug=repo.slug) }}"
-      data-confirm="确定要应用自动修复吗？">
-  {% if csrf_token is defined %}
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  {% endif %}
-  <button type="submit">应用修复</button>
-</form>
+<div style="margin-top:1.75rem;padding-top:1.25rem;border-top:1px solid var(--border);">
+  <form method="POST" action="{{ url_for('ops.apply_fixes', username=username, repo_slug=repo.slug) }}"
+        data-confirm="确定要应用自动修复吗？">
+    {% if csrf_token is defined %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% endif %}
+    <button type="submit" class="outline secondary">
+      <i class="lucide-wrench" aria-hidden="true"></i>
+      应用修复
+    </button>
+  </form>
+</div>
 {% endif %}
 {% endblock %}

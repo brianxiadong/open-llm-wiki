@@ -3,25 +3,35 @@
 {% block title %}新建知识库 - Open LLM Wiki{% endblock %}
 
 {% block content %}
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
+    <li><a href="{{ url_for('index') }}">首页</a></li>
+    <li>新建知识库</li>
+  </ul>
+</nav>
+
 <article class="form-container">
   <header>
-    <h2>新建知识库</h2>
+    <h2>
+      <i class="lucide-plus-circle" aria-hidden="true"></i>
+      新建知识库
+    </h2>
   </header>
   <form method="POST" action="{{ url_for('repo.new_repo') }}">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% endif %}
 
-    <label for="name">名称 <span class="required">*</span></label>
-    <input type="text" id="name" name="name" placeholder="为知识库起一个名字" required autofocus>
+    <label for="name">知识库名称 <span class="required">*</span></label>
+    <input type="text" id="name" name="name" placeholder="为知识库起一个清晰易记的名称" required autofocus>
 
-    <label for="slug">标识（URL 路径）</label>
-    <input type="text" id="slug" name="slug" placeholder="自动根据名称生成" pattern="[a-z0-9\-]+"
+    <label for="slug">URL 标识</label>
+    <input type="text" id="slug" name="slug" placeholder="留空则根据名称自动生成" pattern="[a-z0-9\-]+"
            aria-describedby="slug-help">
-    <small id="slug-help">仅支持小写字母、数字和短横线，留空则自动生成</small>
+    <small id="slug-help">仅支持小写字母、数字和短横线；留空时系统将自动生成合法标识。</small>
 
     <label for="description">描述</label>
-    <textarea id="description" name="description" placeholder="简要描述知识库的用途" rows="3"></textarea>
+    <textarea id="description" name="description" placeholder="简要说明该知识库的用途与范围" rows="4"></textarea>
 
     <div class="form-actions">
       <button type="submit">创建知识库</button>

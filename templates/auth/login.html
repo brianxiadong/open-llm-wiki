@@ -5,24 +5,33 @@
 {% block content %}
 <div class="auth-container">
   <article>
-    <header>
-      <h2>登录</h2>
-    </header>
+    <div class="auth-brand">
+      <i class="lucide-book-open" aria-hidden="true"></i>
+      <h2>欢迎回来</h2>
+      <p>登录 Open LLM Wiki，继续探索与整理知识</p>
+    </div>
+
     <form method="POST" action="{{ url_for('auth.login') }}">
       {% if csrf_token is defined %}
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       {% endif %}
-      <label for="username">用户名</label>
-      <input type="text" id="username" name="username" placeholder="请输入用户名" required autofocus>
 
-      <label for="password">密码</label>
-      <input type="password" id="password" name="password" placeholder="请输入密码" required>
+      <label for="username">
+        <i class="lucide-user" style="font-size: 0.9rem" aria-hidden="true"></i>
+        用户名
+      </label>
+      <input type="text" id="username" name="username" placeholder="请输入用户名" required autofocus autocomplete="username">
 
-      <button type="submit">登录</button>
+      <label for="password">
+        <i class="lucide-lock" style="font-size: 0.9rem" aria-hidden="true"></i>
+        密码
+      </label>
+      <input type="password" id="password" name="password" placeholder="请输入密码" required autocomplete="current-password">
+
+      <button type="submit" style="width: 100%; margin-top: 0.25rem">登录</button>
     </form>
-    <footer>
-      <p class="auth-footer">还没有账号？<a href="{{ url_for('auth.register') }}">立即注册</a></p>
-    </footer>
+
+    <p class="auth-footer">还没有账号？<a href="{{ url_for('auth.register') }}">立即注册</a></p>
   </article>
 </div>
 {% endblock %}

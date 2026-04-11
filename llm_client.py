@@ -21,10 +21,11 @@ class LLMClient:
         api_key: str,
         model: str,
         max_tokens: int,
+        timeout: float = 180.0,
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens
-        self._client = OpenAI(base_url=api_base, api_key=api_key)
+        self._client = OpenAI(base_url=api_base, api_key=api_key, timeout=timeout)
 
     def chat(
         self,

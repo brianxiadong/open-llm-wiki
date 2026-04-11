@@ -23,6 +23,26 @@ class MineruClient:
         path = path if path.startswith("/") else f"/{path}"
         return f"{self._base}{path}"
 
+    @staticmethod
+    def _extract_md(data: dict[str, Any], file_path: str) -> dict[str, Any]:
+        """Flatten the nested MinerU response into {md_content: str, ...}."""
+        if "md_content" in data:
+            return data
+
+        results = data.get("results")
+        if isinstance(results, dict):
+            for file_result in results.values():
+                if isinstance(file_result, dict) and "md_content" in file_result:
+                    data["md_content"] = file_result["md_content"]
+                    return data
+
+        logger.warning(
+            "MinerU response has no md_content for %s, keys=%s",
+            file_path,
+            list(data.keys()),
+        )
+        return data
+
     def parse_file(self, file_path: str) -> dict[str, Any]:
         logger.info("MinerU parse_file path=%s", file_path)
         if not os.path.isfile(file_path):
@@ -31,18 +51,19 @@ class MineruClient:
         try:
             with httpx.Client(timeout=self._timeout) as client:
                 with open(file_path, "rb") as f:
-                    files = {"file": (os.path.basename(file_path), f)}
                     response = client.post(
                         self._url("/file_parse"),
-                        files=files,
-                        params={"return_md": "true"},
+                        files=[("files", (os.path.basename(file_path), f))],
+                        data={"return_md": "true"},
                     )
                 response.raise_for_status()
                 try:
-                    return response.json()
+                    data = response.json()
                 except json.JSONDecodeError as e:
                     logger.exception("MinerU parse_file invalid JSON path=%s", file_path)
                     raise MineruClientError(f"Invalid JSON response: {e}") from e
+
+                return self._extract_md(data, file_path)
         except httpx.TimeoutException as e:
             logger.exception("MinerU parse_file timeout path=%s", file_path)
             raise MineruClientError(f"Request timed out: {e}") from e
@@ -68,10 +89,9 @@ class MineruClient:
         try:
             with httpx.Client(timeout=self._timeout) as client:
                 with open(file_path, "rb") as f:
-                    files = {"file": (os.path.basename(file_path), f)}
                     response = client.post(
                         self._url("/tasks"),
-                        files=files,
+                        files=[("files", (os.path.basename(file_path), f))],
                     )
                 response.raise_for_status()
                 try:

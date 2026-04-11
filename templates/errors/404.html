@@ -1,14 +1,20 @@
 {% extends "base.html" %}
 
-{% block title %}页面未找到 - Open LLM Wiki{% endblock %}
+{% block title %}404 - Open LLM Wiki{% endblock %}
 
 {% block content %}
-<article class="error-page">
-  <header>
-    <h1>404</h1>
-  </header>
-  <h2>页面未找到</h2>
-  <p>你访问的页面不存在或已被删除。</p>
-  <a href="{{ url_for('index') }}" role="button">返回首页</a>
-</article>
+<div class="error-page">
+  <p style="margin: 0 0 0.75rem">
+    <i class="lucide-file-question" style="font-size: 3rem; color: var(--brand-light)" aria-hidden="true"></i>
+  </p>
+  <h1>404</h1>
+  <p>抱歉，我们找不到你要访问的页面。</p>
+  <p class="muted" style="font-size: 0.95rem; margin-top: -0.25rem">链接可能已失效，或页面已被移动。</p>
+  <p style="margin-top: 1.75rem">
+    <a href="{{ url_for('index') }}" class="action-btn action-btn-primary" role="button">
+      <i class="lucide-home" aria-hidden="true"></i>
+      返回首页
+    </a>
+  </p>
+</div>
 {% endblock %}

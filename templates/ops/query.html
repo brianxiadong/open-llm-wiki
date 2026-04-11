@@ -1,51 +1,74 @@
 {% extends "base.html" %}
 
-{% block title %}查询 - {{ repo.name }} - Open LLM Wiki{% endblock %}
+{% block title %}知识查询 - {{ repo.name }} - Open LLM Wiki{% endblock %}
 
 {% block content %}
-<nav aria-label="breadcrumb">
-  <ul>
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
     <li><a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}">{{ repo.name }}</a></li>
-    <li>查询</li>
+    <li>知识查询</li>
   </ul>
 </nav>
 
-<h2>知识查询</h2>
+<header class="page-header">
+  <h2 style="margin:0;display:flex;align-items:center;gap:0.5rem;font-size:1.5rem;">
+    <i class="lucide-search" aria-hidden="true"></i>
+    知识查询
+  </h2>
+  <div class="page-header-actions"></div>
+</header>
 
 <form id="query-form" class="query-form">
   <div class="query-input-row">
-    <input type="text" id="query-input" name="q" placeholder="输入你的问题…" required autofocus>
-    <button type="submit" id="query-submit">查询</button>
+    <input type="text" id="query-input" name="q" placeholder="输入你的问题…" required autofocus
+           aria-label="查询内容">
+    <button type="submit" id="query-submit">
+      <i class="lucide-send-horizontal" aria-hidden="true"></i>
+      查询
+    </button>
   </div>
 </form>
 
 <div id="query-loading" class="loading-indicator" hidden>
+  <i class="lucide-loader-2 icon-spin" aria-hidden="true"></i>
   <span aria-busy="true">正在查询，请稍候…</span>
 </div>
 
 <div id="query-result" hidden>
   <article>
-    <header><h3>查询结果</h3></header>
-    <div id="result-content" class="rendered-content"></div>
+    <header style="padding:0;margin-bottom:1rem;border:none;">
+      <h3 style="margin:0;display:flex;align-items:center;gap:0.4rem;font-size:1.15rem;">
+        <i class="lucide-message-square-text" aria-hidden="true"></i>
+        查询结果
+      </h3>
+    </header>
+    <div id="result-content" class="wiki-content rendered-content" style="margin-bottom:1.25rem;"></div>
 
-    <div id="result-references">
-      <h4>参考页面</h4>
-      <ul id="reference-list"></ul>
-    </div>
+    <section id="result-references" class="mb-2">
+      <h4 style="display:flex;align-items:center;gap:0.35rem;font-size:1rem;margin:0 0 0.5rem;">
+        <i class="lucide-book-marked" aria-hidden="true"></i>
+        参考页面
+      </h4>
+      <ul id="reference-list" style="margin:0;padding-left:1.25rem;"></ul>
+    </section>
 
-    <footer>
+    <footer style="padding:0;margin:0;border:none;">
       <form method="POST" id="save-page-form"
             action="{{ url_for('ops.save_query_page', username=username, repo_slug=repo.slug) }}">
         <input type="hidden" name="content" id="save-content">
         <input type="hidden" name="query" id="save-query">
-        <button type="submit" class="outline">保存为 Wiki 页面</button>
+        <button type="submit" class="action-btn action-btn-primary">
+          <i class="lucide-save" aria-hidden="true"></i>
+          保存为 Wiki 页面
+        </button>
       </form>
     </footer>
   </article>
 </div>
 
 <div id="query-error" hidden>
-  <article class="flash flash-error">
+  <article class="flash-toast flash-error" role="alert" style="display:flex;align-items:flex-start;gap:0.5rem;">
+    <i class="lucide-alert-circle" aria-hidden="true" style="flex-shrink:0;margin-top:0.1rem;"></i>
     <span id="error-message"></span>
   </article>
 </div>

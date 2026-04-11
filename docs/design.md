@@ -19,7 +19,7 @@
 |------|------|
 | 内部系统，无需高可用 | 单进程部署，MySQL |
 | 前后端不分离 | Flask + Jinja2 服务端渲染 |
-| 架构尽量简单 | 无消息队列、无 Redis、无 webpack |
+| 架构尽量简单 | Python threading 后台任务队列，无 Celery/Redis/webpack |
 | 保持原汁原味 | Wiki 就是磁盘上的 markdown 文件，可用 Obsidian 直接打开 |
 | LLM 接口 | 仅 OpenAI 兼容接口（覆盖 OpenAI/DeepSeek/Ollama 等） |
 | 文档解析 | 调用已部署的 MinerU 服务（http://172.36.237.175:8000） |
@@ -224,11 +224,14 @@ CREATE TABLE repos (
 CREATE TABLE tasks (
     id            INT AUTO_INCREMENT PRIMARY KEY,
     repo_id       INT NOT NULL,
-    type          ENUM('ingest', 'query', 'lint') NOT NULL,
-    status        ENUM('pending', 'running', 'done', 'error') NOT NULL,
-    input_data    TEXT,           -- JSON：来源文件名或查询文本
-    output_data   LONGTEXT,      -- JSON：结果摘要（可能较大）
+    type          VARCHAR(20) NOT NULL,
+    status        VARCHAR(20) NOT NULL DEFAULT 'queued',
+    input_data    TEXT,
+    output_data   LONGTEXT,
+    progress      INT NOT NULL DEFAULT 0,
+    progress_msg  TEXT,
     created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    started_at    DATETIME,
     finished_at   DATETIME,
     FOREIGN KEY (repo_id) REFERENCES repos(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -306,6 +309,8 @@ POST /{username}/{repo}/query            → 提交查询
 POST /{username}/{repo}/query/save       → 保存回答为 Wiki 页面
 POST /{username}/{repo}/lint             → 触发维护检查
 POST /{username}/{repo}/lint/apply       → 应用修复建议
+GET  /{username}/{repo}/tasks              → 任务队列看板（实时进度）
+GET  /api/tasks/{task_id}/status           → 任务状态 JSON API
 
 Schema：
 GET  /{username}/{repo}/schema           → 查看 Schema
@@ -335,14 +340,14 @@ GET  /{username}/{repo}/log              → 查看操作日志（log.md）
 
 ```
 # LLM 配置（对话/生成）
-LLM_API_BASE=https://api.lkeap.cloud.tencent.com/v1
-LLM_API_KEY=sk-xxx
-LLM_MODEL=deepseek-v3
+LLM_API_BASE=http://172.36.237.245:30000/v1
+LLM_API_KEY=none
+LLM_MODEL=qwen35-27b
 LLM_MAX_TOKENS=16384
 
 # Embedding 模型（向量化，可与 LLM 使用不同的服务）
-EMBEDDING_API_BASE=https://api.lkeap.cloud.tencent.com/v1
-EMBEDDING_API_KEY=sk-xxx
+EMBEDDING_API_BASE=http://172.36.237.245:11434/v1
+EMBEDDING_API_KEY=
 EMBEDDING_MODEL=bge-m3
 EMBEDDING_DIMENSIONS=1024
 
@@ -531,6 +536,7 @@ open-llm-wiki/
 ├── qdrant_service.py      ← Qdrant 向量检索服务（embedding + 读写）
 ├── mineru_client.py       ← MinerU 文档解析客户端（HTTP 调用）
 ├── utils.py               ← 工具函数（markdown 渲染、文件处理、slug 生成）
+├── task_worker.py         ← 后台任务队列 Worker（threading daemon）
 ├── requirements.txt       ← Python 依赖
 ├── .env.example           ← 环境变量模板
 ├── templates/             ← Jinja2 模板
@@ -552,7 +558,8 @@ open-llm-wiki/
 │   │   └── view.html      ← 查看来源
 │   └── ops/
 │       ├── query.html     ← 查询界面
-│       └── lint.html      ← 维护报告
+│       ├── lint.html      ← 维护报告
+│       └── tasks.html     ← 任务队列看板
 ├── static/
 │   ├── css/
 │   │   └── style.css      ← 样式（使用 Pico CSS 或类似极简框架）
@@ -589,25 +596,19 @@ pyyaml>=6.0
 
 ### 8.3 异步处理
 
-摄入操作可能耗时较长（多步 LLM 调用）。采用 **SSE（Server-Sent Events）** 实时推送进度：
+摄入操作可能耗时较长（多步 LLM 调用）。采用**后台任务队列 + SSE 进度轮询**：
 
-```python
-@app.route('/<username>/<repo>/ingest/<filename>', methods=['POST'])
-@login_required
-def ingest(username, repo, filename):
-    task = create_task(repo_id, 'ingest', filename)
-    return redirect(url_for('ingest_progress', task_id=task.id))
+**架构**：
+- 上传文件后自动创建 `status=queued` 的摄入任务
+- `TaskWorker`（Python daemon thread）轮询 DB 取任务执行
+- 多 gunicorn worker 下用乐观锁（`UPDATE ... WHERE status='queued'`）防重复
+- SSE 端点轮询 DB 读进度，不在 HTTP 线程内执行 LLM
 
-@app.route('/task/<task_id>/stream')
-def ingest_stream(task_id):
-    def generate():
-        for step in wiki_engine.ingest(repo, filename):
-            yield f"data: {json.dumps(step)}\n\n"
-            # step: {"phase": "analyze", "progress": 30, "message": "提取关键实体..."}
-    return Response(generate(), mimetype='text/event-stream')
-```
+**任务状态流转**：`queued → running → done / failed`
 
-前端用 `EventSource` 监听，实时显示进度条和步骤信息。无需 WebSocket、无需 Celery。
+**进度追踪**：Task 表的 `progress`（0-100）和 `progress_msg` 字段由 Worker 实时更新，前端通过 SSE 或 JSON API 轮询展示。
+
+**任务队列看板**（`/{user}/{repo}/tasks`）：显示所有任务的状态、进度条、耗时，JS 自动刷新。
 
 ### 8.4 Markdown 渲染增强
 
@@ -634,20 +635,22 @@ Wiki 页面需要特殊处理：
 
 ```python
 # mineru_client.py 核心逻辑
+import os
+
 class MineruClient:
     def __init__(self, base_url):
         self.base_url = base_url
 
-    def parse_file(self, file_path: str) -> str:
-        """同步解析文件，返回 markdown 内容"""
+    def parse_file(self, file_path: str) -> dict:
+        """同步解析文件，返回包含 md_content 的字典"""
         with open(file_path, 'rb') as f:
             response = httpx.post(
                 f"{self.base_url}/file_parse",
-                files={"files": f},
-                params={"return_md": True},
-                timeout=300  # 大文件可能需要较长时间
+                files=[("files", (os.path.basename(file_path), f))],
+                data={"return_md": "true"},
+                timeout=300
             )
-        return response.json()  # 返回 markdown 内容
+        return self._extract_md(response.json())
 
     def health_check(self) -> bool:
         resp = httpx.get(f"{self.base_url}/health")
@@ -751,8 +754,8 @@ class QdrantService:
 
 **Embedding 模型**：通过 OpenAI 兼容接口调用，可独立配置（与 LLM 用不同模型/地址）：
 ```
-EMBEDDING_API_BASE=https://api.lkeap.cloud.tencent.com/v1
-EMBEDDING_API_KEY=sk-xxx
+EMBEDDING_API_BASE=http://172.36.237.245:11434/v1
+EMBEDDING_API_KEY=
 EMBEDDING_MODEL=bge-m3          # 或其他 embedding 模型
 EMBEDDING_DIMENSIONS=1024
 ```
@@ -1174,6 +1177,7 @@ open-llm-wiki/
 ├── qdrant_service.py      ← Qdrant 向量检索
 ├── mineru_client.py       ← MinerU 文档解析
 ├── utils.py               ← 工具函数
+├── task_worker.py         ← 后台任务 Worker
 ├── exceptions.py          ← 自定义异常
 ├── Makefile               ← 常用命令
 ├── pyproject.toml         ← Ruff / 项目元数据
@@ -1196,6 +1200,9 @@ open-llm-wiki/
 │   ├── wiki/
 │   ├── source/
 │   └── ops/
+│       ├── query.html
+│       ├── lint.html
+│       └── tasks.html    ← 任务队列看板
 ├── static/
 │   ├── css/
 │   └── js/

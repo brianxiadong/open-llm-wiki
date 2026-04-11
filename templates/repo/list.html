@@ -3,40 +3,59 @@
 {% block title %}{{ username }} 的知识库 - Open LLM Wiki{% endblock %}
 
 {% block content %}
-<div class="repo-list-header">
+<header class="page-header">
   <h2>{{ username }} 的知识库</h2>
-  {% if current_user and current_user.is_authenticated and current_user.username == username %}
-  <a href="{{ url_for('repo.new_repo') }}" role="button">+ 新建知识库</a>
-  {% endif %}
-</div>
+  <div class="page-header-actions">
+    {% if current_user and current_user.is_authenticated and current_user.username == username %}
+    <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary">
+      <i class="lucide-plus" aria-hidden="true"></i>
+      新建知识库
+    </a>
+    {% endif %}
+  </div>
+</header>
 
 {% if repos %}
 <div class="repo-grid">
   {% for repo in repos %}
   <article class="repo-card">
     <a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}" class="repo-card-link">
-      <header>
-        <h3>{{ repo.name }}</h3>
-      </header>
+      <h3>{{ repo.name }}</h3>
       <p class="repo-desc">{{ repo.description|truncate(100) if repo.description else '暂无描述' }}</p>
-      <footer>
+      <footer class="repo-card-footer">
         <div class="repo-stats">
-          <small>📄 {{ repo.source_count }} 来源</small>
-          <small>📝 {{ repo.page_count }} 页面</small>
+          <span class="repo-stat" title="来源数量">
+            <i class="lucide-file-text" aria-hidden="true"></i>
+            {{ repo.source_count }}
+          </span>
+          <span class="repo-stat" title="页面数量">
+            <i class="lucide-book-open" aria-hidden="true"></i>
+            {{ repo.page_count }}
+          </span>
         </div>
-        <small class="repo-updated">更新于 {{ repo.updated_at.strftime('%Y-%m-%d') if repo.updated_at }}</small>
+        <span class="repo-updated">
+          {% if repo.updated_at %}
+          更新于 {{ repo.updated_at.strftime('%Y-%m-%d') }}
+          {% else %}
+          —
+          {% endif %}
+        </span>
       </footer>
     </a>
   </article>
   {% endfor %}
 </div>
 {% else %}
-<article class="empty-state">
+<div class="empty-state">
+  <i class="lucide-library" aria-hidden="true"></i>
   <h3>还没有知识库</h3>
-  <p>创建一个知识库，开始整理和管理你的知识。</p>
+  <p>创建一个知识库，开始整理和管理你的文档与笔记。</p>
   {% if current_user and current_user.is_authenticated and current_user.username == username %}
-  <a href="{{ url_for('repo.new_repo') }}" role="button">创建第一个知识库</a>
+  <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary">
+    <i class="lucide-plus" aria-hidden="true"></i>
+    创建第一个知识库
+  </a>
   {% endif %}
-</article>
+</div>
 {% endif %}
 {% endblock %}

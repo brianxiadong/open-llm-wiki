@@ -9,38 +9,52 @@
   {% block head %}{% endblock %}
 </head>
 <body>
-  <nav class="container-fluid">
-    <ul>
-      <li><a href="{{ url_for('index') }}" class="brand"><strong>Open LLM Wiki</strong></a></li>
-    </ul>
-    <ul>
-      {% if current_user and current_user.is_authenticated %}
-      <li>
-        <details class="dropdown">
-          <summary>{{ current_user.display_name or current_user.username }}</summary>
-          <ul dir="rtl">
-            <li><a href="{{ url_for('repo.list_repos', username=current_user.username) }}">我的知识库</a></li>
-            <li><a href="{{ url_for('user.settings') }}">设置</a></li>
-            <li><a href="{{ url_for('auth.logout') }}">退出登录</a></li>
-          </ul>
-        </details>
-      </li>
-      {% else %}
-      <li><a href="{{ url_for('auth.login') }}">登录</a></li>
-      <li><a href="{{ url_for('auth.register') }}" role="button" class="outline">注册</a></li>
-      {% endif %}
-    </ul>
-  </nav>
+  <header class="site-header">
+    <nav class="container">
+      <ul>
+        <li>
+          <a href="{{ url_for('index') }}" class="brand">
+            <i class="lucide-book-open"></i>
+            <span>Open LLM Wiki</span>
+          </a>
+        </li>
+      </ul>
+      <ul>
+        {% if current_user and current_user.is_authenticated %}
+        <li>
+          <a href="{{ url_for('repo.list_repos', username=current_user.username) }}" class="nav-link">
+            <i class="lucide-library"></i> 我的知识库
+          </a>
+        </li>
+        <li>
+          <details class="dropdown">
+            <summary class="avatar-trigger">
+              <span class="avatar-circle">{{ (current_user.display_name or current_user.username)[0]|upper }}</span>
+            </summary>
+            <ul dir="rtl">
+              <li><a href="{{ url_for('user.settings') }}"><i class="lucide-settings"></i> 设置</a></li>
+              <li><a href="{{ url_for('auth.logout') }}"><i class="lucide-log-out"></i> 退出登录</a></li>
+            </ul>
+          </details>
+        </li>
+        {% else %}
+        <li><a href="{{ url_for('auth.login') }}" class="nav-link">登录</a></li>
+        <li><a href="{{ url_for('auth.register') }}" role="button" class="btn-nav-register">注册</a></li>
+        {% endif %}
+      </ul>
+    </nav>
+  </header>
 
-  <main class="container">
+  <main class="container main-content">
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
-    <div class="flash-messages">
+    <div class="flash-stack">
       {% for category, message in messages %}
-      <article class="flash flash-{{ category }}" role="alert">
+      <div class="flash-toast flash-{{ category }}" role="alert">
+        <i class="lucide-{% if category == 'success' %}check-circle{% elif category == 'error' or category == 'danger' %}alert-circle{% elif category == 'warning' %}alert-triangle{% else %}info{% endif %}"></i>
         <span>{{ message }}</span>
         <button class="flash-close" aria-label="关闭">&times;</button>
-      </article>
+      </div>
       {% endfor %}
     </div>
     {% endif %}
@@ -49,11 +63,11 @@
     {% block content %}{% endblock %}
   </main>
 
-  <footer class="container-fluid">
-    <hr>
-    <p class="footer-text">Open LLM Wiki &mdash; 基于大语言模型的知识库平台</p>
+  <footer class="site-footer container">
+    <p>Open LLM Wiki &mdash; 基于大语言模型的知识库平台</p>
   </footer>
 
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>

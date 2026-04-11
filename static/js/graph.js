@@ -3,7 +3,8 @@
 
   if (typeof graphData === 'undefined' || !graphData.nodes) return;
 
-  var container = document.getElementById('graph');
+  var container = document.getElementById('graph-container');
+  if (!container) return;
   var width = container.clientWidth;
   var height = container.clientHeight;
 
@@ -15,7 +16,7 @@
     analysis: '#d4a94b'
   };
 
-  var svg = d3.select('#graph')
+  var svg = d3.select('#graph-container')
     .append('svg')
     .attr('viewBox', [0, 0, width, height]);
 
@@ -46,14 +47,16 @@
     .attr('stroke-width', 1.5);
 
   node.append('text')
-    .text(function (d) { return d.label; })
+    .text(function (d) { return d.title || d.label || d.id; })
     .attr('x', 12)
-    .attr('y', 4)
-    .attr('font-size', '12px')
-    .attr('fill', 'var(--pico-color)');
+    .attr('y', 5)
+    .style('font-size', '13px')
+    .style('font-weight', '500')
+    .style('fill', '#1e293b')
+    .style('pointer-events', 'none');
 
   node.append('title')
-    .text(function (d) { return d.label + ' (' + (d.type || '') + ')'; });
+    .text(function (d) { return (d.title || d.label || d.id) + ' (' + (d.type || '') + ')'; });
 
   node.style('cursor', 'pointer')
     .on('click', function (event, d) {

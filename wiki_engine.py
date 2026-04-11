@@ -29,10 +29,23 @@ def _read_file(path: str) -> str:
         return fh.read()
 
 
+def _clean_llm_markdown(text: str) -> str:
+    """Strip wrapping code fences that LLMs sometimes add around markdown."""
+    stripped = text.strip()
+    if stripped.startswith("```") and not stripped.startswith("---"):
+        first_nl = stripped.find("\n")
+        if first_nl != -1:
+            stripped = stripped[first_nl + 1:]
+        if stripped.rstrip().endswith("```"):
+            stripped = stripped.rstrip()[:-3].rstrip()
+    return stripped
+
+
 def _write_file(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    cleaned = _clean_llm_markdown(content)
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(content)
+        fh.write(cleaned)
 
 
 def _safe_json_loads(text: str) -> dict | list:

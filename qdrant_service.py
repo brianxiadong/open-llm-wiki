@@ -210,6 +210,20 @@ class QdrantService:
         )
         return out
 
+    def delete_page(self, repo_id: int, filename: str) -> None:
+        """Delete a single wiki page vector by filename."""
+        name = self._collection_name(repo_id)
+        point_id = self._stable_point_id(repo_id, filename)
+        logger.info("Qdrant delete_page repo_id=%s filename=%s point_id=%s", repo_id, filename, point_id)
+        try:
+            from qdrant_client.models import PointIdsList
+            self._qdrant.delete(
+                collection_name=name,
+                points_selector=PointIdsList(points=[point_id]),
+            )
+        except Exception as e:
+            logger.warning("Qdrant delete_page failed filename=%s: %s", filename, e)
+
     def delete_collection(self, repo_id: int) -> None:
         name = self._collection_name(repo_id)
         logger.info("Qdrant delete_collection repo_id=%s name=%s", repo_id, name)

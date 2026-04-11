@@ -2,76 +2,187 @@
 
 {% block title %}{{ repo.name }} - Open LLM Wiki{% endblock %}
 
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">
+{% endblock %}
+
 {% block content %}
-<div class="repo-header">
-  <div>
-    <h2>{{ repo.name }}</h2>
-    {% if repo.description %}
-    <p class="repo-description">{{ repo.description }}</p>
+{% set type_groups = [('overview','概览','lucide-layout-dashboard'), ('concept','概念','lucide-lightbulb'), ('entity','实体','lucide-tag'), ('guide','指南','lucide-compass'), ('reference','参考','lucide-book-marked'), ('source','来源','lucide-file-text'), ('analysis','分析','lucide-bar-chart-3')] %}
+
+{# ── Top Bar ────────────────────────────────────────────── #}
+<div class="kb-topbar">
+  <div class="kb-topbar-left">
+    <h1 class="kb-title">{{ repo.name }}</h1>
+    <div class="kb-stats">
+      <span><i class="lucide-file-text" aria-hidden="true"></i> {{ repo.source_count }}</span>
+      <span><i class="lucide-book-open" aria-hidden="true"></i> {{ repo.page_count }}</span>
+    </div>
+  </div>
+  <div class="kb-topbar-right">
+    {% if is_owner %}
+    <details class="dropdown kb-more-menu">
+      <summary class="kb-more-btn">
+        <i class="lucide-ellipsis" aria-hidden="true"></i>
+      </summary>
+      <ul dir="rtl">
+        <li><a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}"><i class="lucide-folder-open"></i> 文档管理</a></li>
+        <li><a href="{{ url_for('ops.task_queue', username=username, repo_slug=repo.slug) }}"><i class="lucide-list-todo"></i> 任务队列</a></li>
+        <li><a href="{{ url_for('wiki.graph', username=username, repo_slug=repo.slug) }}"><i class="lucide-git-branch"></i> 关系图谱</a></li>
+        <li><a href="{{ url_for('ops.lint', username=username, repo_slug=repo.slug) }}"><i class="lucide-shield-check"></i> 维护检查</a></li>
+        <li><a href="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}"><i class="lucide-settings"></i> 设置</a></li>
+      </ul>
+    </details>
     {% endif %}
   </div>
-  <div class="repo-header-stats">
-    <span class="badge">📄 {{ repo.source_count }} 来源</span>
-    <span class="badge">📝 {{ repo.page_count }} 页面</span>
-  </div>
 </div>
 
-<div class="action-bar">
-  <a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}" role="button" class="outline">
-    上传文档
-  </a>
-  <a href="{{ url_for('ops.query', username=username, repo_slug=repo.slug) }}" role="button" class="outline">
-    查询
-  </a>
-  <a href="{{ url_for('ops.lint', username=username, repo_slug=repo.slug) }}" role="button" class="outline secondary">
-    维护检查
-  </a>
-  <a href="{{ url_for('wiki.graph', username=username, repo_slug=repo.slug) }}" role="button" class="outline secondary">
-    关系图谱
-  </a>
-  {% if is_owner %}
-  <a href="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}" role="button" class="outline secondary">
-    设置
-  </a>
-  {% endif %}
-</div>
+{# ── Two-Panel Layout ───────────────────────────────────── #}
+<div class="kb-layout">
 
-<div class="dashboard-layout">
-  <aside class="wiki-sidebar">
-    <nav>
-      {% set type_labels = {'overview': '概览', 'source': '来源', 'entity': '实体', 'concept': '概念', 'analysis': '分析'} %}
-      {% for type_key, type_label in type_labels.items() %}
-      <details {% if type_key == 'overview' %}open{% endif %}>
-        <summary>{{ type_label }}</summary>
-        <ul>
-          {% for page in pages if page.type == type_key %}
+  {# ── Left Sidebar ──────────────────────────────────────── #}
+  <aside class="kb-sidebar">
+
+    {# Upload Zone #}
+    {% if is_owner %}
+    <div class="kb-upload-zone">
+      <form method="POST" enctype="multipart/form-data" id="upload-form"
+            action="{{ url_for('source.upload', username=username, repo_slug=repo.slug) }}">
+        <input type="file" name="file" accept=".md,.txt,.pdf,.doc,.docx,.pptx,.png,.jpg,.jpeg"
+               hidden id="upload-file-input">
+        <label class="kb-upload-label" id="upload-drop-area">
+          <i class="lucide-upload-cloud" aria-hidden="true"></i>
+          <span class="kb-upload-text">拖放或点击上传</span>
+          <span class="kb-upload-hint">支持 PDF / Word / Markdown / 图片</span>
+        </label>
+        <div class="kb-upload-pending" id="upload-pending" hidden>
+          <span class="kb-upload-filename" id="upload-filename"></span>
+          <button type="submit" class="kb-upload-submit">
+            <i class="lucide-arrow-up-circle" aria-hidden="true"></i> 上传
+          </button>
+        </div>
+      </form>
+    </div>
+    {% endif %}
+
+    {# Source Files #}
+    <div class="kb-nav-section">
+      <div class="kb-nav-heading">
+        <i class="lucide-files" aria-hidden="true"></i>
+        <span>文档 ({{ repo.source_count }})</span>
+        <a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}"
+           class="kb-nav-more" title="管理全部文档">
+          <i class="lucide-arrow-right" aria-hidden="true"></i>
+        </a>
+      </div>
+      <ul class="kb-nav-list">
+        {% for src in sources[:8] %}
+        <li class="kb-source-item" {% if src.task_id %}data-task-id="{{ src.task_id }}"{% endif %}>
+          <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}">
+            <i class="lucide-file" aria-hidden="true"></i>
+            {{ src.id }}
+          </a>
+          {% if src.task_status == 'queued' %}
+          <span class="kb-status-badge kb-status-queued" title="排队中">排队</span>
+          {% elif src.task_status == 'running' %}
+          <span class="kb-status-badge kb-status-running" title="{{ src.task_progress_msg }}">{{ src.task_progress }}%</span>
+          {% elif src.ingested %}
+          <span class="kb-status-dot kb-status-done" title="已摄入"></span>
+          {% endif %}
+        </li>
+        {% else %}
+        <li class="kb-nav-empty">暂无文档</li>
+        {% endfor %}
+        {% if sources|length > 8 %}
+        <li class="kb-nav-overflow">
+          <a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}">
+            查看全部 {{ sources|length }} 个文档 →
+          </a>
+        </li>
+        {% endif %}
+      </ul>
+    </div>
+
+    {# Wiki Pages #}
+    <div class="kb-nav-section">
+      <div class="kb-nav-heading">
+        <i class="lucide-book-open" aria-hidden="true"></i>
+        <span>Wiki ({{ repo.page_count }})</span>
+      </div>
+      {% for type_key, type_label, icon_class in type_groups %}
+      {% set typed_pages = pages|selectattr("type", "equalto", type_key)|list %}
+      {% if typed_pages %}
+      <div class="kb-nav-group">
+        <div class="kb-nav-group-title">
+          <i class="{{ icon_class }}" aria-hidden="true"></i> {{ type_label }}
+        </div>
+        <ul class="kb-nav-list">
+          {% for page in typed_pages %}
           <li>
-            <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=page.slug) }}"
-               {% if active_page and active_page.slug == page.slug %}aria-current="page"{% endif %}>
+            <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=page.slug) }}">
               {{ page.title }}
             </a>
           </li>
-          {% else %}
-          <li><small class="muted">暂无{{ type_label }}页面</small></li>
           {% endfor %}
         </ul>
-      </details>
+      </div>
+      {% endif %}
       {% endfor %}
-    </nav>
+      {% if repo.page_count == 0 %}
+      <p class="kb-nav-empty">上传文档后自动生成 Wiki</p>
+      {% endif %}
+    </div>
   </aside>
 
-  <section class="wiki-content">
-    {% if page_content %}
-    {{ page_content|safe }}
-    {% else %}
-    <article class="empty-state">
-      <h3>欢迎使用 {{ repo.name }}</h3>
-      <p>上传文档并摄入后，Wiki 页面将自动生成并显示在这里。</p>
-      <a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}" role="button">
-        开始上传文档
-      </a>
-    </article>
-    {% endif %}
+  {# ── Chat Area ─────────────────────────────────────────── #}
+  <section class="kb-chat" id="chat-area">
+
+    <div class="chat-messages" id="chat-messages">
+      {# Welcome message #}
+      <div class="chat-welcome" id="chat-welcome">
+        <div class="chat-welcome-icon">
+          <i class="lucide-sparkles" aria-hidden="true"></i>
+        </div>
+        <h2>向「{{ repo.name }}」提问</h2>
+        <p>基于知识库中的 {{ repo.page_count }} 个 Wiki 页面回答你的问题</p>
+        {% if repo.page_count > 0 %}
+        <div class="chat-suggestions">
+          <button class="chat-suggestion" data-q="给出这个知识库的整体概述">
+            <i class="lucide-layout-list" aria-hidden="true"></i> 整体概述
+          </button>
+          <button class="chat-suggestion" data-q="这个知识库包含哪些核心概念？">
+            <i class="lucide-lightbulb" aria-hidden="true"></i> 核心概念
+          </button>
+          <button class="chat-suggestion" data-q="不同来源之间有什么矛盾或分歧？">
+            <i class="lucide-git-compare" aria-hidden="true"></i> 矛盾检测
+          </button>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="chat-input-area">
+      <form id="chat-form" class="chat-input-form" autocomplete="off">
+        <div class="chat-input-row">
+          <textarea id="chat-input" name="q" rows="1"
+                    placeholder="输入问题，按 Enter 发送…" required
+                    aria-label="查询内容"></textarea>
+          <button type="submit" id="chat-submit" title="发送">
+            <i class="lucide-send-horizontal" aria-hidden="true"></i>
+          </button>
+        </div>
+      </form>
+    </div>
   </section>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.__chatConfig = {
+    queryUrl: '{{ url_for("ops.query_api", username=username, repo_slug=repo.slug) }}',
+    saveUrl: '{{ url_for("ops.save_query_page", username=username, repo_slug=repo.slug) }}',
+    wikiBaseUrl: '/{{ username }}/{{ repo.slug }}/wiki/'
+  };
+</script>
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
 {% endblock %}
