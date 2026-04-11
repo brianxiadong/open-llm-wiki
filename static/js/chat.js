@@ -151,46 +151,103 @@
     scrollToBottom();
   }
 
-  function addAIMessage(html, refs, markdown, wikiSources, qdrantSources) {
+  function addAIMessage(html, refs, markdown, wikiSources, qdrantSources, confidence, wikiEvidence, chunkEvidence, evidenceSummary) {
     var div = document.createElement('div');
     div.className = 'chat-msg chat-msg-ai';
 
-    // Build dual-channel source panel
+    // -- Confidence badge -------------------------------------------------
+    var confHtml = '';
+    if (confidence && confidence.level) {
+      var levelLabel = { high: '高置信度', medium: '中置信度', low: '低置信度' }[confidence.level] || confidence.level;
+      var reasons = confidence.reasons || [];
+      var reasonsHtml = reasons.length
+        ? '<div class="confidence-reasons hidden">' + reasons.map(function(r) {
+            return '<span class="confidence-reason-item">' + escapeHtml(r) + '</span>';
+          }).join('') + '</div>'
+        : '';
+      confHtml = '<div class="confidence-badge confidence-' + confidence.level + '" data-expanded="false">' +
+        '<i class="lucide-shield-check" aria-hidden="true"></i>' +
+        '<span>' + escapeHtml(levelLabel) + '</span>' +
+        (reasons.length ? '<button class="confidence-toggle" type="button" aria-label="查看原因">▾</button>' : '') +
+        reasonsHtml + '</div>';
+      if (confidence.level === 'low') {
+        confHtml = '<div class="low-confidence-warning">' +
+          '<i class="lucide-alert-triangle" aria-hidden="true"></i> ' +
+          '此回答证据有限，请谨慎参考</div>' + confHtml;
+      }
+    }
+
+    // -- Wiki evidence panel ----------------------------------------------
+    var wikiEvHtml = '';
+    if (wikiEvidence && wikiEvidence.length) {
+      wikiEvHtml = '<div class="evidence-panel">' +
+        '<div class="evidence-panel-header"><i class="lucide-book-open" aria-hidden="true"></i> LLM Wiki 结构证据 (' + wikiEvidence.length + ')</div>' +
+        '<div class="evidence-items">';
+      wikiEvidence.forEach(function(e) {
+        wikiEvHtml += '<div class="evidence-item evidence-wiki">' +
+          '<span class="badge badge-' + escapeHtml(e.type || 'concept') + '">' + escapeHtml(e.type || '') + '</span> ' +
+          '<a href="' + escapeHtml(e.url || '#') + '">' + escapeHtml(e.title || e.filename || '') + '</a>' +
+          '<span class="evidence-reason">' + escapeHtml(e.reason || '') + '</span>' +
+          '</div>';
+      });
+      wikiEvHtml += '</div></div>';
+    }
+
+    // -- Chunk evidence panel ---------------------------------------------
+    var chunkEvHtml = '';
+    if (chunkEvidence && chunkEvidence.length) {
+      chunkEvHtml = '<div class="evidence-panel">' +
+        '<div class="evidence-panel-header"><i class="lucide-file-search" aria-hidden="true"></i> 原文片段证据 (' + chunkEvidence.length + ')</div>' +
+        '<div class="evidence-items">';
+      chunkEvidence.forEach(function(e) {
+        var scorePct = e.score ? Math.round(e.score * 100) : 0;
+        chunkEvHtml += '<div class="evidence-item evidence-chunk">' +
+          '<a href="' + escapeHtml(e.url || '#') + '" class="evidence-chunk-title">' + escapeHtml(e.title || e.filename || '') + '</a>' +
+          (e.heading ? '<span class="evidence-heading">§ ' + escapeHtml(e.heading) + '</span>' : '') +
+          '<div class="evidence-snippet">' + escapeHtml((e.snippet || '').substring(0, 150)) + '</div>' +
+          '<span class="evidence-score">' + scorePct + '%</span>' +
+          '</div>';
+      });
+      chunkEvHtml += '</div></div>';
+    }
+
+    // -- Legacy source panel (fallback if no new evidence) ----------------
     var sourceHtml = '';
-    var hasWiki = wikiSources && wikiSources.length;
-    var hasQdrant = qdrantSources && qdrantSources.length;
-    if (hasWiki || hasQdrant) {
-      sourceHtml = '<div class="chat-sources">';
-      sourceHtml += '<div class="chat-sources-header">' +
-        '<i class="lucide-git-branch" aria-hidden="true"></i> 溯源</div>';
-      sourceHtml += '<div class="chat-sources-body">';
+    if (!wikiEvidence || !wikiEvidence.length) {
+      var hasWiki = wikiSources && wikiSources.length;
+      var hasQdrant = qdrantSources && qdrantSources.length;
+      if (hasWiki || hasQdrant) {
+        sourceHtml = '<div class="chat-sources">';
+        sourceHtml += '<div class="chat-sources-header">' +
+          '<i class="lucide-git-branch" aria-hidden="true"></i> 溯源</div>';
+        sourceHtml += '<div class="chat-sources-body">';
 
-      if (hasWiki) {
-        sourceHtml += '<div class="chat-source-channel">' +
-          '<span class="chat-source-tag chat-source-tag-wiki">' +
-          '<i class="lucide-book-open" aria-hidden="true"></i> LLM Wiki</span>';
-        wikiSources.forEach(function(r) {
-          sourceHtml += '<a href="' + r.url + '" class="chat-source-link">' +
-            escapeHtml(r.title) + '</a>';
-        });
-        sourceHtml += '</div>';
+        if (hasWiki) {
+          sourceHtml += '<div class="chat-source-channel">' +
+            '<span class="chat-source-tag chat-source-tag-wiki">' +
+            '<i class="lucide-book-open" aria-hidden="true"></i> LLM Wiki</span>';
+          wikiSources.forEach(function(r) {
+            sourceHtml += '<a href="' + r.url + '" class="chat-source-link">' +
+              escapeHtml(r.title) + '</a>';
+          });
+          sourceHtml += '</div>';
+        }
+
+        if (hasQdrant) {
+          sourceHtml += '<div class="chat-source-channel">' +
+            '<span class="chat-source-tag chat-source-tag-qdrant">' +
+            '<i class="lucide-database" aria-hidden="true"></i> 向量检索</span>';
+          qdrantSources.forEach(function(r) {
+            var inWiki = hasWiki && wikiSources.some(function(w) { return w.filename === r.filename; });
+            sourceHtml += '<a href="' + r.url + '" class="chat-source-link' +
+              (inWiki ? ' chat-source-link-overlap" title="与 LLM Wiki 通道重合"' : '"') +
+              '>' + escapeHtml(r.title) + (inWiki ? ' ↑' : '') + '</a>';
+          });
+          sourceHtml += '</div>';
+        }
+
+        sourceHtml += '</div></div>';
       }
-
-      if (hasQdrant) {
-        sourceHtml += '<div class="chat-source-channel">' +
-          '<span class="chat-source-tag chat-source-tag-qdrant">' +
-          '<i class="lucide-database" aria-hidden="true"></i> 向量检索</span>';
-        qdrantSources.forEach(function(r) {
-          // mark pages that were also in wiki path
-          var inWiki = hasWiki && wikiSources.some(function(w) { return w.filename === r.filename; });
-          sourceHtml += '<a href="' + r.url + '" class="chat-source-link' +
-            (inWiki ? ' chat-source-link-overlap" title="与 LLM Wiki 通道重合"' : '"') +
-            '>' + escapeHtml(r.title) + (inWiki ? ' ↑' : '') + '</a>';
-        });
-        sourceHtml += '</div>';
-      }
-
-      sourceHtml += '</div></div>';
     }
 
     var saveBtn = '';
@@ -205,11 +262,28 @@
     div.innerHTML = '<div class="chat-msg-avatar chat-msg-avatar-ai">' +
       '<i class="lucide-bot" aria-hidden="true"></i></div>' +
       '<div class="chat-msg-body">' +
+      confHtml +
       '<div class="chat-msg-content rendered-content">' + html + '</div>' +
-      sourceHtml + saveBtn + '</div>';
+      wikiEvHtml + chunkEvHtml + sourceHtml + saveBtn + '</div>';
 
     messages.appendChild(div);
     initIcons(div);
+
+    // confidence toggle
+    var badge = div.querySelector('.confidence-badge');
+    var toggle = badge && badge.querySelector('.confidence-toggle');
+    if (toggle) {
+      toggle.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        var reasons = badge.querySelector('.confidence-reasons');
+        if (reasons) {
+          var expanded = badge.dataset.expanded === 'true';
+          reasons.classList.toggle('hidden', expanded);
+          badge.dataset.expanded = expanded ? 'false' : 'true';
+          toggle.textContent = expanded ? '▾' : '▴';
+        }
+      });
+    }
 
     var copyBtnEl = div.querySelector('.chat-copy-btn');
     if (copyBtnEl && markdown) {
@@ -310,7 +384,8 @@
             addErrorMessage(data.error);
           } else {
             addAIMessage(data.html || '', data.references || [],
-              data.markdown || '', data.wiki_sources || [], data.qdrant_sources || []);
+              data.markdown || '', data.wiki_sources || [], data.qdrant_sources || [],
+              data.confidence, data.wiki_evidence, data.chunk_evidence, data.evidence_summary);
           }
         })
         .catch(function () {
@@ -361,20 +436,29 @@
       var answer = d.answer || answerChunks.join('');
       var wikiSources = d.wiki_sources || [];
       var qdrantSources = d.qdrant_sources || [];
+      var confidence = d.confidence || null;
+      var wikiEvidence = d.wiki_evidence || null;
+      var chunkEvidence = d.chunk_evidence || null;
+      var evidenceSummary = d.evidence_summary || '';
 
       fetch(cfg.queryUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ q: q, _rendered_answer: answer,
-                               _wiki_sources: wikiSources, _qdrant_sources: qdrantSources })
+                               _wiki_sources: wikiSources, _qdrant_sources: qdrantSources,
+                               _confidence: confidence, _wiki_evidence: wikiEvidence,
+                               _chunk_evidence: chunkEvidence, _evidence_summary: evidenceSummary })
       })
         .then(function (r) { return r.json(); })
         .then(function (data) {
           addAIMessage(data.html || '', data.references || [],
-            data.markdown || '', data.wiki_sources || [], data.qdrant_sources || []);
+            data.markdown || '', data.wiki_sources || [], data.qdrant_sources || [],
+            data.confidence || confidence, data.wiki_evidence || wikiEvidence,
+            data.chunk_evidence || chunkEvidence, data.evidence_summary || evidenceSummary);
         })
         .catch(function () {
-          addAIMessage('<p>' + escapeHtml(answer) + '</p>', [], answer, wikiSources, qdrantSources);
+          addAIMessage('<p>' + escapeHtml(answer) + '</p>', [], answer, wikiSources, qdrantSources,
+            confidence, wikiEvidence, chunkEvidence, evidenceSummary);
         });
       isLoading = false;
       submitBtn.disabled = false;
