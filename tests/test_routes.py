@@ -602,3 +602,69 @@ def test_query_stream_done_has_evidence(sample_repo, app):
     assert b"confidence" in resp.data
     assert b"wiki_evidence" in resp.data
     assert b"chunk_evidence" in resp.data
+
+
+# -- API Token -----------------------------------------------------------------
+
+
+def test_list_tokens_page(auth_client):
+    resp = auth_client.get("/user/settings/tokens")
+    assert resp.status_code == 200
+    assert "API Tokens" in resp.data.decode("utf-8")
+
+
+def test_create_and_revoke_token(auth_client, app):
+    resp = auth_client.post(
+        "/user/settings/tokens/create",
+        data={"name": "ci-token"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    with app.app_context():
+        from models import ApiToken
+        t = ApiToken.query.filter_by(name="ci-token").first()
+        assert t is not None
+        assert t.is_active is True
+        token_id = t.id
+
+    resp2 = auth_client.post(
+        f"/user/settings/tokens/{token_id}/revoke",
+        follow_redirects=True,
+    )
+    assert resp2.status_code == 200
+    with app.app_context():
+        from models import ApiToken
+        t2 = ApiToken.query.get(token_id)
+        assert t2.is_active is False
+
+
+def test_api_token_bearer_auth(app, sample_repo):
+    import hashlib
+    import secrets
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from models import ApiToken, User, db
+        u = User.query.filter_by(username="alice").first()
+        raw = secrets.token_urlsafe(32)
+        h = hashlib.sha256(raw.encode()).hexdigest()
+        t = ApiToken(user_id=u.id, name="bearer-test", token_hash=h)
+        db.session.add(t)
+        db.session.commit()
+    resp = app.test_client().get(
+        f"/alice/{slug}/tasks",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 200
+
+
+# -- Audit Log -----------------------------------------------------------------
+
+
+def test_admin_audit_log_accessible(auth_client, app):
+    with app.app_context():
+        from config import Config
+        Config.ADMIN_USERNAME = "alice"
+    resp = auth_client.get("/admin/audit")
+    assert resp.status_code == 200
+    assert "审计" in resp.data.decode("utf-8")

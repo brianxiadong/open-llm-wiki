@@ -5,6 +5,10 @@
 {% block content %}
 <h1>管理后台</h1>
 
+<div style="display:flex;gap:0.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+  <a href="{{ url_for('admin.audit_log') }}" class="action-btn">审计日志</a>
+</div>
+
 <div class="admin-stats-grid">
   <div class="admin-stat-card">
     <div class="admin-stat-value">{{ user_count }}</div>

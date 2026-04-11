@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}审计日志 - 管理后台{% endblock %}
+
+{% block content %}
+<h1>审计日志</h1>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+  <a href="{{ url_for('admin.dashboard') }}" class="action-btn">← 返回概览</a>
+</div>
+
+<article style="padding:0;">
+  <table>
+    <thead>
+      <tr>
+        <th style="white-space:nowrap;">时间</th>
+        <th>用户</th>
+        <th>操作</th>
+        <th>资源</th>
+        <th>IP</th>
+        <th>详情</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in logs.items %}
+      <tr>
+        <td style="white-space:nowrap;font-size:0.83rem;">{{ log.created_at.strftime('%m-%d %H:%M') }}</td>
+        <td style="font-size:0.88rem;">{{ log.username or '—' }}</td>
+        <td><span class="badge" style="background:var(--pico-muted-border-color);font-size:0.78rem;">{{ log.action }}</span></td>
+        <td style="font-size:0.83rem;">
+          {% if log.resource_type %}{{ log.resource_type }}{% endif %}
+          {% if log.resource_id %}<span style="color:var(--pico-muted-color);">#{{ log.resource_id }}</span>{% endif %}
+        </td>
+        <td style="font-size:0.80rem;color:var(--pico-muted-color);">{{ log.ip or '—' }}</td>
+        <td style="font-size:0.80rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+            title="{{ log.detail or '' }}">{{ log.detail or '' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" style="text-align:center;color:var(--pico-muted-color);padding:2rem;">暂无审计记录</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+
+<div style="display:flex;gap:0.5rem;justify-content:center;align-items:center;margin-top:1rem;">
+  {% if logs.has_prev %}
+  <a href="?page={{ logs.prev_num }}" class="action-btn">← 上一页</a>
+  {% endif %}
+  <span style="color:var(--pico-muted-color);font-size:0.88rem;">第 {{ logs.page }} / {{ logs.pages }} 页，共 {{ logs.total }} 条</span>
+  {% if logs.has_next %}
+  <a href="?page={{ logs.next_num }}" class="action-btn">下一页 →</a>
+  {% endif %}
+</div>
+{% endblock %}

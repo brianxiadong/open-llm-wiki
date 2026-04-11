@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}API Tokens - Open LLM Wiki{% endblock %}
+
+{% block content %}
+<nav aria-label="面包屑导航">
+  <ul class="breadcrumb">
+    <li><a href="{{ url_for('index') }}">首页</a></li>
+    <li><a href="{{ url_for('user.settings') }}">个人设置</a></li>
+    <li>API Tokens</li>
+  </ul>
+</nav>
+
+<div class="page-header">
+  <h2 style="display:flex;align-items:center;gap:0.5rem;margin:0">
+    <i class="lucide-key-round" style="font-size:1.5rem;color:var(--brand)" aria-hidden="true"></i>
+    API Tokens
+  </h2>
+</div>
+
+<div class="form-container">
+  <article class="mb-2">
+    <header>
+      <h3 style="margin:0 0 0.75rem;font-size:1.05rem">创建新 Token</h3>
+    </header>
+    <form method="POST" action="{{ url_for('user.create_token') }}" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+      <input type="text" name="name" placeholder="Token 名称（如 my-script、ci-bot）" required style="flex:1;min-width:200px;">
+      <button type="submit" class="action-btn action-btn-primary">创建</button>
+    </form>
+    <p class="muted" style="font-size:0.82rem;margin-top:0.5rem;">Token 创建后只显示一次，请立即复制保存。</p>
+  </article>
+
+  <article style="padding:0 0 0.5rem;">
+    <header style="padding:0.75rem 1rem 0;">
+      <h3 style="margin:0;font-size:1.05rem">已有 Tokens（{{ tokens|length }}）</h3>
+    </header>
+    {% if tokens %}
+    <table>
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>创建时间</th>
+          <th>最后使用</th>
+          <th>状态</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in tokens %}
+        <tr>
+          <td><strong>{{ t.name }}</strong></td>
+          <td style="font-size:0.85rem;">{{ t.created_at.strftime('%Y-%m-%d') }}</td>
+          <td style="font-size:0.85rem;">{{ t.last_used_at.strftime('%Y-%m-%d %H:%M') if t.last_used_at else '从未使用' }}</td>
+          <td>
+            {% if t.is_active %}
+            <span class="badge badge-source">有效</span>
+            {% else %}
+            <span class="badge" style="background:var(--pico-muted-color);color:#fff;">已吊销</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if t.is_active %}
+            <form method="POST" action="{{ url_for('user.revoke_token', token_id=t.id) }}" style="display:inline;">
+              <button type="submit" style="background:none;border:none;color:var(--error);cursor:pointer;font-size:0.85rem;padding:0.2rem 0.4rem;"
+                      onclick="return confirm('确认吊销此 Token？吊销后无法恢复。')">吊销</button>
+            </form>
+            {% else %}
+            <span style="color:var(--pico-muted-color);font-size:0.85rem;">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--pico-muted-color);padding:1rem;">还没有 Token。创建一个以供脚本或 CI/CD 调用。</p>
+    {% endif %}
+  </article>
+
+  <article>
+    <header><h3 style="margin:0 0 0.5rem;font-size:1.05rem;">使用方法</h3></header>
+    <pre style="font-size:0.83rem;background:var(--pico-card-section-color,#f8f9fa);padding:0.75rem;border-radius:6px;overflow-x:auto;"># 查询接口示例
+curl -X POST https://your-domain/alice/my-repo/query \
+  -H "Authorization: Bearer &lt;your-token&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{"q":"你的问题"}'</pre>
+  </article>
+</div>
+{% endblock %}

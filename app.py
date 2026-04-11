@@ -90,6 +90,33 @@ def _is_owner(repo: Repo) -> bool:
     return current_user.is_authenticated and current_user.id == repo.user_id
 
 
+def _audit(
+    action: str,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    detail: str | None = None,
+) -> None:
+    """写入审计日志，失败静默。"""
+    try:
+        from models import AuditLog
+        uid = current_user.id if current_user and current_user.is_authenticated else None
+        uname = current_user.username if uid else None
+        ip = request.remote_addr if request else None
+        log = AuditLog(
+            user_id=uid,
+            username=uname,
+            action=action,
+            resource_type=resource_type,
+            resource_id=str(resource_id) if resource_id is not None else None,
+            detail=detail,
+            ip=ip,
+        )
+        db.session.add(log)
+        db.session.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("audit log failed: %s", exc)
+
+
 def _enrich_sources(raw_dir: str, repo: Repo) -> list[dict]:
     sources = list_raw_sources(raw_dir)
     ingested_files: set[str] = set()
@@ -231,6 +258,26 @@ def create_app() -> Flask:
     def inject_admin():
         return {"admin_username": Config.ADMIN_USERNAME}
 
+    @app.before_request
+    def _check_api_token():
+        """Bearer token 认证，供脚本和 API 集成调用。"""
+        if current_user.is_authenticated:
+            return
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return
+        raw = auth[7:].strip()
+        if not raw:
+            return
+        import hashlib
+        from models import ApiToken
+        h = hashlib.sha256(raw.encode()).hexdigest()
+        token = ApiToken.query.filter_by(token_hash=h, is_active=True).first()
+        if token:
+            login_user(token.user, remember=False)
+            token.last_used_at = datetime.now(timezone.utc)
+            db.session.commit()
+
     _register_routes(app)
     _register_error_handlers(app)
 
@@ -331,6 +378,7 @@ def _register_routes(app: Flask) -> None:
             user = User.query.filter_by(username=username).first()
             if user and user.check_password(password):
                 login_user(user)
+                _audit("login")
                 next_url = request.args.get("next")
                 return redirect(
                     next_url
@@ -381,6 +429,7 @@ def _register_routes(app: Flask) -> None:
 
     @auth_bp.route("/logout")
     def logout():
+        _audit("logout")
         logout_user()
         return redirect(url_for("auth.login"))
 
@@ -417,6 +466,47 @@ def _register_routes(app: Flask) -> None:
                     flash("密码修改成功", "success")
             return redirect(url_for("user.settings"))
         return render_template("user/settings.html")
+
+    @user_bp.route("/settings/tokens", methods=["GET"])
+    @login_required
+    def list_tokens():
+        from models import ApiToken
+        tokens = (
+            ApiToken.query.filter_by(user_id=current_user.id)
+            .order_by(ApiToken.created_at.desc())
+            .all()
+        )
+        return render_template("user/tokens.html", tokens=tokens)
+
+    @user_bp.route("/settings/tokens/create", methods=["POST"])
+    @login_required
+    def create_token():
+        import hashlib
+        import secrets
+        from models import ApiToken
+        name = request.form.get("name", "").strip()
+        if not name:
+            flash("Token 名称不能为空", "error")
+            return redirect(url_for("user.list_tokens"))
+        raw = secrets.token_urlsafe(32)
+        h = hashlib.sha256(raw.encode()).hexdigest()
+        t = ApiToken(user_id=current_user.id, name=name, token_hash=h)
+        db.session.add(t)
+        db.session.commit()
+        _audit("create_api_token", "api_token", t.id, name)
+        flash(f"Token 已创建（只显示一次，请立即复制）：{raw}", "success")
+        return redirect(url_for("user.list_tokens"))
+
+    @user_bp.route("/settings/tokens/<int:token_id>/revoke", methods=["POST"])
+    @login_required
+    def revoke_token(token_id):
+        from models import ApiToken
+        t = ApiToken.query.filter_by(id=token_id, user_id=current_user.id).first_or_404()
+        t.is_active = False
+        db.session.commit()
+        _audit("revoke_api_token", "api_token", token_id)
+        flash("Token 已吊销", "success")
+        return redirect(url_for("user.list_tokens"))
 
     app.register_blueprint(user_bp)
 
@@ -620,6 +710,7 @@ def _register_routes(app: Flask) -> None:
         if os.path.isdir(repo_path):
             shutil.rmtree(repo_path, ignore_errors=True)
 
+        _audit("delete_repo", "repo", repo.id, repo_slug)
         flash("知识库已删除", "success")
         return redirect(url_for("repo.list_repos", username=username))
 
@@ -1847,6 +1938,15 @@ def _register_routes(app: Flask) -> None:
             disk_bytes=disk_bytes,
             recent_users=recent_users,
         )
+
+    @admin_bp.route("/audit")
+    @login_required
+    def audit_log():
+        _require_admin()
+        page = request.args.get("page", 1, type=int)
+        from models import AuditLog
+        logs = AuditLog.query.order_by(AuditLog.created_at.desc()).paginate(page=page, per_page=50)
+        return render_template("admin/audit.html", logs=logs)
 
     app.register_blueprint(admin_bp)
 
