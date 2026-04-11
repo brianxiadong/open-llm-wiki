@@ -20,19 +20,29 @@
   {% for repo in repos %}
   <article class="repo-card">
     <a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}" class="repo-card-link">
-      <h3>{{ repo.name }}</h3>
+    <h3>{{ repo.name }}
+      {% if repo.is_public %}
+      <span class="badge" style="background:var(--pico-color-green-500);color:white;font-size:0.7rem;">公开</span>
+      {% endif %}
+    </h3>
       <p class="repo-desc">{{ repo.description|truncate(100) if repo.description else '暂无描述' }}</p>
-      <footer class="repo-card-footer">
-        <div class="repo-stats">
-          <span class="repo-stat" title="来源数量">
-            <i class="lucide-file-text" aria-hidden="true"></i>
-            {{ repo.source_count }}
-          </span>
-          <span class="repo-stat" title="页面数量">
-            <i class="lucide-book-open" aria-hidden="true"></i>
-            {{ repo.page_count }}
-          </span>
-        </div>
+        <footer class="repo-card-footer">
+          <div class="repo-stats">
+            <span class="repo-stat" title="来源数量">
+              <i class="lucide-file-text" aria-hidden="true"></i>
+              {{ repo.source_count }}
+            </span>
+            <span class="repo-stat" title="页面数量">
+              <i class="lucide-book-open" aria-hidden="true"></i>
+              {{ repo.page_count }}
+            </span>
+            {% if repo.active_task_count %}
+            <span class="repo-stat repo-stat-active" title="{{ repo.active_task_count }} 个任务处理中">
+              <i class="lucide-loader" aria-hidden="true"></i>
+              {{ repo.active_task_count }} 处理中
+            </span>
+            {% endif %}
+          </div>
         <span class="repo-updated">
           {% if repo.updated_at %}
           更新于 {{ repo.updated_at.strftime('%Y-%m-%d') }}

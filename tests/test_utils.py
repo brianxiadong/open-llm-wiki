@@ -131,3 +131,31 @@ def test_list_raw_sources_skips_hidden_and_assets(tmp_data_dir):
     sources = list_raw_sources(raw_dir)
     names = [s["filename"] for s in sources]
     assert names == ["visible.txt"]
+
+
+def test_schema_templates_in_utils():
+    from utils import SCHEMA_TEMPLATES
+    assert "default" in SCHEMA_TEMPLATES
+    assert "academic" in SCHEMA_TEMPLATES
+    assert len(SCHEMA_TEMPLATES) >= 3
+
+
+def test_create_repo_with_academic_schema(auth_client, app):
+    resp = auth_client.post(
+        "/repos/new",
+        data={
+            "name": "Academic KB",
+            "slug": "academic-kb",
+            "description": "academic",
+            "schema_template": "academic",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    with app.app_context():
+        import os
+        from config import Config
+        schema_path = os.path.join(Config.DATA_DIR, "alice", "academic-kb", "wiki", "schema.md")
+        assert os.path.exists(schema_path)
+        content = open(schema_path).read()
+        assert "学术研究" in content or "paper" in content

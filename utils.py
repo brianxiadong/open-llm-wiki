@@ -199,3 +199,120 @@ updated: YYYY-MM-DD
 - Cross-reference other pages with `[Title](other-page.md)`.
 - Keep each page focused on a single topic.
 """
+
+SCHEMA_ACADEMIC_MD = """\
+---
+title: Wiki Schema — 学术研究
+---
+
+# Wiki Schema — 学术研究
+
+## Page Types
+
+- **paper**: 论文摘要和关键发现。
+- **concept**: 核心理论概念和术语定义。
+- **method**: 研究方法、实验设计、技术实现。
+- **result**: 实验结果、数据集、基准对比。
+- **comparison**: 不同方法/模型的横向对比。
+- **overview**: 某一研究方向的综合综述。
+- **index**: 主目录，按主题分类所有页面。
+- **log**: 摄入日志。
+
+## Frontmatter Fields
+
+```yaml
+---
+title: Paper/Concept Title
+type: paper | concept | method | result | comparison | overview
+tags: [nlp, transformer, etc.]
+source: paper.pdf.md
+evidence_level: strong | moderate | weak
+updated: YYYY-MM-DD
+---
+```
+
+## Conventions
+
+- 摘要页（paper）包含：研究问题、方法、结论、局限性。
+- 在 result 页标注证据等级 (evidence_level)。
+- 对比页使用 Markdown 表格。
+- 交叉引用格式：[作者年份](page.md)。
+"""
+
+SCHEMA_PRODUCT_MD = """\
+---
+title: Wiki Schema — 产品文档
+---
+
+# Wiki Schema — 产品文档
+
+## Page Types
+
+- **feature**: 功能介绍和使用说明。
+- **guide**: 操作教程、快速入门。
+- **reference**: API 文档、配置项、参数表。
+- **faq**: 常见问题与解答。
+- **changelog**: 版本更新记录。
+- **overview**: 产品整体介绍。
+- **index**: 主目录。
+- **log**: 摄入日志。
+
+## Frontmatter Fields
+
+```yaml
+---
+title: Feature Name
+type: feature | guide | reference | faq | changelog | overview
+version: "1.0"
+updated: YYYY-MM-DD
+---
+```
+
+## Conventions
+
+- guide 页使用有序步骤。
+- reference 页使用表格格式。
+- 每个功能页链接到对应的 guide 和 reference。
+"""
+
+SCHEMA_TECH_NOTES_MD = """\
+---
+title: Wiki Schema — 技术笔记
+---
+
+# Wiki Schema — 技术笔记
+
+## Page Types
+
+- **concept**: 技术概念、算法原理。
+- **howto**: 如何解决某个具体问题。
+- **snippet**: 代码片段、命令备忘。
+- **troubleshoot**: 故障排查记录。
+- **overview**: 技术栈整体概述。
+- **index**: 主目录。
+- **log**: 摄入日志。
+
+## Frontmatter Fields
+
+```yaml
+---
+title: Topic Name
+type: concept | howto | snippet | troubleshoot | overview
+tags: [python, docker, etc.]
+updated: YYYY-MM-DD
+---
+```
+
+## Conventions
+
+- snippet 页包含可直接复制的代码块。
+- troubleshoot 页包含：症状、根因、解决方案。
+- 使用 howto 而非 guide（更口语化）。
+"""
+
+SCHEMA_TEMPLATES = {
+    "default": ("通用", DEFAULT_SCHEMA_MD),
+    "academic": ("学术研究", SCHEMA_ACADEMIC_MD),
+    "product": ("产品文档", SCHEMA_PRODUCT_MD),
+    "tech_notes": ("技术笔记", SCHEMA_TECH_NOTES_MD),
+}

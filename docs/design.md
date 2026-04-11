@@ -87,7 +87,13 @@ sources:
 
 ### 3.3 Schema 层（schema.md）
 
-控制 LLM 如何维护该仓库 Wiki 的配置文档。新建仓库时使用默认模板，用户可以随时修改。用户与 LLM 共同演进这个文件。
+控制 LLM 如何维护该仓库 Wiki 的配置文档。新建仓库时可从预设模板选择，用户可以随时修改。用户与 LLM 共同演进这个文件。
+
+预设模板（`utils.SCHEMA_TEMPLATES`）：
+- **通用**（default）：通用页面类型（concept/guide/reference/overview 等）
+- **学术研究**（academic）：paper/concept/method/result/comparison，含证据等级字段
+- **产品文档**（product）：feature/guide/reference/faq/changelog
+- **技术笔记**（tech_notes）：concept/howto/snippet/troubleshoot
 
 Schema 定义：
 - Wiki 的组织结构（有哪些类别的页面）
@@ -261,6 +267,7 @@ CREATE TABLE repos (
     updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     source_count  INT DEFAULT 0,
     page_count    INT DEFAULT 0,
+    is_public     TINYINT(1) NOT NULL DEFAULT 0,
     UNIQUE KEY uniq_user_slug (user_id, slug),
     FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

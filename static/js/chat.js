@@ -462,9 +462,58 @@
     lucide.createIcons({ nodes: root.querySelectorAll('[data-lucide]') });
   }
 
+  /* ── Query history (localStorage) ────────────────────────── */
+  (function initHistory() {
+    var STORAGE_KEY = 'llmwiki_history_' + (cfg.repoSlug || 'default');
+    var MAX_HISTORY = 20;
+    var historyDropdown = document.getElementById('chat-history-dropdown');
+    if (!historyDropdown) return;
+
+    function loadHistory() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+      catch (e) { return []; }
+    }
+
+    function saveToHistory(q) {
+      var hist = loadHistory().filter(function(h) { return h !== q; });
+      hist.unshift(q);
+      if (hist.length > MAX_HISTORY) hist = hist.slice(0, MAX_HISTORY);
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(hist)); } catch (e) {}
+      renderHistory();
+    }
+
+    function renderHistory() {
+      var hist = loadHistory();
+      historyDropdown.innerHTML = '';
+      if (!hist.length) {
+        historyDropdown.innerHTML = '<li style="padding:0.5rem;color:var(--pico-muted-color);font-size:0.85rem;">暂无历史记录</li>';
+        return;
+      }
+      hist.forEach(function(q) {
+        var li = document.createElement('li');
+        li.style.cssText = 'padding:0.4rem 0.75rem;cursor:pointer;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;';
+        li.title = q;
+        li.textContent = q;
+        li.addEventListener('click', function() {
+          input.value = q;
+          input.dispatchEvent(new Event('input'));
+          historyDropdown.parentElement.removeAttribute('open');
+          input.focus();
+        });
+        historyDropdown.appendChild(li);
+      });
+    }
+
+    form.addEventListener('submit', function() {
+      var q = input.value.trim();
+      if (q) saveToHistory(q);
+    }, true);
+
+    renderHistory();
+  })();
+
   /* ── Sidebar task progress polling ──────────────────────── */
-  (function pollSidebarTasks() {
-    var items = document.querySelectorAll('.kb-source-item[data-task-id]');
+  (function pollSidebarTasks() {    var items = document.querySelectorAll('.kb-source-item[data-task-id]');
     if (!items.length) return;
 
     function tick() {

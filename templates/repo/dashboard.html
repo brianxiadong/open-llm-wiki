@@ -176,8 +176,14 @@
           <textarea id="chat-input" name="q" rows="1"
                     placeholder="输入问题，按 Enter 发送…" required
                     aria-label="查询内容"></textarea>
+          <details class="chat-history-btn" id="chat-history-details">
+            <summary title="查询历史">
+              <i data-lucide="history" aria-hidden="true"></i>
+            </summary>
+            <ul id="chat-history-dropdown" dir="rtl" style="min-width:200px;max-height:300px;overflow-y:auto;"></ul>
+          </details>
           <button type="submit" id="chat-submit" title="发送">
-            <i class="lucide-send-horizontal" aria-hidden="true"></i>
+            <i data-lucide="send-horizontal" aria-hidden="true"></i>
           </button>
         </div>
       </form>
@@ -192,7 +198,8 @@
     queryUrl: '{{ url_for("ops.query_api", username=username, repo_slug=repo.slug) }}',
     queryStreamUrl: '{{ url_for("ops.query_stream", username=username, repo_slug=repo.slug) }}',
     saveUrl: '{{ url_for("ops.save_query_page", username=username, repo_slug=repo.slug) }}',
-    wikiBaseUrl: '/{{ username }}/{{ repo.slug }}/wiki/'
+    wikiBaseUrl: '/{{ username }}/{{ repo.slug }}/wiki/',
+    repoSlug: '{{ repo.slug }}',
   };
 </script>
 <script src="{{ url_for('static', filename='js/chat.js') }}"></script>

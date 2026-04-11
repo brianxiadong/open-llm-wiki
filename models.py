@@ -43,6 +43,7 @@ class Repo(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=_utc_now, onupdate=_utc_now)
     source_count = db.Column(db.Integer, nullable=False, default=0)
     page_count = db.Column(db.Integer, nullable=False, default=0)
+    is_public = db.Column(db.Boolean, nullable=False, default=False)
 
     user = db.relationship("User", backref="repos")
     tasks = db.relationship("Task", back_populates="repo")

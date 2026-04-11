@@ -31,6 +31,7 @@ from qdrant_service import QdrantService
 from task_worker import TaskWorker
 from utils import (
     DEFAULT_SCHEMA_MD,
+    SCHEMA_TEMPLATES,
     ensure_repo_dirs,
     extract_links,
     get_backlinks,
@@ -440,16 +441,16 @@ def _register_routes(app: Flask) -> None:
 
             if not name:
                 flash("知识库名称不能为空", "error")
-                return render_template("repo/new.html")
+                return render_template("repo/new.html", schema_templates=SCHEMA_TEMPLATES)
 
             slug = slug_raw or slugify(name)
             if not slug:
                 flash("无法生成有效的 URL 标识", "error")
-                return render_template("repo/new.html")
+                return render_template("repo/new.html", schema_templates=SCHEMA_TEMPLATES)
 
             if Repo.query.filter_by(user_id=current_user.id, slug=slug).first():
                 flash("该标识已被使用", "error")
-                return render_template("repo/new.html")
+                return render_template("repo/new.html", schema_templates=SCHEMA_TEMPLATES)
 
             repo = Repo(
                 user_id=current_user.id,
@@ -464,8 +465,10 @@ def _register_routes(app: Flask) -> None:
             wiki_dir = os.path.join(base, "wiki")
             now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+            schema_template_key = request.form.get("schema_template", "default")
+            _, schema_content = SCHEMA_TEMPLATES.get(schema_template_key, SCHEMA_TEMPLATES["default"])
             with open(os.path.join(wiki_dir, "schema.md"), "w", encoding="utf-8") as f:
-                f.write(DEFAULT_SCHEMA_MD)
+                f.write(schema_content)
 
             with open(os.path.join(wiki_dir, "index.md"), "w", encoding="utf-8") as f:
                 f.write(
@@ -503,11 +506,15 @@ def _register_routes(app: Flask) -> None:
                     repo_slug=slug,
                 )
             )
-        return render_template("repo/new.html")
+        return render_template("repo/new.html", schema_templates=SCHEMA_TEMPLATES)
 
     @repo_bp.route("/<username>/<repo_slug>")
     def dashboard(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not repo.is_public and not _is_owner(repo):
+            if not current_user.is_authenticated:
+                return redirect(url_for("auth.login", next=request.url))
+            abort(403)
         base = get_repo_path(Config.DATA_DIR, username, repo_slug)
         wiki_dir = os.path.join(base, "wiki")
 
@@ -557,6 +564,7 @@ def _register_routes(app: Flask) -> None:
             if action == "update_info":
                 repo.name = request.form.get("name", "").strip() or repo.name
                 repo.description = request.form.get("description", "").strip()
+                repo.is_public = "is_public" in request.form
                 db.session.commit()
                 flash("设置已保存", "success")
             elif action == "update_schema":
@@ -615,6 +623,10 @@ def _register_routes(app: Flask) -> None:
     @wiki_bp.route("/<username>/<repo_slug>/wiki/<page_slug>")
     def view_page(username, repo_slug, page_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not repo.is_public and not _is_owner(repo):
+            if not current_user.is_authenticated:
+                return redirect(url_for("auth.login", next=request.url))
+            abort(403)
         wiki_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
         )
@@ -666,6 +678,10 @@ def _register_routes(app: Flask) -> None:
     @wiki_bp.route("/<username>/<repo_slug>/graph")
     def graph(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not repo.is_public and not _is_owner(repo):
+            if not current_user.is_authenticated:
+                return redirect(url_for("auth.login", next=request.url))
+            abort(403)
         wiki_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
         )
@@ -785,6 +801,10 @@ def _register_routes(app: Flask) -> None:
     @wiki_bp.route("/<username>/<repo_slug>/wiki/search")
     def search(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not repo.is_public and not _is_owner(repo):
+            if not current_user.is_authenticated:
+                return redirect(url_for("auth.login", next=request.url))
+            abort(403)
         query_text = request.args.get("q", "").strip()
         results = []
         if query_text:

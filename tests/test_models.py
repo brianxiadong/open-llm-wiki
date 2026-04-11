@@ -113,3 +113,26 @@ def test_user_loader(app):
         assert loaded.id == u.id
         assert loaded.username == "loader_user"
         assert load_user("999999") is None
+
+
+def test_repo_is_public_default_false(sample_repo, app):
+    client, repo_info = sample_repo
+    with app.app_context():
+        from models import Repo
+        repo = Repo.query.filter_by(slug=repo_info["slug"]).first()
+        assert repo.is_public == False
+
+
+def test_set_repo_public(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "update_info", "name": "Test KB", "description": "", "is_public": "on"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    with app.app_context():
+        from models import Repo
+        repo = Repo.query.filter_by(slug=slug).first()
+        assert repo.is_public == True
