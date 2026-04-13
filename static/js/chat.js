@@ -292,12 +292,23 @@
         '<i class="lucide-bookmark-plus" aria-hidden="true"></i> 保存为页面</button></div>';
     }
 
+    // -- Evidence button (replaces inline panels) -------------------------
+    var totalEvCount = (wikiEvidence ? wikiEvidence.length : 0) +
+      (chunkEvidence ? chunkEvidence.length : 0) +
+      (factEvidence ? factEvidence.length : 0);
+    var evidenceBtnHtml = '';
+    var hasNewEvidence = totalEvCount > 0;
+    if (hasNewEvidence) {
+      evidenceBtnHtml = '<button class="chat-evidence-btn" type="button" aria-label="查看溯源详情">' +
+        '<i class="lucide-search" aria-hidden="true"></i> 查看溯源 <span class="evidence-count-badge">' + totalEvCount + '</span></button>';
+    }
+
     div.innerHTML = '<div class="chat-msg-avatar chat-msg-avatar-ai">' +
       '<i class="lucide-bot" aria-hidden="true"></i></div>' +
       '<div class="chat-msg-body">' +
       confHtml +
       '<div class="chat-msg-content rendered-content">' + html + '</div>' +
-      wikiEvHtml + chunkEvHtml + factEvHtml + sourceHtml + saveBtn + '</div>';
+      (hasNewEvidence ? evidenceBtnHtml : sourceHtml) + saveBtn + '</div>';
 
     messages.appendChild(div);
     initIcons(div);
@@ -315,6 +326,13 @@
           badge.dataset.expanded = expanded ? 'false' : 'true';
           toggle.textContent = expanded ? '▾' : '▴';
         }
+      });
+    }
+
+    var evidenceBtnEl = div.querySelector('.chat-evidence-btn');
+    if (evidenceBtnEl) {
+      evidenceBtnEl.addEventListener('click', function () {
+        openEvidenceModal(wikiEvidence, chunkEvidence, factEvidence);
       });
     }
 
@@ -772,6 +790,91 @@
         initIcons(btn);
         btn.disabled = false;
       });
+  }
+
+  /* ── Evidence modal ──────────────────────────────────── */
+
+  var evidenceModal = (function () {
+    var modal = document.createElement('div');
+    modal.id = 'evidence-modal';
+    modal.className = 'evidence-modal-overlay hidden';
+    modal.innerHTML =
+      '<div class="evidence-modal-box">' +
+        '<div class="evidence-modal-header">' +
+          '<span><i class="lucide-search" aria-hidden="true"></i> 溯源详情</span>' +
+          '<button class="evidence-modal-close" type="button" aria-label="关闭">✕</button>' +
+        '</div>' +
+        '<div class="evidence-modal-body"></div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    initIcons(modal);
+
+    modal.querySelector('.evidence-modal-close').addEventListener('click', close);
+    modal.addEventListener('click', function (e) {
+      if (e.target === modal) close();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') close();
+    });
+
+    function close() { modal.classList.add('hidden'); }
+    function open(html) {
+      modal.querySelector('.evidence-modal-body').innerHTML = html;
+      initIcons(modal);
+      modal.classList.remove('hidden');
+    }
+    return { open: open, close: close };
+  })();
+
+  function openEvidenceModal(wikiEv, chunkEv, factEv) {
+    var html = '';
+    if (wikiEv && wikiEv.length) {
+      html += '<div class="evidence-panel"><div class="evidence-panel-header">' +
+        '<i class="lucide-book-open" aria-hidden="true"></i> LLM Wiki 结构证据 (' + wikiEv.length + ')</div>' +
+        '<div class="evidence-items">';
+      wikiEv.forEach(function(e) {
+        html += '<div class="evidence-item evidence-wiki">' +
+          '<span class="badge badge-' + escapeHtml(e.type || 'concept') + '">' + escapeHtml(e.type || '') + '</span> ' +
+          '<a href="' + escapeHtml(e.url || '#') + '">' + escapeHtml(e.title || e.filename || '') + '</a>' +
+          '<span class="evidence-reason">' + escapeHtml(e.reason || '') + '</span></div>';
+      });
+      html += '</div></div>';
+    }
+    if (chunkEv && chunkEv.length) {
+      html += '<div class="evidence-panel"><div class="evidence-panel-header">' +
+        '<i class="lucide-file-search" aria-hidden="true"></i> 原文片段证据 (' + chunkEv.length + ')</div>' +
+        '<div class="evidence-items">';
+      chunkEv.forEach(function(e) {
+        var scorePct = e.score ? Math.round(e.score * 100) : 0;
+        html += '<div class="evidence-item evidence-chunk">' +
+          '<a href="' + escapeHtml(e.url || '#') + '" class="evidence-chunk-title">' + escapeHtml(e.title || e.filename || '') + '</a>' +
+          (e.heading ? '<span class="evidence-heading">§ ' + escapeHtml(e.heading) + '</span>' : '') +
+          '<div class="evidence-snippet">' + escapeHtml((e.snippet || '').substring(0, 300)) + '</div>' +
+          '<span class="evidence-score">' + scorePct + '%</span></div>';
+      });
+      html += '</div></div>';
+    }
+    if (factEv && factEv.length) {
+      html += '<div class="evidence-panel"><div class="evidence-panel-header">' +
+        '<i class="lucide-table-properties" aria-hidden="true"></i> 结构化事实证据 (' + factEv.length + ')</div>' +
+        '<div class="evidence-items">';
+      factEv.forEach(function(e) {
+        var scorePct = e.score ? Math.round(e.score * 100) : 0;
+        var fields = e.fields || {};
+        var fieldPairs = Object.keys(fields).map(function(key) {
+          return '<span class="evidence-fact-field"><strong>' + escapeHtml(key) + '</strong>: ' + escapeHtml(String(fields[key])) + '</span>';
+        }).join('');
+        html += '<div class="evidence-item evidence-fact">' +
+          '<a href="' + escapeHtml(e.url || '#') + '" class="evidence-chunk-title">' + escapeHtml(e.title || e.source_file || '') + '</a>' +
+          '<span class="evidence-heading">' + escapeHtml(e.source_file || '') + '</span>' +
+          '<div class="evidence-snippet" style="white-space:normal">' + escapeHtml(e.snippet || '') + '</div>' +
+          '<div class="evidence-fact-fields">' + fieldPairs + '</div>' +
+          '<span class="evidence-score">' + scorePct + '%</span></div>';
+      });
+      html += '</div></div>';
+    }
+    if (!html) html = '<p style="color:var(--pico-muted-color);padding:1rem;">暂无溯源信息</p>';
+    evidenceModal.open(html);
   }
 
   /* ── Helpers ───────────────────────────────────────────── */

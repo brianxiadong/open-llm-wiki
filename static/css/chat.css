@@ -517,6 +517,9 @@
   border-top: 1px solid var(--border-light);
   padding-top: 0.75rem;
 }
+.evidence-panel + .evidence-panel {
+  border-top: 1px solid var(--border-light);
+}
 .evidence-panel-header {
   font-size: 0.82rem;
   font-weight: 600;
@@ -533,8 +536,8 @@
 }
 .evidence-item {
   font-size: 0.83rem;
-  padding: 0.35rem 0.5rem;
-  border-radius: 4px;
+  padding: 0.4rem 0.55rem;
+  border-radius: 6px;
   background: var(--surface-soft);
   border: 1px solid var(--border-light);
 }
@@ -554,7 +557,7 @@
 .evidence-snippet {
   color: var(--pico-muted-color);
   font-size: 0.8rem;
-  margin-top: 0.2rem;
+  margin-top: 0.25rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -564,6 +567,7 @@
   float: right;
   font-size: 0.75rem;
   color: var(--pico-muted-color);
+  margin-top: 0.15rem;
 }
 .evidence-fact {
   background: linear-gradient(180deg, #f6fbff 0%, #eef6ff 100%);
@@ -573,7 +577,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
-  margin-top: 0.35rem;
+  margin-top: 0.4rem;
 }
 .evidence-fact-field {
   display: inline-flex;
@@ -584,6 +588,123 @@
   background: rgba(59, 91, 219, 0.08);
   color: var(--text);
   font-size: 0.74rem;
+}
+
+/* ── Evidence button (inline, compact) ────────────────────────────────── */
+.chat-evidence-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+  padding: 0.28rem 0.75rem;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--pico-muted-color);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.chat-evidence-btn:hover {
+  background: var(--surface-mid, #e8edf5);
+  border-color: var(--pico-primary-border, #5b7ddb);
+  color: var(--pico-primary);
+}
+.chat-evidence-btn i {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+.evidence-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--pico-primary);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* ── Evidence modal ───────────────────────────────────────────────────── */
+.evidence-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.evidence-modal-overlay.hidden {
+  display: none;
+}
+.evidence-modal-box {
+  background: var(--surface, #fff);
+  border-radius: 12px;
+  box-shadow: 0 8px 40px rgba(15, 23, 42, 0.18);
+  width: min(680px, 100%);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.evidence-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1.2rem;
+  border-bottom: 1px solid var(--border-light);
+  font-weight: 600;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+.evidence-modal-header i {
+  width: 16px;
+  height: 16px;
+  margin-right: 0.4rem;
+  vertical-align: middle;
+}
+.evidence-modal-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--pico-muted-color);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+.evidence-modal-close:hover {
+  background: var(--surface-soft);
+}
+.evidence-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem 1.2rem 1.4rem;
+}
+.evidence-modal-body .evidence-panel {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+.evidence-modal-body .evidence-panel + .evidence-panel {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border-light);
+  padding-top: 1rem;
+}
+.evidence-modal-body .evidence-snippet {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  max-width: 100%;
+  line-height: 1.5;
 }
 
 /* ── Confidence badge ─────────────────────────────────────────────────── */
