@@ -55,6 +55,8 @@
 - DOCX (.docx)——调用 MinerU 转为 .docx.md
 - PPT (.pptx)——调用 MinerU 转为 .pptx.md
 - 图片 (.png/.jpg)——调用 MinerU OCR 转为 .md
+- CSV (.csv)——直接存储为文本
+- Excel (.xlsx/.xls)——用 openpyxl 解析，转换为 Markdown 表格（支持多 Sheet），保存为 .md
 
 原始上传文件（二进制）不保留，只保留转换后的 markdown 和 MinerU 提取的图片。
 
@@ -758,7 +760,9 @@ markdown>=3.5
 pygments>=2.17
 httpx>=0.27
 pyyaml>=6.0
-trafilatura>=1.12
+trafilatura>=2.0
+lxml_html_clean>=0.4
+xai-sdk>=1.11
 ```
 
 **为什么选择这些**：

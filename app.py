@@ -47,7 +47,9 @@ from wiki_engine import WikiEngine
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_EXTENSIONS = {"md", "txt", "pdf", "doc", "docx", "pptx", "png", "jpg", "jpeg"}
+ALLOWED_EXTENSIONS = {"md", "txt", "pdf", "doc", "docx", "pptx", "png", "jpg", "jpeg",
+                      "csv", "xlsx", "xls"}
+EXCEL_EXTENSIONS = {"xlsx", "xls"}
 MINERU_EXTENSIONS = {"pdf", "doc", "docx", "pptx", "png", "jpg", "jpeg"}
 TYPE_LABELS = {
     "concept": "概念",
@@ -1264,6 +1266,61 @@ def _register_routes(app: Flask) -> None:
                 return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
             os.rename(tmp_check, dest_path)
             saved_name = safe_name
+        elif ext == "csv":
+            # CSV: 直接保存，文件名保持不变
+            dest_path = os.path.join(raw_dir, safe_name)
+            uploaded.save(dest_path)
+            saved_name = safe_name
+        elif ext in EXCEL_EXTENSIONS:
+            # Excel: 用 openpyxl 解析，转换为 Markdown 表格保存
+            import io
+            import openpyxl
+            stem = safe_name.rsplit(".", 1)[0]
+            md_name = stem + ".md"
+            dest_path = os.path.join(raw_dir, md_name)
+            try:
+                file_bytes = uploaded.read()
+                wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+                md_parts = [f"# {stem}\n\n> 来源文件: {safe_name}\n"]
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    rows = list(ws.iter_rows(values_only=True))
+                    if not rows:
+                        continue
+                    md_parts.append(f"\n## Sheet: {sheet_name}\n")
+                    # 过滤全空行
+                    non_empty = [r for r in rows if any(c is not None for c in r)]
+                    if not non_empty:
+                        continue
+                    header = non_empty[0]
+                    col_count = len(header)
+                    # Markdown 表头
+                    header_str = "| " + " | ".join(
+                        str(c) if c is not None else "" for c in header
+                    ) + " |"
+                    sep_str = "| " + " | ".join(["---"] * col_count) + " |"
+                    md_parts.append(header_str)
+                    md_parts.append(sep_str)
+                    for row in non_empty[1:]:
+                        cells = list(row) + [None] * max(0, col_count - len(row))
+                        row_str = "| " + " | ".join(
+                            str(c) if c is not None else "" for c in cells[:col_count]
+                        ) + " |"
+                        md_parts.append(row_str)
+                md_content = "\n".join(md_parts)
+                with open(dest_path, "w", encoding="utf-8") as fh:
+                    fh.write(md_content)
+                saved_name = md_name
+                sheet_list = ", ".join(wb.sheetnames)
+                flash(
+                    f"Excel 已转换为 Markdown（{safe_name} → {md_name}，"
+                    f"共 {len(wb.sheetnames)} 个 Sheet：{sheet_list}）",
+                    "info",
+                )
+            except Exception as exc:
+                logger.exception("Excel parse failed for %s", safe_name)
+                flash(f"Excel 解析失败: {exc}", "error")
+                return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
         elif ext in MINERU_EXTENSIONS:
             temp_dir = os.path.join(base, "temp")
             os.makedirs(temp_dir, exist_ok=True)

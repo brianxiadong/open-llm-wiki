@@ -179,11 +179,11 @@ class QdrantService:
             raise
 
         try:
-            results = self._qdrant.search(
+            results = self._qdrant.query_points(
                 collection_name=collection,
-                query_vector=vector,
+                query=vector,
                 limit=limit,
-            )
+            ).points
         except UnexpectedResponse as e:
             logger.exception("Qdrant search failed collection=%s", collection)
             raise QdrantServiceError(str(e)) from e
@@ -364,11 +364,11 @@ class QdrantService:
             return []
         try:
             vector = self._embed(query)
-            results = self._qdrant.search(
+            results = self._qdrant.query_points(
                 collection_name=collection,
-                query_vector=vector,
+                query=vector,
                 limit=limit,
-            )
+            ).points
         except Exception as e:
             raise QdrantServiceError(str(e)) from e
         out = []
