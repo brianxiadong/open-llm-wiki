@@ -562,6 +562,8 @@
         if (welcome) welcome.hidden = false;
       });
   }
+
+  function deleteSession(key) {
     if (!confirm('确认删除此对话？')) return;
     var url = cfg.deleteSessionBaseUrl + encodeURIComponent(key) + '/delete';
     fetch(url, { method: 'POST' })
