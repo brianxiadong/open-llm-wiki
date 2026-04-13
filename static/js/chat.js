@@ -36,6 +36,16 @@
   var fileInput = document.getElementById('upload-file-input');
   var pending = document.getElementById('upload-pending');
   var filenameEl = document.getElementById('upload-filename');
+  var uploadActionTrigger = document.getElementById('upload-action-trigger');
+
+  function openFilePicker(e) {
+    if (e) e.preventDefault();
+    if (!fileInput) return;
+    if (pending && !pending.hidden) {
+      return;
+    }
+    fileInput.click();
+  }
 
   if (dropArea && fileInput) {
     ['dragenter', 'dragover'].forEach(function (evt) {
@@ -58,15 +68,15 @@
     });
     dropArea.addEventListener('click', function (e) {
       // Once a file is pending, don't re-open picker from label clicks
-      if (pending && !pending.hidden) {
-        e.preventDefault();
-        return;
-      }
-      fileInput.click();
+      openFilePicker(e);
     });
     fileInput.addEventListener('change', function () {
       if (fileInput.files.length) showPending(fileInput.files[0].name);
     });
+  }
+
+  if (uploadActionTrigger && fileInput) {
+    uploadActionTrigger.addEventListener('click', openFilePicker);
   }
 
   function showPending(name) {
@@ -151,7 +161,7 @@
     if (!isRestore) scrollToBottom();
   }
 
-  function addAIMessage(html, refs, markdown, wikiSources, qdrantSources, confidence, wikiEvidence, chunkEvidence, evidenceSummary, isRestore) {
+  function addAIMessage(html, refs, markdown, wikiSources, qdrantSources, confidence, wikiEvidence, chunkEvidence, factEvidence, evidenceSummary, isRestore) {
     var div = document.createElement('div');
     div.className = 'chat-msg chat-msg-ai';
 
@@ -211,6 +221,29 @@
       chunkEvHtml += '</div></div>';
     }
 
+    // -- Fact evidence panel ----------------------------------------------
+    var factEvHtml = '';
+    if (factEvidence && factEvidence.length) {
+      factEvHtml = '<div class="evidence-panel">' +
+        '<div class="evidence-panel-header"><i class="lucide-table-properties" aria-hidden="true"></i> 结构化事实证据 (' + factEvidence.length + ')</div>' +
+        '<div class="evidence-items">';
+      factEvidence.forEach(function(e) {
+        var scorePct = e.score ? Math.round(e.score * 100) : 0;
+        var fields = e.fields || {};
+        var fieldPairs = Object.keys(fields).slice(0, 4).map(function(key) {
+          return '<span class="evidence-fact-field"><strong>' + escapeHtml(key) + '</strong>: ' + escapeHtml(String(fields[key])) + '</span>';
+        }).join('');
+        factEvHtml += '<div class="evidence-item evidence-fact">' +
+          '<a href="' + escapeHtml(e.url || '#') + '" class="evidence-chunk-title">' + escapeHtml(e.title || e.source_file || '') + '</a>' +
+          '<span class="evidence-heading">' + escapeHtml(e.source_file || '') + '</span>' +
+          '<div class="evidence-snippet">' + escapeHtml((e.snippet || '').substring(0, 160)) + '</div>' +
+          '<div class="evidence-fact-fields">' + fieldPairs + '</div>' +
+          '<span class="evidence-score">' + scorePct + '%</span>' +
+          '</div>';
+      });
+      factEvHtml += '</div></div>';
+    }
+
     // -- Legacy source panel (fallback if no new evidence) ----------------
     var sourceHtml = '';
     if (!wikiEvidence || !wikiEvidence.length) {
@@ -264,7 +297,7 @@
       '<div class="chat-msg-body">' +
       confHtml +
       '<div class="chat-msg-content rendered-content">' + html + '</div>' +
-      wikiEvHtml + chunkEvHtml + sourceHtml + saveBtn + '</div>';
+      wikiEvHtml + chunkEvHtml + factEvHtml + sourceHtml + saveBtn + '</div>';
 
     messages.appendChild(div);
     initIcons(div);
@@ -484,7 +517,7 @@
             addUserMessage(m.content, true);
           } else if (m.role === 'assistant') {
             var safeHtml = '<p>' + escapeHtml(m.content).replace(/\n/g, '<br>') + '</p>';
-            addAIMessage(safeHtml, [], m.content, [], [], null, null, null, '', true);
+            addAIMessage(safeHtml, [], m.content, [], [], null, null, null, null, '', true);
           }
         });
         if (messages) messages.scrollTop = messages.scrollHeight;
@@ -532,7 +565,7 @@
             addUserMessage(m.content, true);
           } else if (m.role === 'assistant') {
             var safeHtml = '<p>' + escapeHtml(m.content).replace(/\n/g, '<br>') + '</p>';
-            addAIMessage(safeHtml, [], m.content, [], [], null, null, null, '', true);
+            addAIMessage(safeHtml, [], m.content, [], [], null, null, null, null, '', true);
           }
         });
         if (messages) messages.scrollTop = messages.scrollHeight;
@@ -601,7 +634,7 @@
           } else {
             addAIMessage(data.html || '', data.references || [],
               data.markdown || '', data.wiki_sources || [], data.qdrant_sources || [],
-              data.confidence, data.wiki_evidence, data.chunk_evidence, data.evidence_summary);
+              data.confidence, data.wiki_evidence, data.chunk_evidence, data.fact_evidence, data.evidence_summary);
           }
         })
         .catch(function () {
@@ -655,6 +688,7 @@
       var confidence = d.confidence || null;
       var wikiEvidence = d.wiki_evidence || null;
       var chunkEvidence = d.chunk_evidence || null;
+      var factEvidence = d.fact_evidence || null;
       var evidenceSummary = d.evidence_summary || '';
 
       fetch(cfg.queryUrl, {
@@ -663,18 +697,20 @@
         body: JSON.stringify({ q: q, session_key: SESSION_KEY, _rendered_answer: answer,
                                _wiki_sources: wikiSources, _qdrant_sources: qdrantSources,
                                _confidence: confidence, _wiki_evidence: wikiEvidence,
-                               _chunk_evidence: chunkEvidence, _evidence_summary: evidenceSummary })
+                               _chunk_evidence: chunkEvidence, _fact_evidence: factEvidence,
+                               _evidence_summary: evidenceSummary })
       })
         .then(function (r) { return r.json(); })
         .then(function (data) {
           addAIMessage(data.html || '', data.references || [],
             data.markdown || '', data.wiki_sources || [], data.qdrant_sources || [],
             data.confidence || confidence, data.wiki_evidence || wikiEvidence,
-            data.chunk_evidence || chunkEvidence, data.evidence_summary || evidenceSummary);
+            data.chunk_evidence || chunkEvidence, data.fact_evidence || factEvidence,
+            data.evidence_summary || evidenceSummary);
         })
         .catch(function () {
           addAIMessage('<p>' + escapeHtml(answer) + '</p>', [], answer, wikiSources, qdrantSources,
-            confidence, wikiEvidence, chunkEvidence, evidenceSummary);
+            confidence, wikiEvidence, chunkEvidence, factEvidence, evidenceSummary);
         });
       isLoading = false;
       submitBtn.disabled = false;

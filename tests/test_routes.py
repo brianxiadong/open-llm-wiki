@@ -1,6 +1,7 @@
 """Flask route tests using conftest fixtures."""
 
 import io
+import os
 from unittest.mock import patch
 
 
@@ -180,6 +181,40 @@ def test_upload_md_file(sample_repo):
     data = {"file": (io.BytesIO(b"# Test content\n"), "test.md")}
     resp = client.post(url, data=data, content_type="multipart/form-data", follow_redirects=False)
     assert resp.status_code == 302
+
+
+def test_upload_csv_creates_markdown_and_fact_records(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    url = f"/alice/{slug}/sources/upload"
+    csv_bytes = "地区,收入,增长率\n华东,1200,12%\n华南,980,8%\n".encode("utf-8")
+
+    resp = client.post(
+        url,
+        data={"file": (io.BytesIO(csv_bytes), "sales.csv")},
+        content_type="multipart/form-data",
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 302
+
+    with app.app_context():
+        from config import Config
+        from models import Task
+        from utils import read_jsonl
+
+        base = os.path.join(Config.DATA_DIR, "alice", slug)
+        raw_markdown = os.path.join(base, "raw", "sales.md")
+        facts_path = os.path.join(base, "facts", "records", "sales.jsonl")
+        assert os.path.exists(raw_markdown)
+        assert os.path.exists(facts_path)
+        facts = read_jsonl(facts_path)
+        assert len(facts) == 2
+        assert facts[0]["fields"]["地区"] == "华东"
+
+        task = Task.query.filter_by(repo_id=repo_info["id"]).order_by(Task.id.desc()).first()
+        assert task is not None
+        assert task.input_data == "sales.md"
 
 
 def test_upload_no_file(sample_repo):
@@ -528,7 +563,7 @@ def test_global_search_unauthorized(client, app):
 # -- query_api evidence schema -------------------------------------------
 
 def test_query_api_returns_confidence(sample_repo, app):
-    """query API must return confidence, wiki_evidence, chunk_evidence fields."""
+    """query API must return confidence, wiki_evidence, chunk_evidence, fact_evidence fields."""
     from unittest.mock import patch
     client, repo_info = sample_repo
     slug = repo_info["slug"]
@@ -538,6 +573,7 @@ def test_query_api_returns_confidence(sample_repo, app):
         "wiki_evidence": [{"filename": "overview.md", "title": "概览",
                            "type": "overview", "url": "/test", "reason": "高层概览页命中"}],
         "chunk_evidence": [],
+        "fact_evidence": [{"record_id": "csv:2", "source_file": "sales.csv", "score": 0.96}],
         "evidence_summary": "基于 1 个页面生成。",
         "referenced_pages": ["overview.md"],
         "wiki_sources": ["overview.md"],
@@ -551,13 +587,14 @@ def test_query_api_returns_confidence(sample_repo, app):
     assert data["confidence"]["level"] == "medium"
     assert "wiki_evidence" in data
     assert "chunk_evidence" in data
+    assert "fact_evidence" in data
     assert "html" in data
     assert "wiki_sources" in data
     assert "qdrant_sources" in data
 
 
 def test_query_api_render_only_returns_confidence(sample_repo):
-    """Render-only branch must also return confidence and evidence fields."""
+    """Render-only branch must also return confidence and all evidence fields."""
     client, repo_info = sample_repo
     slug = repo_info["slug"]
     resp = client.post(
@@ -568,6 +605,7 @@ def test_query_api_render_only_returns_confidence(sample_repo):
             "_confidence": {"level": "low", "score": 0.2, "reasons": []},
             "_wiki_evidence": [],
             "_chunk_evidence": [],
+            "_fact_evidence": [{"record_id": "csv:2", "source_file": "sales.csv"}],
             "_evidence_summary": "",
         },
     )
@@ -575,6 +613,7 @@ def test_query_api_render_only_returns_confidence(sample_repo):
     data = resp.get_json()
     assert "html" in data
     assert "confidence" in data
+    assert "fact_evidence" in data
     assert data["confidence"]["level"] == "low"
 
 
@@ -591,6 +630,7 @@ def test_query_api_render_only_stores_session_and_updates_title(sample_repo, app
             "_confidence": {"level": "medium", "score": 0.6, "reasons": []},
             "_wiki_evidence": [],
             "_chunk_evidence": [],
+            "_fact_evidence": [{"record_id": "csv:2", "source_file": "sales.csv"}],
             "_evidence_summary": "",
             "_wiki_sources": [],
             "_qdrant_sources": [],
@@ -611,7 +651,7 @@ def test_query_api_render_only_stores_session_and_updates_title(sample_repo, app
 
 
 def test_query_stream_done_has_evidence(sample_repo, app):
-    """SSE done event must include confidence and evidence fields."""
+    """SSE done event must include confidence and all evidence fields."""
     from unittest.mock import patch
     client, repo_info = sample_repo
     slug = repo_info["slug"]
@@ -622,7 +662,7 @@ def test_query_stream_done_has_evidence(sample_repo, app):
         yield {"event": "done", "data": {
             "answer": "Hi", "markdown": "Hi",
             "confidence": {"level": "low", "score": 0.1, "reasons": []},
-            "wiki_evidence": [], "chunk_evidence": [],
+            "wiki_evidence": [], "chunk_evidence": [], "fact_evidence": [],
             "evidence_summary": "暂无证据。",
             "wiki_sources": [], "qdrant_sources": [],
             "referenced_pages": [],
@@ -634,6 +674,7 @@ def test_query_stream_done_has_evidence(sample_repo, app):
     assert b"confidence" in resp.data
     assert b"wiki_evidence" in resp.data
     assert b"chunk_evidence" in resp.data
+    assert b"fact_evidence" in resp.data
 
 
 # -- API Token -----------------------------------------------------------------

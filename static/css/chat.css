@@ -25,17 +25,34 @@
 .kb-stats span { display: flex; align-items: center; gap: 0.25rem; }
 .kb-stats i { color: var(--brand); }
 .kb-topbar-right { display: flex; align-items: center; gap: 0.5rem; }
-
 .kb-more-menu { position: relative; }
 .kb-more-btn {
-  display: flex; align-items: center; justify-content: center;
-  width: 36px; height: 36px; border-radius: 8px;
-  border: 1px solid var(--border); background: var(--surface);
-  cursor: pointer; color: var(--text-muted);
-  transition: all var(--transition); list-style: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.38rem;
+  height: 36px;
+  padding: 0 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all var(--transition);
+  list-style: none;
+  font-size: 0.84rem;
+  font-weight: 600;
 }
-.kb-more-btn:hover { border-color: var(--brand); color: var(--brand); }
-.kb-more-menu ul { min-width: 180px; }
+.kb-more-btn:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: #ffffff;
+}
+.kb-more-btn i {
+  width: 15px;
+  height: 15px;
+}
+.kb-more-menu ul { min-width: 200px; }
 .kb-more-menu li a {
   display: flex; align-items: center; gap: 0.5rem;
   font-size: 0.88rem; padding: 0.5rem 0.75rem;
@@ -426,18 +443,21 @@
   min-height: 24px; max-height: 160px;
   outline: none !important;
 }
-.chat-input-row button {
+.chat-input-row #chat-submit {
   width: 36px; height: 36px; border-radius: 8px; border: none;
   background: var(--brand); color: #fff;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; flex-shrink: 0;
   transition: background var(--transition);
 }
-.chat-input-row button:hover { background: var(--brand-hover); }
-.chat-input-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+.chat-input-row #chat-submit:hover { background: var(--brand-hover); }
+.chat-input-row #chat-submit:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Responsive ────────────────────────────────────────────── */
 @media (max-width: 768px) {
+  .kb-actions-grid {
+    grid-template-columns: 1fr;
+  }
   .kb-layout {
     grid-template-columns: 1fr;
     height: auto;
@@ -449,12 +469,47 @@
   .kb-sidebar > * { min-width: 200px; flex-shrink: 0; }
   .kb-chat { min-height: 60vh; }
   .chat-msg { max-width: 95%; }
+  .chat-utility-btn {
+    padding: 0 0.6rem;
+  }
+  .chat-utility-btn span {
+    font-size: 0.76rem;
+  }
 }
 
 .chat-history-btn { position: relative; display: inline-flex; align-items: center; }
-.chat-history-btn summary { list-style: none; padding: 0.4rem; cursor: pointer; color: var(--pico-muted-color); }
+.chat-history-btn summary { list-style: none; }
 .chat-history-btn summary::-webkit-details-marker { display: none; }
 .chat-history-btn > ul { position: absolute; bottom: 100%; right: 0; background: #ffffff; border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.25rem 0; box-shadow: var(--shadow-md); z-index: 100; list-style: none; margin: 0; }
+
+.chat-utility-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 36px;
+  padding: 0 0.72rem;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
+}
+.chat-utility-btn:hover {
+  border-color: var(--brand-light);
+  color: var(--brand);
+  background: #ffffff;
+}
+.chat-utility-btn i {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+.chat-utility-btn span {
+  white-space: nowrap;
+}
 
 /* ── Evidence panels ──────────────────────────────────────────────────── */
 .evidence-panel {
@@ -509,6 +564,26 @@
   float: right;
   font-size: 0.75rem;
   color: var(--pico-muted-color);
+}
+.evidence-fact {
+  background: linear-gradient(180deg, #f6fbff 0%, #eef6ff 100%);
+  border-color: rgba(59, 91, 219, 0.14);
+}
+.evidence-fact-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+.evidence-fact-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(59, 91, 219, 0.08);
+  color: var(--text);
+  font-size: 0.74rem;
 }
 
 /* ── Confidence badge ─────────────────────────────────────────────────── */

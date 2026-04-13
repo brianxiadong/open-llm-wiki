@@ -11,7 +11,7 @@ from typing import Any, Generator
 from exceptions import LLMClientError, QdrantServiceError, WikiEngineError
 from llm_client import LLMClient
 from qdrant_service import QdrantService
-from utils import list_wiki_pages, render_markdown
+from utils import classify_query_mode, list_wiki_pages, read_jsonl, render_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,13 @@ class WikiEngine:
     def _raw_dir(self, username: str, repo_slug: str) -> str:
         return os.path.join(self._repo_base(username, repo_slug), "raw")
 
+    def _facts_records_dir(self, username: str, repo_slug: str) -> str:
+        return os.path.join(self._repo_base(username, repo_slug), "facts", "records")
+
+    def _fact_records_path(self, username: str, repo_slug: str, source_filename: str) -> str:
+        stem = os.path.splitext(source_filename)[0]
+        return os.path.join(self._facts_records_dir(username, repo_slug), f"{stem}.jsonl")
+
     def _schema_path(self, username: str, repo_slug: str) -> str:
         return os.path.join(self._wiki_dir(username, repo_slug), "schema.md")
 
@@ -175,6 +182,9 @@ class WikiEngine:
         hit_overview: bool,
         both_channels: bool,
         answer_text: str,
+        fact_hit_count: int = 0,
+        top_fact_score: float = 0.0,
+        fact_channel: bool = False,
     ) -> dict:
         score = 0.0
         reasons: list[str] = []
@@ -189,12 +199,24 @@ class WikiEngine:
             reasons.append(f"命中 {chunk_hit_count} 个段落证据")
         if chunk_hit_count >= 4:
             score += 0.10
+        if fact_hit_count >= 1:
+            score += 0.30
+            reasons.append(f"命中 {fact_hit_count} 条结构化事实")
+        if fact_hit_count >= 3:
+            score += 0.10
         if both_channels:
             score += 0.15
             reasons.append("LLM Wiki 与向量检索均命中")
+        if fact_channel:
+            score += 0.10
+            reasons.append("结构化事实层命中")
         if top_chunk_score >= 0.85:
             score += 0.10
         elif top_chunk_score >= 0.75:
+            score += 0.05
+        if top_fact_score >= 0.90:
+            score += 0.10
+        elif top_fact_score >= 0.80:
             score += 0.05
         if hit_overview:
             score += 0.05
@@ -214,6 +236,53 @@ class WikiEngine:
                 reasons.append("证据不足")
 
         return {"level": level, "score": round(score, 2), "reasons": reasons}
+
+    def _build_fact_evidence(
+        self,
+        username: str,
+        repo_slug: str,
+        fact_hits: list[dict],
+    ) -> list[dict]:
+        source_base_url = f"/{username}/{repo_slug}/sources"
+        fact_evidence: list[dict] = []
+        for hit in fact_hits:
+            source_markdown_filename = hit.get("source_markdown_filename") or ""
+            sheet = hit.get("sheet") or ""
+            row_index = hit.get("row_index", 0)
+            fact_evidence.append(
+                {
+                    "record_id": hit.get("record_id", ""),
+                    "source_file": hit.get("source_file", ""),
+                    "source_markdown_filename": source_markdown_filename,
+                    "sheet": sheet,
+                    "row_index": row_index,
+                    "fields": hit.get("fields", {}),
+                    "snippet": hit.get("fact_text", "")[:200],
+                    "score": hit.get("score", 0.0),
+                    "title": f"{sheet} 第 {row_index} 行".strip(),
+                    "url": (
+                        f"{source_base_url}/{source_markdown_filename}"
+                        if source_markdown_filename
+                        else source_base_url
+                    ),
+                }
+            )
+        return fact_evidence
+
+    def _build_fact_context(self, fact_hits: list[dict]) -> str:
+        parts: list[str] = []
+        for hit in fact_hits:
+            fields_json = json.dumps(hit.get("fields", {}), ensure_ascii=False)
+            parts.append(
+                "=== FACT ===\n"
+                f"source_file: {hit.get('source_file', '')}\n"
+                f"source_markdown_filename: {hit.get('source_markdown_filename', '')}\n"
+                f"sheet: {hit.get('sheet', '')}\n"
+                f"row_index: {hit.get('row_index', 0)}\n"
+                f"fields: {fields_json}\n"
+                f"fact_text: {hit.get('fact_text', '')}"
+            )
+        return "\n\n".join(parts)
 
     # -----------------------------------------------------------------------
     # INGEST
@@ -418,6 +487,19 @@ class WikiEngine:
                 )
             except QdrantServiceError as exc:
                 logger.error("Chunk upsert failed for %s: %s", filename, exc)
+
+        fact_records = read_jsonl(self._fact_records_path(username, repo_slug, source_filename))
+        if fact_records and self._qdrant:
+            yield _progress("index", 84, f"Indexing {len(fact_records)} fact records …")
+            try:
+                self._qdrant.upsert_fact_records(
+                    repo_id=repo_id,
+                    source_filename=source_filename,
+                    records=fact_records,
+                )
+            except QdrantServiceError as exc:
+                logger.error("Fact upsert failed for %s: %s", source_filename, exc)
+                yield _progress("index", 84, f"Fact index failed for {source_filename}: {exc}")
 
         yield _progress("index", 85, "Vector indexing complete")
 
@@ -635,6 +717,7 @@ class WikiEngine:
         wiki_dir = self._wiki_dir(username, repo_slug)
         schema_content = _read_file(self._schema_path(username, repo_slug))
         index_content = _read_file(self._index_path(username, repo_slug))
+        query_mode = classify_query_mode(question)
         system_base = (
             "你是一个 Wiki 知识助手。根据 Wiki 内容准确回答问题，并引用来源页面。\n\n"
             + (schema_content or "")
@@ -659,10 +742,19 @@ class WikiEngine:
 
         qdrant_filenames: list[str] = []
         chunk_hits: list[dict] = []
+        fact_hits: list[dict] = []
         if self._qdrant:
             try:
                 chunk_hits = self._qdrant.search_chunks(repo_id=repo_id, query=question, limit=8)
+                if not isinstance(chunk_hits, list):
+                    chunk_hits = []
                 qdrant_filenames = list({h["filename"] for h in chunk_hits})
+            except QdrantServiceError:
+                pass
+            try:
+                fact_hits = self._qdrant.search_facts(repo_id=repo_id, query=question, limit=8)
+                if not isinstance(fact_hits, list):
+                    fact_hits = []
             except QdrantServiceError:
                 pass
 
@@ -681,15 +773,22 @@ class WikiEngine:
             if content:
                 page_contents[fn] = content
 
-        if not page_contents:
+        if not page_contents and not fact_hits:
             yield {"event": "done", "data": {
                 "answer": "暂无相关 Wiki 内容可以回答该问题。请先导入相关资料。",
                 "wiki_sources": [], "qdrant_sources": [], "referenced_pages": [],
+                "fact_evidence": [],
             }}
             return
 
-        context_parts = [f"=== {fn} ===\n{content[:6000]}"
-                         for fn, content in page_contents.items()]
+        wiki_context_parts = [
+            f"=== {fn} ===\n{content[:6000]}"
+            for fn, content in page_contents.items()
+        ]
+        fact_context = self._build_fact_context(fact_hits)
+        context_parts = wiki_context_parts[:]
+        if fact_context:
+            context_parts.append(fact_context)
         context_block = "\n\n".join(context_parts)
 
         yield {"event": "progress", "data": {"message": "正在生成回答…", "percent": 60}}
@@ -697,9 +796,12 @@ class WikiEngine:
         messages = [
             {"role": "system", "content": system_base},
             {"role": "user", "content": (
-                "根据以下 Wiki 页面回答用户问题。使用 Markdown 格式。\n\n"
+                "根据以下 Wiki 页面和结构化事实回答用户问题。使用 Markdown 格式。\n"
+                f"问题类型: {query_mode}。\n"
+                "当命中结构化事实时，优先给出精确字段值、表名和行号；"
+                "若资料中没有直接证据，不要编造。\n\n"
                 f"--- 问题 ---\n{question}\n\n"
-                f"--- Wiki 页面内容 ---\n{context_block}"
+                f"--- 检索上下文 ---\n{context_block}"
             )},
         ]
 
@@ -715,6 +817,7 @@ class WikiEngine:
 
         loaded = set(page_contents.keys())
         answer_text = "".join(answer_chunks)
+        fact_ev = self._build_fact_evidence(username, repo_slug, fact_hits)
         confidence = self._score_confidence(
             wiki_hit_count=len(wiki_filenames),
             chunk_hit_count=len(chunk_hits),
@@ -722,6 +825,9 @@ class WikiEngine:
             hit_overview="overview.md" in wiki_filenames,
             both_channels=bool(wiki_filenames) and bool(chunk_hits),
             answer_text=answer_text,
+            fact_hit_count=len(fact_hits),
+            top_fact_score=fact_hits[0]["score"] if fact_hits else 0.0,
+            fact_channel=bool(fact_hits),
         )
         wiki_ev = []
         for fn in wiki_filenames:
@@ -751,7 +857,8 @@ class WikiEngine:
                 "score": hit.get("score", 0.0),
             })
         evidence_summary = (
-            f"本回答基于 {len(wiki_ev)} 个 Wiki 页面和 {len(chunk_ev)} 个原文片段生成。"
+            f"本回答基于 {len(wiki_ev)} 个 Wiki 页面、{len(chunk_ev)} 个原文片段"
+            f"和 {len(fact_ev)} 条结构化事实生成。"
         )
         yield {"event": "done", "data": {
             "answer": answer_text,
@@ -759,6 +866,7 @@ class WikiEngine:
             "confidence": confidence,
             "wiki_evidence": wiki_ev,
             "chunk_evidence": chunk_ev,
+            "fact_evidence": fact_ev,
             "evidence_summary": evidence_summary,
             "wiki_sources": [f for f in wiki_filenames if f in loaded],
             "qdrant_sources": list({h["filename"] for h in chunk_hits}),
@@ -783,6 +891,7 @@ class WikiEngine:
         wiki_dir = self._wiki_dir(username, repo_slug)
         schema_content = _read_file(self._schema_path(username, repo_slug))
         index_content = _read_file(self._index_path(username, repo_slug))
+        query_mode = classify_query_mode(question)
 
         system_base = (
             "你是一个 Wiki 知识助手。根据 Wiki 内容准确回答问题。\n"
@@ -810,13 +919,24 @@ class WikiEngine:
 
         # -- Chunk path ------------------------------------------------
         chunk_hits: list[dict] = []
+        fact_hits: list[dict] = []
         if self._qdrant:
             try:
                 chunk_hits = self._qdrant.search_chunks(
                     repo_id=repo_id, query=question, limit=8
                 )
+                if not isinstance(chunk_hits, list):
+                    chunk_hits = []
             except QdrantServiceError as exc:
                 logger.warning("search_chunks failed: %s", exc)
+            try:
+                fact_hits = self._qdrant.search_facts(
+                    repo_id=repo_id, query=question, limit=8
+                )
+                if not isinstance(fact_hits, list):
+                    fact_hits = []
+            except QdrantServiceError as exc:
+                logger.warning("search_facts failed: %s", exc)
 
         # -- Build wiki_evidence ---------------------------------------
         wiki_evidence: list[dict] = []
@@ -862,13 +982,16 @@ class WikiEngine:
                 "score": hit.get("score", 0.0),
             })
 
-        if not page_contents:
-            empty_conf = self._score_confidence(0, 0, 0.0, False, False, "")
+        fact_evidence = self._build_fact_evidence(username, repo_slug, fact_hits)
+
+        if not page_contents and not fact_hits:
+            empty_conf = self._score_confidence(0, 0, 0.0, False, False, "", 0, 0.0, False)
             return {
                 "markdown": "暂无相关 Wiki 内容可以回答该问题。请先导入相关资料。",
                 "confidence": empty_conf,
                 "wiki_evidence": [],
                 "chunk_evidence": [],
+                "fact_evidence": [],
                 "evidence_summary": "暂无证据。",
                 "referenced_pages": [],
                 "wiki_sources": [],
@@ -876,18 +999,26 @@ class WikiEngine:
             }
 
         # -- Build context & generate answer ---------------------------
-        context_parts = [f"=== {fn} ===\n{content[:5000]}"
-                         for fn, content in page_contents.items()]
+        context_parts = [
+            f"=== {fn} ===\n{content[:5000]}"
+            for fn, content in page_contents.items()
+        ]
+        fact_context = self._build_fact_context(fact_hits)
+        if fact_context:
+            context_parts.append(fact_context)
         context_block = "\n\n".join(context_parts)
 
         answer = self._chat_text(
             system=system_base,
             user=(
-                "根据以下 Wiki 页面和原文片段回答用户问题，使用 Markdown 格式。\n"
+                "根据以下 Wiki 页面、原文片段和结构化事实回答用户问题，使用 Markdown 格式。\n"
+                f"问题类型: {query_mode}。\n"
+                "若命中结构化事实，优先输出精确值、表名和行号；"
+                "如果没有直接证据，请使用指定提示语。\n"
                 "若证据不足，请使用指定提示语。\n\n"
                 + (_build_history_block(history) if history else "")
                 + f"--- 问题 ---\n{question}\n\n"
-                f"--- Wiki 内容 ---\n{context_block}"
+                f"--- 检索上下文 ---\n{context_block}"
             ),
         )
 
@@ -902,11 +1033,15 @@ class WikiEngine:
             hit_overview=hit_overview,
             both_channels=both,
             answer_text=answer,
+            fact_hit_count=len(fact_hits),
+            top_fact_score=fact_hits[0]["score"] if fact_hits else 0.0,
+            fact_channel=bool(fact_hits),
         )
 
         loaded = set(page_contents.keys())
         evidence_summary = (
-            f"本回答基于 {len(wiki_evidence)} 个 Wiki 页面和 {len(chunk_evidence)} 个原文片段生成。"
+            f"本回答基于 {len(wiki_evidence)} 个 Wiki 页面、{len(chunk_evidence)} 个原文片段"
+            f"和 {len(fact_evidence)} 条结构化事实生成。"
         )
 
         return {
@@ -914,6 +1049,7 @@ class WikiEngine:
             "confidence": confidence,
             "wiki_evidence": wiki_evidence,
             "chunk_evidence": chunk_evidence,
+            "fact_evidence": fact_evidence,
             "evidence_summary": evidence_summary,
             "referenced_pages": list(loaded),
             "wiki_sources": [e["filename"] for e in wiki_evidence],

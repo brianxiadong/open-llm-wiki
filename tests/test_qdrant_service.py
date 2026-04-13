@@ -31,6 +31,12 @@ def test_chunk_collection_name(qdrant_service):
     assert svc._chunk_collection_name(42) == "repo_42_chunks"
 
 
+def test_fact_collection_name(qdrant_service):
+    svc, _ = qdrant_service
+    assert svc._fact_collection_name(1) == "repo_1_facts"
+    assert svc._fact_collection_name(42) == "repo_42_facts"
+
+
 def test_split_page_into_chunks_basic(qdrant_service):
     svc, _ = qdrant_service
     content = (
@@ -115,7 +121,7 @@ def test_search_chunks_returns_structured_results(qdrant_service):
         "chunk_text": "Some text here",
         "position": 0,
     }
-    mock_client.search.return_value = [mock_hit]
+    mock_client.query_points.return_value = MagicMock(points=[mock_hit])
     results = svc.search_chunks(repo_id=1, query="test query")
     assert len(results) == 1
     assert results[0]["chunk_id"] == "test.md#0"
@@ -135,3 +141,51 @@ def test_delete_page_chunks_with_collection(qdrant_service):
     mock_client.collection_exists.return_value = True
     svc.delete_page_chunks(repo_id=1, filename="page.md")
     assert mock_client.delete.called
+
+
+def test_upsert_fact_records_calls_qdrant(qdrant_service):
+    svc, mock_client = qdrant_service
+    mock_client.collection_exists.return_value = True
+
+    svc.upsert_fact_records(
+        repo_id=1,
+        source_filename="sales.md",
+        records=[
+            {
+                "record_id": "csv:2",
+                "source_file": "sales.csv",
+                "source_markdown_filename": "sales.md",
+                "sheet": "CSV",
+                "row_index": 2,
+                "fields": {"地区": "华东", "收入": 1200},
+                "fact_text": "来源=sales.csv; 表=CSV; 行=2; 地区=华东; 收入=1200",
+            }
+        ],
+    )
+
+    assert mock_client.upsert.called
+
+
+def test_search_facts_returns_structured_results(qdrant_service):
+    svc, mock_client = qdrant_service
+    mock_client.collection_exists.return_value = True
+    mock_hit = MagicMock()
+    mock_hit.score = 0.96
+    mock_hit.payload = {
+        "record_id": "csv:2",
+        "source_file": "sales.csv",
+        "source_markdown_filename": "sales.md",
+        "sheet": "CSV",
+        "row_index": 2,
+        "fields": {"地区": "华东", "收入": 1200},
+        "fact_text": "来源=sales.csv; 表=CSV; 行=2; 地区=华东; 收入=1200",
+    }
+    mock_client.query_points.return_value = MagicMock(points=[mock_hit])
+
+    results = svc.search_facts(repo_id=1, query="华东收入是多少")
+
+    assert len(results) == 1
+    assert results[0]["record_id"] == "csv:2"
+    assert results[0]["sheet"] == "CSV"
+    assert results[0]["fields"]["收入"] == 1200
+    assert results[0]["score"] == 0.96

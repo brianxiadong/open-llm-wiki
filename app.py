@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import logging
 import os
@@ -31,6 +33,7 @@ from models import Repo, Task, User, db, login_manager
 from qdrant_service import QdrantService
 from task_worker import TaskWorker
 from utils import (
+    build_tabular_markdown_and_records,
     DEFAULT_SCHEMA_MD,
     SCHEMA_TEMPLATES,
     ensure_repo_dirs,
@@ -42,6 +45,7 @@ from utils import (
     list_wiki_pages,
     render_markdown,
     slugify,
+    write_jsonl,
 )
 from wiki_engine import WikiEngine
 
@@ -76,6 +80,38 @@ def _allowed_file(filename: str) -> bool:
 
 def _file_ext(filename: str) -> str:
     return filename.rsplit(".", 1)[1].lower() if "." in filename else ""
+
+
+def _facts_records_path(base: str, source_filename: str) -> str:
+    stem = os.path.splitext(source_filename)[0]
+    return os.path.join(base, "facts", "records", f"{stem}.jsonl")
+
+
+def _store_original_source(raw_dir: str, original_name: str, file_bytes: bytes) -> None:
+    originals_dir = os.path.join(raw_dir, "originals")
+    os.makedirs(originals_dir, exist_ok=True)
+    with open(os.path.join(originals_dir, original_name), "wb") as f:
+        f.write(file_bytes)
+
+
+def _save_tabular_source(
+    base: str,
+    raw_dir: str,
+    original_name: str,
+    tables: list[dict],
+) -> str:
+    stem = os.path.splitext(original_name)[0]
+    md_name = f"{stem}.md"
+    markdown, records = build_tabular_markdown_and_records(
+        source_filename=original_name,
+        source_markdown_filename=md_name,
+        tables=tables,
+    )
+    os.makedirs(os.path.join(base, "facts", "records"), exist_ok=True)
+    with open(os.path.join(raw_dir, md_name), "w", encoding="utf-8") as fh:
+        fh.write(markdown)
+    write_jsonl(_facts_records_path(base, md_name), records)
+    return md_name
 
 
 def _get_repo_or_404(username: str, repo_slug: str) -> tuple:
@@ -1267,53 +1303,47 @@ def _register_routes(app: Flask) -> None:
             os.rename(tmp_check, dest_path)
             saved_name = safe_name
         elif ext == "csv":
-            # CSV: 直接保存，文件名保持不变
-            dest_path = os.path.join(raw_dir, safe_name)
-            uploaded.save(dest_path)
-            saved_name = safe_name
+            try:
+                file_bytes = uploaded.read()
+                decoded = file_bytes.decode("utf-8-sig")
+                rows = list(csv.reader(io.StringIO(decoded)))
+                saved_name = _save_tabular_source(
+                    base=base,
+                    raw_dir=raw_dir,
+                    original_name=safe_name,
+                    tables=[{"name": "CSV", "rows": rows}],
+                )
+                _store_original_source(raw_dir, safe_name, file_bytes)
+                flash(
+                    f"CSV 已转换为 Markdown + Fact Records（{safe_name} → {saved_name}）",
+                    "info",
+                )
+            except Exception as exc:
+                logger.exception("CSV parse failed for %s", safe_name)
+                flash(f"CSV 解析失败: {exc}", "error")
+                return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
         elif ext in EXCEL_EXTENSIONS:
-            # Excel: 用 openpyxl 解析，转换为 Markdown 表格保存
-            import io
+            # Excel: 用 openpyxl 解析，转换为 Markdown 表格和 Fact Records 保存
             import openpyxl
             stem = safe_name.rsplit(".", 1)[0]
-            md_name = stem + ".md"
-            dest_path = os.path.join(raw_dir, md_name)
             try:
                 file_bytes = uploaded.read()
                 wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-                md_parts = [f"# {stem}\n\n> 来源文件: {safe_name}\n"]
+                tables: list[dict] = []
                 for sheet_name in wb.sheetnames:
                     ws = wb[sheet_name]
                     rows = list(ws.iter_rows(values_only=True))
-                    if not rows:
-                        continue
-                    md_parts.append(f"\n## Sheet: {sheet_name}\n")
-                    # 过滤全空行
-                    non_empty = [r for r in rows if any(c is not None for c in r)]
-                    if not non_empty:
-                        continue
-                    header = non_empty[0]
-                    col_count = len(header)
-                    # Markdown 表头
-                    header_str = "| " + " | ".join(
-                        str(c) if c is not None else "" for c in header
-                    ) + " |"
-                    sep_str = "| " + " | ".join(["---"] * col_count) + " |"
-                    md_parts.append(header_str)
-                    md_parts.append(sep_str)
-                    for row in non_empty[1:]:
-                        cells = list(row) + [None] * max(0, col_count - len(row))
-                        row_str = "| " + " | ".join(
-                            str(c) if c is not None else "" for c in cells[:col_count]
-                        ) + " |"
-                        md_parts.append(row_str)
-                md_content = "\n".join(md_parts)
-                with open(dest_path, "w", encoding="utf-8") as fh:
-                    fh.write(md_content)
-                saved_name = md_name
+                    tables.append({"name": sheet_name, "rows": rows})
+                saved_name = _save_tabular_source(
+                    base=base,
+                    raw_dir=raw_dir,
+                    original_name=safe_name,
+                    tables=tables,
+                )
+                _store_original_source(raw_dir, safe_name, file_bytes)
                 sheet_list = ", ".join(wb.sheetnames)
                 flash(
-                    f"Excel 已转换为 Markdown（{safe_name} → {md_name}，"
+                    f"Excel 已转换为 Markdown + Fact Records（{safe_name} → {saved_name}，"
                     f"共 {len(wb.sheetnames)} 个 Sheet：{sheet_list}）",
                     "info",
                 )
@@ -1857,6 +1887,7 @@ def _register_routes(app: Flask) -> None:
             pre_confidence = data.get("_confidence", {"level": "low", "score": 0.0, "reasons": []})
             pre_wiki_ev = data.get("_wiki_evidence", [])
             pre_chunk_ev = data.get("_chunk_evidence", [])
+            pre_fact_ev = data.get("_fact_evidence", [])
             pre_ev_summary = data.get("_evidence_summary", "")
 
             def _src_to_ref(fn):
@@ -1876,6 +1907,7 @@ def _register_routes(app: Flask) -> None:
                 confidence=pre_confidence,
                 wiki_evidence=pre_wiki_ev,
                 chunk_evidence=pre_chunk_ev,
+                fact_evidence=pre_fact_ev,
                 evidence_summary=pre_ev_summary,
                 references=[_src_to_ref(fn) for fn in pre_wiki],
                 wiki_sources=[_src_to_ref(fn) for fn in pre_wiki],
@@ -1949,6 +1981,7 @@ def _register_routes(app: Flask) -> None:
             confidence=result.get("confidence", {}),
             wiki_evidence=result.get("wiki_evidence", []),
             chunk_evidence=result.get("chunk_evidence", []),
+            fact_evidence=result.get("fact_evidence", []),
             evidence_summary=result.get("evidence_summary", ""),
             referenced_pages=referenced,
             references=references,

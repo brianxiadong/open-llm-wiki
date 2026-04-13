@@ -226,6 +226,141 @@ class QdrantService:
 
     # ── Chunk-level indexing ──────────────────────────────────────────────────
 
+    def _fact_collection_name(self, repo_id: int) -> str:
+        return f"repo_{repo_id}_facts"
+
+    @staticmethod
+    def _stable_fact_point_id(repo_id: int, source_filename: str, record_id: str) -> int:
+        digest = hashlib.md5(f"{repo_id}:{source_filename}:{record_id}".encode()).hexdigest()
+        return int(digest[:16], 16)
+
+    def ensure_fact_collection(self, repo_id: int) -> None:
+        name = self._fact_collection_name(repo_id)
+        try:
+            if self._qdrant.collection_exists(collection_name=name):
+                return
+            self._qdrant.create_collection(
+                collection_name=name,
+                vectors_config=VectorParams(
+                    size=self._embedding_dimensions,
+                    distance=Distance.COSINE,
+                ),
+            )
+            logger.info("Qdrant created fact collection name=%s", name)
+        except Exception as e:
+            raise QdrantServiceError(str(e)) from e
+
+    def upsert_fact_records(
+        self,
+        repo_id: int,
+        source_filename: str,
+        records: list[dict],
+    ) -> None:
+        if not records:
+            return
+        self.ensure_fact_collection(repo_id)
+        collection = self._fact_collection_name(repo_id)
+        points = []
+        for record in records:
+            fact_text = str(record.get("fact_text") or "").strip()
+            if not fact_text:
+                continue
+            try:
+                vector = self._embed(fact_text)
+            except QdrantServiceError:
+                logger.warning(
+                    "Fact embed failed source=%s record_id=%s",
+                    source_filename,
+                    record.get("record_id"),
+                )
+                continue
+            point_id = self._stable_fact_point_id(
+                repo_id,
+                source_filename,
+                str(record.get("record_id") or ""),
+            )
+            payload = {
+                "repo_id": repo_id,
+                "record_id": record.get("record_id", ""),
+                "source_file": record.get("source_file", source_filename),
+                "source_markdown_filename": record.get(
+                    "source_markdown_filename", source_filename
+                ),
+                "sheet": record.get("sheet", ""),
+                "row_index": record.get("row_index", 0),
+                "fields": record.get("fields", {}),
+                "fact_text": fact_text[:800],
+            }
+            points.append(PointStruct(id=point_id, vector=vector, payload=payload))
+        if points:
+            try:
+                self._qdrant.upsert(collection_name=collection, points=points)
+            except Exception as e:
+                raise QdrantServiceError(str(e)) from e
+
+    def search_facts(
+        self, repo_id: int, query: str, limit: int = 8
+    ) -> list[dict[str, Any]]:
+        collection = self._fact_collection_name(repo_id)
+        try:
+            if not self._qdrant.collection_exists(collection_name=collection):
+                return []
+        except Exception:
+            return []
+        try:
+            vector = self._embed(query)
+            results = self._qdrant.query_points(
+                collection_name=collection,
+                query=vector,
+                limit=limit,
+            ).points
+        except Exception as e:
+            raise QdrantServiceError(str(e)) from e
+        out = []
+        for r in results:
+            pl = r.payload or {}
+            out.append(
+                {
+                    "record_id": pl.get("record_id", ""),
+                    "source_file": pl.get("source_file", ""),
+                    "source_markdown_filename": pl.get("source_markdown_filename", ""),
+                    "sheet": pl.get("sheet", ""),
+                    "row_index": pl.get("row_index", 0),
+                    "fields": pl.get("fields", {}),
+                    "fact_text": pl.get("fact_text", ""),
+                    "score": r.score,
+                }
+            )
+        return out
+
+    def delete_fact_records(self, repo_id: int, source_filename: str) -> None:
+        collection = self._fact_collection_name(repo_id)
+        try:
+            if not self._qdrant.collection_exists(collection_name=collection):
+                return
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+            self._qdrant.delete(
+                collection_name=collection,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="source_markdown_filename",
+                            match=MatchValue(value=source_filename),
+                        )
+                    ]
+                ),
+            )
+        except Exception as e:
+            logger.warning("delete_fact_records failed source=%s: %s", source_filename, e)
+
+    def delete_fact_collection(self, repo_id: int) -> None:
+        name = self._fact_collection_name(repo_id)
+        try:
+            self._qdrant.delete_collection(collection_name=name)
+        except Exception as e:
+            logger.warning("delete_fact_collection failed repo_id=%s: %s", repo_id, e)
+
     def _chunk_collection_name(self, repo_id: int) -> str:
         return f"repo_{repo_id}_chunks"
 

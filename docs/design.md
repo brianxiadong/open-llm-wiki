@@ -23,7 +23,7 @@
 | 保持原汁原味 | Wiki 就是磁盘上的 markdown 文件，可用 Obsidian 直接打开 |
 | LLM 接口 | 仅 OpenAI 兼容接口（覆盖 OpenAI/DeepSeek/Ollama 等） |
 | 文档解析 | 调用已部署的 MinerU 服务（http://172.36.237.175:8000） |
-| 检索增强 | Qdrant 向量检索 + LLM Wiki 结构化导航，双通道互补 |
+| 检索增强 | Qdrant 页面/Chunk/Fact 检索 + LLM Wiki 结构化导航，叙事层与事实层互补 |
 
 ## 3. 三层架构（per repo）
 
@@ -34,9 +34,12 @@
 ├── schema.md          ← 第三层：Schema，控制 LLM 行为的配置文档
 ├── raw/               ← 第一层：原始文档（不可变，LLM 只读不写）
 │   ├── assets/        ← 图片等附件（MinerU 提取的图片）
+│   ├── originals/     ← 表格/二进制原始文件备份（仅上传时保留）
 │   ├── article-1.md
 │   ├── paper.pdf.md   ← PDF 上传时由 MinerU 转为 markdown
 │   └── ...
+├── facts/
+│   └── records/       ← 结构化事实层（JSONL，按行/记录保真存储）
 └── wiki/              ← 第二层：LLM 生成的 Wiki（LLM 完全拥有）
     ├── index.md       ← 内容目录——所有页面的分类索引
     ├── log.md         ← 时间线——操作的追加记录
@@ -55,10 +58,10 @@
 - DOCX (.docx)——调用 MinerU 转为 .docx.md
 - PPT (.pptx)——调用 MinerU 转为 .pptx.md
 - 图片 (.png/.jpg)——调用 MinerU OCR 转为 .md
-- CSV (.csv)——直接存储为文本
-- Excel (.xlsx/.xls)——用 openpyxl 解析，转换为 Markdown 表格（支持多 Sheet），保存为 .md
+- CSV (.csv)——转换为 Markdown 展示稿 + `facts/records/*.jsonl` 行级 records
+- Excel (.xlsx/.xls)——用 openpyxl 解析，转换为 Markdown 表格（支持多 Sheet）+ `facts/records/*.jsonl`
 
-原始上传文件（二进制）不保留，只保留转换后的 markdown 和 MinerU 提取的图片。
+其中 Markdown 用于 Wiki 叙事层摄入，JSONL records 用于 Fact Layer 保真检索；原始表格文件会保存在 `raw/originals/` 便于回溯。
 
 ### 3.2 Wiki 层（wiki/）
 
@@ -131,6 +134,9 @@ Step 4: 向量索引
   对本次新建/更新的每个 wiki 页面：
     调用 Embedding 模型生成向量
     → 写入 Qdrant（upsert，按页面文件名去重）
+  若本次来源存在 `facts/records/<source>.jsonl`：
+    将每条 record 向量化
+    → 写入 `repo_{id}_facts`
 
 Step 5: 收尾
   更新 index.md（新增/修改条目）
@@ -150,38 +156,38 @@ Step 6: 更新 overview.md
 
 用户对 Wiki 提问。LLM 基于已编译的知识回答，而非从原始文档重新检索。
 
-采用**双通道检索**——LLM Wiki 结构化导航 + Qdrant 向量语义检索互补：
+采用**叙事层 + 事实层三路证据检索**——LLM Wiki 结构化导航 + Qdrant chunk + Qdrant fact 互补：
 
 ```
                       用户提问
                          │
-            ┌────────────┴────────────┐
-            ▼                         ▼
-    Wiki 结构化路径              Qdrant Chunk 语义路径
-    LLM 读 index.md             chunk 向量相似度检索
-    沿目录和交叉引用导航         返回 Top-8 原文片段
-    选出结构上相关的页面         精确命中段落级内容
-            │                         │
+            ┌────────────┬────────────┐
+            ▼            ▼            ▼
+    Wiki 结构化路径   Qdrant Chunk   Qdrant Fact
+    LLM 读 index.md  原文片段检索     行级 record 检索
+    选出相关页面      返回 Top-N 段落   返回 Top-N 结构化事实
             └────────────┬────────────┘
                          ▼
-                  合并去重，计算规则化置信度
+                  合并证据，计算规则化置信度
                          │
                          ▼
-                  LLM 阅读页面内容，综合回答
+              LLM 阅读页面内容 + 片段 + facts 综合回答
                          │
                          ▼
-              返回 wiki_evidence + chunk_evidence + confidence
-              写入 query_logs 供后续分析
+        返回 wiki_evidence + chunk_evidence + fact_evidence + confidence
+        写入 query_logs 供后续分析
 ```
 
-**Phase 1 升级（可信度底座）：**
-- Qdrant 现采用**双层 collection**：
+**Phase 2 升级（Fact Layer 落地）：**
+- Qdrant 现采用**三层 collection**：
   - `repo_{id}`：页面级向量（全文，用于 Wiki 路径辅助检索）
   - `repo_{id}_chunks`：段落级向量（400-800 字，用于 chunk 证据检索）
-- 查询方法升级为 `query_with_evidence()`，返回 `wiki_evidence`、`chunk_evidence`、`confidence`
+  - `repo_{id}_facts`：结构化 record 向量（行/记录级，用于精确事实检索）
+- 查询方法升级为 `query_with_evidence()`，返回 `wiki_evidence`、`chunk_evidence`、`fact_evidence`、`confidence`
 - 置信度基于规则打分（0.0-1.0），分级为 `high/medium/low`，写入 `query_logs`
-- SSE `done` 事件同步返回置信度和双通道证据
+- SSE `done` 事件同步返回置信度和三路证据
 - 新增 `manage.py rebuild-chunk-index` 命令用于存量数据回填
+- 新增 `manage.py rebuild-fact-index` 命令用于存量 records 回填
 
 **为什么需要两条路径？** 它们各自擅长不同类型的查询：
 
@@ -215,15 +221,15 @@ GET /{username}/{repo}/query/stream?q=<question>
     event: answer_chunk  (chunk="...")  × N
         │
         ▼
-    event: done  (answer, markdown, confidence, wiki_evidence, chunk_evidence, evidence_summary, wiki_sources, qdrant_sources, referenced_pages)
+    event: done  (answer, markdown, confidence, wiki_evidence, chunk_evidence, fact_evidence, evidence_summary, wiki_sources, qdrant_sources, referenced_pages)
         │
         ▼ 前端用 done 中的 markdown 调用 POST /query（_rendered_answer 模式）渲染 HTML + 证据面板
 ```
 
-- **后端**：`WikiEngine.query_stream()` 为生成器，`LLMClient.chat_stream()` 使用 `stream=True`；Flask 路由使用 `stream_with_context` + `mimetype=text/event-stream`。`done` 事件中的 `wiki_evidence` / `chunk_evidence` 链接必须输出为仓库级 Wiki 完整路径（`/{username}/{repo}/wiki/{page_slug}`），不能返回裸 `/{page_slug}`。
-- **前端**：`chat.js` 优先使用 `EventSource`；`answer_chunk` 事件实时更新加载气泡；`done` 后调用 `POST /query`（`_rendered_answer` 模式）获取完整渲染 HTML，并展示置信度 badge + 双证据面板。
+- **后端**：`WikiEngine.query_stream()` 为生成器，`LLMClient.chat_stream()` 使用 `stream=True`；Flask 路由使用 `stream_with_context` + `mimetype=text/event-stream`。`done` 事件中的 `wiki_evidence` / `chunk_evidence` 链接必须输出为仓库级 Wiki 完整路径（`/{username}/{repo}/wiki/{page_slug}`）；`fact_evidence` 链接输出为来源页完整路径（`/{username}/{repo}/sources/{source_markdown_filename}`）。
+- **前端**：`chat.js` 优先使用 `EventSource`；`answer_chunk` 事件实时更新加载气泡；`done` 后调用 `POST /query`（`_rendered_answer` 模式）获取完整渲染 HTML，并展示置信度 badge + 三路证据面板。
 - **降级**：`queryStreamUrl` 缺失时自动回退到原 POST 轮询模式。
-- **渲染复用**：`POST /query` 若请求体含 `_rendered_answer`，则跳过 LLM 调用，直接渲染 Markdown 返回 HTML，同时返回 `confidence`、`wiki_evidence`、`chunk_evidence` 字段。该分支仍需像普通查询一样写入 `conversation_sessions`，以保证流式查询不会丢失历史消息，也不会让会话标题在重新加载后退回“新对话”。
+- **渲染复用**：`POST /query` 若请求体含 `_rendered_answer`，则跳过 LLM 调用，直接渲染 Markdown 返回 HTML，同时返回 `confidence`、`wiki_evidence`、`chunk_evidence`、`fact_evidence` 字段。该分支仍需像普通查询一样写入 `conversation_sessions`，以保证流式查询不会丢失历史消息，也不会让会话标题在重新加载后退回“新对话”。
 
 **Phase 1 新增 query API 返回字段：**
 ```json
@@ -234,7 +240,8 @@ GET /{username}/{repo}/query/stream?q=<question>
   "confidence": {"level": "high|medium|low", "score": 0.85, "reasons": ["..."]},
   "wiki_evidence": [{"filename": "...", "title": "...", "type": "...", "url": "...", "reason": "..."}],
   "chunk_evidence": [{"chunk_id": "...", "filename": "...", "title": "...", "heading": "...", "url": "...", "snippet": "...", "score": 0.92}],
-  "evidence_summary": "本回答基于 N 个 Wiki 页面和 M 个原文片段生成。",
+  "fact_evidence": [{"record_id": "...", "source_file": "...", "source_markdown_filename": "...", "sheet": "...", "row_index": 12, "fields": {"地区": "华东"}, "snippet": "...", "score": 0.96, "url": "..."}],
+  "evidence_summary": "本回答基于 N 个 Wiki 页面、M 个原文片段和 K 条结构化事实生成。",
   "wiki_sources": [...],
   "qdrant_sources": [...]
 }
@@ -494,13 +501,13 @@ GET  /admin/                                 → 管理统计后台（仅 ADMIN_
 
 **首页 / 仓库列表**：卡片式展示用户的所有仓库，每个卡片显示名称、描述、来源数、页面数、最后更新时间。右上角「新建仓库」按钮。
 
-**仓库面板**：左侧是 Wiki 页面的树状导航（按类别），右侧默认显示 overview.md 的渲染内容。顶部工具栏有：上传文档、查询、维护检查、Schema、操作日志。
+**仓库面板**：左侧是来源文件与 Wiki 页面的导航区，右侧是聊天式查询区域。标题下方提供紧凑型的「知识库操作」条，不再把高频能力隐藏在三点菜单中；功能按「文档与导入 / 检索与探索 / 维护与治理 / 导出与设置」分组展示，每个入口直接显示名称，既保留可发现性，又尽量减少对聊天首屏的占用。
 
 **Wiki 页面**：渲染后的 markdown，顶部显示 frontmatter 元数据（类型、创建日期、来源）。页面内的 `[链接](page.md)` 自动转为站内链接。侧边栏显示「被引用此页面」的反向链接列表。owner 可通过页面顶部的「编辑」和「删除」按钮管理页面。
 
 **Wiki 编辑页**（`templates/wiki/edit.html`）：EasyMDE Markdown 编辑器，支持实时预览与自动保存草稿。
 
-**查询界面**：上方输入框，下方显示回答（markdown 渲染）。回答中的 Wiki 引用可点击跳转。有「保存为 Wiki 页面」按钮。
+**查询界面**：上方输入框，下方显示回答（markdown 渲染）。回答中的 Wiki 引用可点击跳转。有「保存为 Wiki 页面」按钮。输入框右侧的会话相关操作使用带文字的可见按钮（如「历史记录」「清空对话」），避免只靠图标导致功能不可发现。
 
 **关系图**：用 D3.js 力导向图展示页面间的链接关系。类似 Obsidian 的 graph view。
 
@@ -852,9 +859,13 @@ MINERU_TIMEOUT=300
 
 ### 8.6 Qdrant 向量检索集成
 
-Qdrant 作为双通道查询中的语义检索通道，同时在摄入时建立向量索引。
+Qdrant 既承担叙事层的页面/片段检索，也承担 Fact Layer 的 record 检索。
 
-**Collection 设计**：每个仓库对应一个 Qdrant collection，命名为 `repo_{repo_id}`。
+**Collection 设计**：每个仓库对应三类 collection：
+
+- `repo_{repo_id}`：页面级向量（Wiki 页面全文）
+- `repo_{repo_id}_chunks`：段落级向量（chunk evidence）
+- `repo_{repo_id}_facts`：结构化 record 向量（fact evidence）
 
 ```python
 # qdrant_service.py 核心逻辑
@@ -1352,13 +1363,13 @@ tests/
 open-llm-wiki/
 ├── app.py                 ← Flask 应用工厂 + 路由注册
 ├── config.py              ← 配置加载 + 校验
-├── manage.py              ← CLI 管理命令（init-db / migrate / check）
+├── manage.py              ← CLI 管理命令（init-db / migrate / check / rebuild-*-index）
 ├── models.py              ← SQLAlchemy 模型
 ├── llm_client.py          ← LLM 客户端
-├── wiki_engine.py         ← 核心 Wiki 操作
-├── qdrant_service.py      ← Qdrant 向量检索
+├── wiki_engine.py         ← 核心 Wiki 操作（含 Fact Layer 查询融合）
+├── qdrant_service.py      ← Qdrant 向量检索（page/chunk/fact）
 ├── mineru_client.py       ← MinerU 文档解析
-├── utils.py               ← 工具函数
+├── utils.py               ← 工具函数（Markdown/JSONL/表格 records）
 ├── task_worker.py         ← 后台任务 Worker
 ├── exceptions.py          ← 自定义异常
 ├── Makefile               ← 常用命令

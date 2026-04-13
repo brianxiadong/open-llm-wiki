@@ -73,6 +73,24 @@ def test_dashboard_has_doc_management_link(client, app):
     assert "/sources" in html, "Dashboard should link to doc management"
 
 
+def test_dashboard_exposes_action_panel_groups(client, app):
+    _login(client, app)
+    _create_repo(client)
+    html = _html(client.get("/fe_alice/fe-test"))
+    assert "更多操作" in html
+    assert "文档管理" in html
+    assert "任务队列" in html
+    assert "维护检查" in html
+
+
+def test_dashboard_chat_tools_have_visible_labels(client, app):
+    _login(client, app)
+    _create_repo(client)
+    html = _html(client.get("/fe_alice/fe-test"))
+    assert "历史记录" in html
+    assert "清空对话" in html
+
+
 # ── Source list: no nested forms ─────────────────────────────
 
 def _count_nested_forms(html: str) -> int:

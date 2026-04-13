@@ -18,11 +18,12 @@
       <span><i class="lucide-book-open" aria-hidden="true"></i> {{ repo.page_count }}</span>
     </div>
   </div>
+  {% if is_owner %}
   <div class="kb-topbar-right">
-    {% if is_owner %}
     <details class="dropdown kb-more-menu">
       <summary class="kb-more-btn">
         <i class="lucide-ellipsis" aria-hidden="true"></i>
+        <span>更多操作</span>
       </summary>
       <ul dir="rtl">
         <li><a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}"><i class="lucide-folder-open"></i> 文档管理</a></li>
@@ -32,15 +33,16 @@
         <li><a href="{{ url_for('ops.insights', username=username, repo_slug=repo.slug) }}"><i class="lucide-search-x"></i> 知识缺口分析</a></li>
         <li><a href="{{ url_for('ops.entity_check', username=username, repo_slug=repo.slug) }}"><i class="lucide-git-merge"></i> 实体去重检查</a></li>
         <li><a href="{{ url_for('wiki.semantic_search', username=username, repo_slug=repo.slug) }}"><i class="lucide-brain"></i> 语义检索</a></li>
-        <li><a href="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}"><i class="lucide-settings"></i> 设置</a></li>        <li>
+        <li><a href="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}"><i class="lucide-settings"></i> 设置</a></li>
+        <li>
           <a href="{{ url_for('wiki.export_zip', username=username, repo_slug=repo.slug) }}">
             <i class="lucide-download" aria-hidden="true"></i> 导出 Wiki (ZIP)
           </a>
         </li>
       </ul>
     </details>
-    {% endif %}
   </div>
+  {% endif %}
 </div>
 
 {# ── Two-Panel Layout ───────────────────────────────────── #}
@@ -195,13 +197,15 @@
                     placeholder="输入问题，按 Enter 发送…" required
                     aria-label="查询内容"></textarea>
           <details class="chat-history-btn" id="chat-history-details">
-            <summary title="查询历史">
+            <summary class="chat-utility-btn" title="查询历史">
               <i data-lucide="history" aria-hidden="true"></i>
+              <span>历史记录</span>
             </summary>
             <ul id="chat-history-dropdown" dir="rtl" style="min-width:200px;max-height:300px;overflow-y:auto;"></ul>
           </details>
-          <button type="button" id="clear-session-btn" title="清空对话历史" style="background:none;border:none;cursor:pointer;padding:0.35rem;color:var(--pico-muted-color);">
-            <i data-lucide="refresh-ccw" aria-hidden="true" style="width:16px;height:16px;"></i>
+          <button type="button" id="clear-session-btn" class="chat-utility-btn" title="清空对话历史">
+            <i data-lucide="refresh-ccw" aria-hidden="true"></i>
+            <span>清空对话</span>
           </button>
           <button type="submit" id="chat-submit" title="发送">
             <i data-lucide="send-horizontal" aria-hidden="true"></i>

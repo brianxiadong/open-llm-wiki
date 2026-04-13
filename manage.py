@@ -199,5 +199,105 @@ def rebuild_chunk_index(repo_id):
     click.echo("Done.")
 
 
+@cli.command("rebuild-fact-index")
+@click.option("--repo-id", default=None, type=int, help="只重建指定 repo 的 fact 索引")
+@click.option("--regenerate", is_flag=True, help="从 raw/originals/ 重新生成 JSONL 再索引")
+def rebuild_fact_index(repo_id, regenerate):
+    """重建 Qdrant fact 索引（用于表格 records 回填）"""
+    from app import create_app
+    from models import Repo
+    from utils import (
+        build_tabular_markdown_and_records,
+        get_repo_path,
+        read_jsonl,
+        write_jsonl,
+    )
+
+    app = create_app()
+    with app.app_context():
+        if not app.qdrant:
+            click.echo("Qdrant 不可用，跳过。")
+            return
+        query = Repo.query
+        if repo_id:
+            query = query.filter_by(id=repo_id)
+        repos = query.all()
+        for repo in repos:
+            user = repo.user
+            base = get_repo_path(app.config["DATA_DIR"], user.username, repo.slug)
+            facts_dir = os.path.join(base, "facts", "records")
+            os.makedirs(facts_dir, exist_ok=True)
+
+            if regenerate:
+                _regenerate_jsonl_from_originals(base, facts_dir)
+
+            fact_files = sorted(f for f in os.listdir(facts_dir) if f.endswith(".jsonl"))
+            click.echo(f"Rebuilding facts for repo={repo.id} ({repo.slug}): {len(fact_files)} files")
+            for fact_file in fact_files:
+                source_filename = os.path.splitext(fact_file)[0] + ".md"
+                try:
+                    records = read_jsonl(os.path.join(facts_dir, fact_file))
+                    app.qdrant.upsert_fact_records(
+                        repo_id=repo.id,
+                        source_filename=source_filename,
+                        records=records,
+                    )
+                    click.echo(f"  OK: {fact_file} ({len(records)} records)")
+                except Exception as exc:
+                    click.echo(f"  FAIL: {fact_file}: {exc}")
+    click.echo("Done.")
+
+
+def _regenerate_jsonl_from_originals(base: str, facts_dir: str):
+    """Re-parse original Excel/CSV files to regenerate JSONL with current logic."""
+    import csv
+    import io
+
+    from utils import build_tabular_markdown_and_records, write_jsonl
+
+    originals_dir = os.path.join(base, "raw", "originals")
+    if not os.path.isdir(originals_dir):
+        return
+    for fname in sorted(os.listdir(originals_dir)):
+        lower = fname.lower()
+        stem = os.path.splitext(fname)[0]
+        fpath = os.path.join(originals_dir, fname)
+        tables: list[dict] = []
+
+        if lower.endswith((".xlsx", ".xls")):
+            import openpyxl
+
+            wb = openpyxl.load_workbook(fpath, data_only=True, read_only=True)
+            for ws in wb.worksheets:
+                rows = [list(row) for row in ws.iter_rows(values_only=True)]
+                if rows:
+                    tables.append({"name": ws.title, "rows": rows})
+            wb.close()
+        elif lower.endswith(".csv"):
+            with open(fpath, "r", encoding="utf-8-sig") as cf:
+                reader = csv.reader(cf)
+                rows = [row for row in reader]
+            if rows:
+                tables.append({"name": stem, "rows": rows})
+        else:
+            continue
+
+        if not tables:
+            continue
+
+        md_filename = f"{stem}.md"
+        markdown, records = build_tabular_markdown_and_records(
+            source_filename=fname,
+            tables=tables,
+            source_markdown_filename=md_filename,
+        )
+        raw_md_path = os.path.join(base, "raw", md_filename)
+        with open(raw_md_path, "w", encoding="utf-8") as f:
+            f.write(markdown)
+        jsonl_path = os.path.join(facts_dir, f"{stem}.jsonl")
+        write_jsonl(jsonl_path, records)
+        click.echo(f"  Regenerated: {fname} → {len(records)} records")
+
+
 if __name__ == "__main__":
     cli()

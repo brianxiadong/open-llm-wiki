@@ -1,5 +1,6 @@
 """Tests for WikiEngine with mocked LLM and Qdrant."""
 
+import json
 import os
 from unittest.mock import MagicMock
 
@@ -246,6 +247,93 @@ def test_ingest_updates_overview(tmp_data_dir):
     assert "暂无概览内容" not in updated_content
     assert "AI" in updated_content
     assert mock_qdrant.upsert_page.call_count >= 2  # once for ai.md, once for overview.md
+
+
+def test_ingest_indexes_fact_records_if_present(tmp_data_dir):
+    base = os.path.join(tmp_data_dir, "alice", "facts-kb")
+    os.makedirs(os.path.join(base, "raw"), exist_ok=True)
+    os.makedirs(os.path.join(base, "wiki"), exist_ok=True)
+    os.makedirs(os.path.join(base, "facts", "records"), exist_ok=True)
+
+    with open(os.path.join(base, "raw", "sales.md"), "w", encoding="utf-8") as f:
+        f.write("# sales\n\n| 地区 | 收入 |\n| --- | --- |\n| 华东 | 1200 |\n")
+    with open(os.path.join(base, "facts", "records", "sales.jsonl"), "w", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "record_id": "csv:2",
+            "source_file": "sales.csv",
+            "source_markdown_filename": "sales.md",
+            "sheet": "CSV",
+            "row_index": 2,
+            "fields": {"地区": "华东", "收入": 1200},
+            "fact_text": "来源=sales.csv; 表=CSV; 行=2; 地区=华东; 收入=1200",
+        }, ensure_ascii=False) + "\n")
+
+    for name, body in [
+        ("schema.md", "# Schema\n\nRules here.\n"),
+        ("index.md", "---\ntitle: Home\ntype: index\nupdated: 2026-01-01\n---\n\n# Index\n"),
+        ("log.md", "---\ntitle: Log\ntype: log\n---\n\n# Log\n"),
+    ]:
+        with open(os.path.join(base, "wiki", name), "w", encoding="utf-8") as f:
+            f.write(body)
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.side_effect = [
+        {"summary": "sales", "key_entities": [], "key_concepts": [], "main_findings": []},
+        {"pages_to_create": [], "pages_to_update": []},
+    ]
+    mock_llm.chat.side_effect = [
+        "---\ntitle: 首页\ntype: index\nupdated: 2026-01-01\n---\n\n# 首页\n",
+    ]
+    mock_qdrant = MagicMock()
+
+    engine = WikiEngine(mock_llm, mock_qdrant, tmp_data_dir)
+    repo = MagicMock()
+    repo.slug = "facts-kb"
+    repo.id = 7
+
+    events = list(engine.ingest(repo, "alice", "sales.md"))
+
+    assert any(e.get("phase") == "done" for e in events)
+    mock_qdrant.upsert_fact_records.assert_called_once()
+
+
+def test_query_with_evidence_returns_fact_evidence(tmp_data_dir):
+    wiki_dir = os.path.join(tmp_data_dir, "alice", "facts-only", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "schema.md"), "w", encoding="utf-8") as f:
+        f.write("# Schema\n")
+    with open(os.path.join(wiki_dir, "index.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntitle: 首页\ntype: index\n---\n\n# 首页\n")
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": []}
+    mock_llm.chat.return_value = "华东地区 2024Q4 收入为 1200。"
+
+    mock_qdrant = MagicMock()
+    mock_qdrant.search_chunks.return_value = []
+    mock_qdrant.search_facts.return_value = [
+        {
+            "record_id": "csv:2",
+            "source_file": "sales.csv",
+            "source_markdown_filename": "sales.md",
+            "sheet": "CSV",
+            "row_index": 2,
+            "fields": {"地区": "华东", "收入": 1200},
+            "fact_text": "来源=sales.csv; 表=CSV; 行=2; 地区=华东; 收入=1200",
+            "score": 0.96,
+        }
+    ]
+
+    engine = WikiEngine(mock_llm, mock_qdrant, tmp_data_dir)
+    repo = MagicMock()
+    repo.slug = "facts-only"
+    repo.id = 9
+
+    result = engine.query_with_evidence(repo, "alice", "华东地区 2024Q4 收入是多少？", "/alice/facts-only/wiki")
+
+    assert result["fact_evidence"]
+    assert result["fact_evidence"][0]["fields"]["收入"] == 1200
+    assert "结构化事实" in result["evidence_summary"]
 
 
 def test_lint_empty_wiki(tmp_data_dir):

@@ -5,6 +5,9 @@ import os
 import pytest
 
 from utils import (
+    _find_header_row_index,
+    build_tabular_markdown_and_records,
+    classify_query_mode,
     ensure_repo_dirs,
     extract_links,
     get_backlinks,
@@ -72,6 +75,7 @@ def test_ensure_repo_dirs(tmp_data_dir):
     assert os.path.isdir(os.path.join(base, "raw", "assets"))
     assert os.path.isdir(os.path.join(base, "raw"))
     assert os.path.isdir(os.path.join(base, "wiki"))
+    assert os.path.isdir(os.path.join(base, "facts", "records"))
 
 
 def test_get_repo_path(tmp_data_dir):
@@ -138,6 +142,93 @@ def test_schema_templates_in_utils():
     assert "default" in SCHEMA_TEMPLATES
     assert "academic" in SCHEMA_TEMPLATES
     assert len(SCHEMA_TEMPLATES) >= 3
+
+
+def test_build_tabular_markdown_and_records():
+    markdown, records = build_tabular_markdown_and_records(
+        source_filename="sales.xlsx",
+        source_markdown_filename="sales.md",
+        tables=[
+            {
+                "name": "Q4 Revenue",
+                "rows": [
+                    ["地区", "收入", "增长率"],
+                    ["华东", 1200, "12%"],
+                    ["华南", 980, "8%"],
+                ],
+            }
+        ],
+    )
+
+    assert "# sales" in markdown
+    assert "## Sheet: Q4 Revenue" in markdown
+    assert "| 地区 | 收入 | 增长率 |" in markdown
+    assert len(records) == 2
+    assert records[0]["source_file"] == "sales.xlsx"
+    assert records[0]["source_markdown_filename"] == "sales.md"
+    assert records[0]["sheet"] == "Q4 Revenue"
+    assert records[0]["row_index"] == 2
+    assert records[0]["fields"] == {"地区": "华东", "收入": 1200, "增长率": "12%"}
+    assert "地区=华东" in records[0]["fact_text"]
+    assert "收入=1200" in records[0]["fact_text"]
+
+
+def test_find_header_row_index_skips_title_rows():
+    rows = [
+        ["主流 LLM 发布时间线（2022-2025）", None, None, None, None, None, None],
+        ["发布日期", "模型名称", "公司", "参数量", "开源", "里程碑意义", "训练数据量(T tokens)"],
+        ["2023-07-18", "LLaMA 2", "Meta", "70B", "是", "商业可用", 2],
+    ]
+    assert _find_header_row_index(rows) == 1
+
+
+def test_find_header_row_index_double_title():
+    rows = [
+        ["2025 主流大语言模型综合评测得分表", None, None, None],
+        ["基本信息", None, "推理与知识", None],
+        ["模型名称", "公司", "MMLU", "HumanEval"],
+        ["GPT-4o", "OpenAI", 88.7, 90.2],
+    ]
+    assert _find_header_row_index(rows) == 2
+
+
+def test_find_header_row_index_no_title():
+    rows = [
+        ["地区", "收入", "增长率"],
+        ["华东", 1200, "12%"],
+    ]
+    assert _find_header_row_index(rows) == 0
+
+
+def test_build_tabular_with_title_row():
+    """Excel with a merged title row → title row skipped, correct headers used."""
+    markdown, records = build_tabular_markdown_and_records(
+        source_filename="llm.xlsx",
+        tables=[
+            {
+                "name": "发布时间线",
+                "rows": [
+                    ["主流 LLM 发布时间线", None, None, None],
+                    ["发布日期", "模型名称", "公司", "训练数据量(T tokens)"],
+                    ["2023-07-18", "LLaMA 2", "Meta", 2],
+                    ["2024-04-18", "Llama 3", "Meta", 15],
+                ],
+            }
+        ],
+    )
+    assert "| 发布日期 | 模型名称 | 公司 | 训练数据量(T tokens) |" in markdown
+    assert "主流 LLM 发布时间线" not in markdown.split("## Sheet")[1].split("|---")[0].replace("Sheet: 发布时间线", "")
+    assert len(records) == 2
+    assert records[0]["fields"]["模型名称"] == "LLaMA 2"
+    assert records[0]["fields"]["训练数据量(T tokens)"] == 2
+    assert "训练数据量(T tokens)=2" in records[0]["fact_text"]
+    assert "模型名称=LLaMA 2" in records[0]["fact_text"]
+
+
+def test_classify_query_mode_prefers_fact_for_exact_lookup():
+    assert classify_query_mode("华东地区 2024Q4 收入是多少？") == "fact"
+    assert classify_query_mode("总结一下 2024Q4 市场趋势") == "narrative"
+    assert classify_query_mode("对比一下华东和华南的收入，并总结差异") == "hybrid"
 
 
 def test_create_repo_with_academic_schema(auth_client, app):

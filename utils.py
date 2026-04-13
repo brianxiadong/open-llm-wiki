@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from datetime import date, datetime
 
 import markdown as md_lib
 import yaml
@@ -102,6 +104,7 @@ def ensure_repo_dirs(data_dir: str, username: str, repo_slug: str) -> str:
     base = os.path.join(data_dir, username, repo_slug)
     os.makedirs(os.path.join(base, "raw", "assets"), exist_ok=True)
     os.makedirs(os.path.join(base, "wiki"), exist_ok=True)
+    os.makedirs(os.path.join(base, "facts", "records"), exist_ok=True)
     return base
 
 
@@ -157,6 +160,164 @@ def list_raw_sources(raw_dir: str) -> list[dict]:
                 }
             )
     return sources
+
+
+def _normalize_cell_value(value):
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    return value
+
+
+def _normalize_header_row(header_row: list) -> list[str]:
+    headers: list[str] = []
+    used: dict[str, int] = {}
+    for idx, cell in enumerate(header_row, start=1):
+        base = str(cell).strip() if cell is not None else ""
+        if not base:
+            base = f"col_{idx}"
+        if base in used:
+            used[base] += 1
+            base = f"{base}_{used[base]}"
+        else:
+            used[base] = 1
+        headers.append(base)
+    return headers
+
+
+def _find_header_row_index(rows: list[list], max_scan: int = 5) -> int:
+    """Pick the row most likely to be the real column header.
+
+    Excel sheets often have one or more title / merged-cell rows before the
+    actual headers.  The heuristic: among the first *max_scan* rows, the row
+    with the highest count of non-empty cells is the header.  Ties go to the
+    earlier row.
+    """
+    if not rows:
+        return 0
+    scan = min(len(rows), max_scan)
+    best_idx, best_count = 0, 0
+    for i in range(scan):
+        count = sum(1 for c in rows[i] if c not in (None, ""))
+        if count > best_count:
+            best_count = count
+            best_idx = i
+    return best_idx
+
+
+def _row_to_fact_text(source_filename: str, sheet_name: str, row_index: int, fields: dict) -> str:
+    pairs = [f"{key}={value}" for key, value in fields.items()]
+    joined = "; ".join(pairs)
+    return (
+        f"来源={source_filename}; 表={sheet_name}; 行={row_index}; {joined}"
+        if joined
+        else f"来源={source_filename}; 表={sheet_name}; 行={row_index}"
+    )
+
+
+def build_tabular_markdown_and_records(
+    source_filename: str,
+    tables: list[dict],
+    source_markdown_filename: str | None = None,
+) -> tuple[str, list[dict]]:
+    """Convert tables into Markdown plus row-level fact records."""
+    stem = os.path.splitext(os.path.basename(source_filename))[0]
+    markdown_parts = [f"# {stem}\n", f"> 来源文件: {source_filename}\n"]
+    records: list[dict] = []
+
+    for table_idx, table in enumerate(tables):
+        table_name = str(table.get("name") or f"Sheet{table_idx + 1}").strip()
+        rows = table.get("rows") or []
+        non_empty_rows = [
+            list(row)
+            for row in rows
+            if row is not None and any(cell not in (None, "") for cell in row)
+        ]
+        if not non_empty_rows:
+            continue
+
+        header_idx = _find_header_row_index(non_empty_rows)
+        headers = _normalize_header_row(non_empty_rows[header_idx])
+        data_rows = non_empty_rows[header_idx + 1:]
+
+        markdown_parts.append(f"\n## Sheet: {table_name}\n")
+        markdown_parts.append("| " + " | ".join(headers) + " |")
+        markdown_parts.append("| " + " | ".join(["---"] * len(headers)) + " |")
+
+        for row_offset, raw_row in enumerate(data_rows, start=header_idx + 2):
+            padded = list(raw_row) + [None] * max(0, len(headers) - len(raw_row))
+            values = [_normalize_cell_value(cell) for cell in padded[: len(headers)]]
+            markdown_parts.append(
+                "| " + " | ".join("" if value is None else str(value) for value in values) + " |"
+            )
+            fields = {
+                header: value
+                for header, value in zip(headers, values, strict=False)
+                if value not in (None, "")
+            }
+            if not fields:
+                continue
+            table_slug = slugify(table_name) or f"sheet-{table_idx + 1}"
+            records.append(
+                {
+                    "record_id": f"{table_slug}:{row_offset}",
+                    "source_file": source_filename,
+                    "source_markdown_filename": source_markdown_filename
+                    or f"{stem}.md",
+                    "sheet": table_name,
+                    "row_index": row_offset,
+                    "fields": fields,
+                    "fact_text": _row_to_fact_text(source_filename, table_name, row_offset, fields),
+                }
+            )
+
+    return "\n".join(markdown_parts), records
+
+
+def write_jsonl(path: str, rows: list[dict]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def read_jsonl(path: str) -> list[dict]:
+    if not os.path.exists(path):
+        return []
+    rows: list[dict] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return rows
+
+
+def classify_query_mode(question: str) -> str:
+    text = (question or "").strip().lower()
+    if not text:
+        return "narrative"
+
+    fact_signals = [
+        "多少", "几", "名单", "列表", "占比", "百分比", "同比", "环比", "增长",
+        "下降", "收入", "销量", "金额", "日期", "时间", "排名", "top", "分别", "各",
+    ]
+    narrative_signals = [
+        "总结", "概述", "趋势", "原因", "分析", "解读", "如何", "怎么", "介绍", "建议",
+    ]
+
+    has_fact_keyword = any(token in text for token in fact_signals)
+    has_metric_pattern = bool(
+        re.search(r"\d", text)
+        and re.search(r"(多少|几|占比|百分比|同比|环比|增长|下降|收入|销量|金额|排名)", text)
+    )
+    has_fact_signal = has_fact_keyword or has_metric_pattern
+    has_narrative_signal = any(token in text for token in narrative_signals)
+
+    if has_fact_signal and has_narrative_signal:
+        return "hybrid"
+    if has_fact_signal:
+        return "fact"
+    return "narrative"
 
 
 DEFAULT_SCHEMA_MD = """\
