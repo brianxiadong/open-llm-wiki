@@ -228,6 +228,7 @@
     newSessionUrl: '{{ url_for("ops.new_session", username=username, repo_slug=repo.slug) }}',
     deleteSessionBaseUrl: '/{{ username }}/{{ repo.slug }}/sessions/',
     getSessionUrl: '{{ url_for("ops.get_session", username=username, repo_slug=repo.slug) }}',
+    renderMarkdownUrl: '{{ url_for("ops.render_markdown_api", username=username, repo_slug=repo.slug) }}',
     wikiBaseUrl: '/{{ username }}/{{ repo.slug }}/wiki/',
     repoSlug: '{{ repo.slug }}',
     isOwner: {{ 'true' if is_owner else 'false' }},

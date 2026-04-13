@@ -2185,6 +2185,29 @@ def _register_routes(app: Flask) -> None:
         msgs = json.loads(cs.messages_json) if cs else []
         return jsonify(messages=msgs)
 
+    @ops_bp.route("/<username>/<repo_slug>/render-markdown", methods=["POST"])
+    def render_markdown_api(username, repo_slug):
+        """轻量 Markdown 渲染接口，供前端历史消息回显使用。"""
+        user, repo = _get_repo_or_404(username, repo_slug)
+        if not repo.is_public:
+            if not current_user.is_authenticated:
+                return jsonify(error="请先登录"), 401
+            if current_user.id != repo.user_id:
+                abort(403)
+        data = request.get_json(silent=True) or {}
+        base_url = _wiki_base_url(username, repo_slug)
+        # batch mode: {"messages": ["md1", "md2", ...]}
+        if "messages" in data:
+            html_list = []
+            for raw in data["messages"]:
+                _, html = render_markdown(raw or "", base_url)
+                html_list.append(html)
+            return jsonify(html_list=html_list)
+        # single mode: {"markdown": "..."}
+        raw = data.get("markdown", "")
+        _, html = render_markdown(raw, base_url)
+        return jsonify(html=html)
+
     @ops_bp.route("/<username>/<repo_slug>/sessions", methods=["GET"])
     @login_required
     def list_sessions(username, repo_slug):

@@ -530,22 +530,38 @@
           if (welcome) welcome.hidden = false;
           return;
         }
-        msgs.forEach(function(m) {
-          if (m.role === 'user') {
-            addUserMessage(m.content, true);
-          } else if (m.role === 'assistant') {
-            var safeHtml = '<p>' + escapeHtml(m.content).replace(/\n/g, '<br>') + '</p>';
-            addAIMessage(safeHtml, [], m.content, [], [], null, null, null, null, '', true);
-          }
+        // Collect assistant messages that need server-side markdown rendering
+        var assistantTexts = msgs
+          .filter(function(m) { return m.role === 'assistant'; })
+          .map(function(m) { return m.content; });
+
+        var renderPromise = (cfg.renderMarkdownUrl && assistantTexts.length)
+          ? fetch(cfg.renderMarkdownUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ messages: assistantTexts })
+            }).then(function(r) { return r.json(); }).catch(function() { return {}; })
+          : Promise.resolve({});
+
+        renderPromise.then(function(renderData) {
+          var htmlMap = renderData.html_list || [];
+          var aiIdx = 0;
+          msgs.forEach(function(m) {
+            if (m.role === 'user') {
+              addUserMessage(m.content, true);
+            } else if (m.role === 'assistant') {
+              var html = htmlMap[aiIdx] || ('<p>' + escapeHtml(m.content).replace(/\n/g, '<br>') + '</p>');
+              addAIMessage(html, [], m.content, [], [], null, null, null, null, '', true);
+              aiIdx++;
+            }
+          });
+          if (messages) messages.scrollTop = messages.scrollHeight;
         });
-        if (messages) messages.scrollTop = messages.scrollHeight;
       })
       .catch(function() {
         if (welcome) welcome.hidden = false;
       });
   }
-
-  function deleteSession(key) {
     if (!confirm('确认删除此对话？')) return;
     var url = cfg.deleteSessionBaseUrl + encodeURIComponent(key) + '/delete';
     fetch(url, { method: 'POST' })
@@ -566,31 +582,6 @@
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({title: title})
     }).then(function() { loadSessionList(SESSION_KEY); });
-  }
-
-  function restoreChatMessages(key) {
-    if (!cfg.getSessionUrl || !key) return;
-    fetch(cfg.getSessionUrl + '?key=' + encodeURIComponent(key))
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        var msgs = data.messages || [];
-        if (!msgs.length) {
-          if (welcome) welcome.hidden = false;
-          return;
-        }
-        msgs.forEach(function(m) {
-          if (m.role === 'user') {
-            addUserMessage(m.content, true);
-          } else if (m.role === 'assistant') {
-            var safeHtml = '<p>' + escapeHtml(m.content).replace(/\n/g, '<br>') + '</p>';
-            addAIMessage(safeHtml, [], m.content, [], [], null, null, null, null, '', true);
-          }
-        });
-        if (messages) messages.scrollTop = messages.scrollHeight;
-      })
-      .catch(function() {
-        if (welcome) welcome.hidden = false;
-      });
   }
 
   if (newSessionBtn) {
