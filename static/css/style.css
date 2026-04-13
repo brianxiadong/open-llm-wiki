@@ -1,16 +1,18 @@
 /* ============================================================
-   Open LLM Wiki — Custom Theme
+   Open LLM Wiki — Design system (Swiss minimal + doc/wiki UX)
+   Tokens: slate neutrals, blue CTA (#2563EB), Inter typography
    ============================================================ */
 
 :root {
-  --brand: #4f46e5;
-  --brand-light: #818cf8;
-  --brand-bg: #eef2ff;
-  --brand-hover: #4338ca;
+  --brand: #2563eb;
+  --brand-light: #60a5fa;
+  --brand-bg: #eff6ff;
+  --brand-hover: #1d4ed8;
+  --logo: #334155;
   --surface: #ffffff;
   --surface-dim: #f8fafc;
   --text: #1e293b;
-  --text-muted: #64748b;
+  --text-muted: #475569;
   --border: #e2e8f0;
   --border-light: #f1f5f9;
   --success: #16a34a;
@@ -23,14 +25,70 @@
   --info-bg: #eff6ff;
   --radius: 10px;
   --radius-lg: 16px;
-  --shadow-sm: 0 1px 2px rgba(0,0,0,.05);
-  --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
-  --shadow-md: 0 4px 6px -1px rgba(0,0,0,.08), 0 2px 4px -2px rgba(0,0,0,.05);
-  --shadow-lg: 0 10px 15px -3px rgba(0,0,0,.08), 0 4px 6px -4px rgba(0,0,0,.04);
-  --transition: 0.2s cubic-bezier(.4,0,.2,1);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.04);
+  --transition: 0.2s cubic-bezier(.4, 0, .2, 1);
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
-body { background: var(--surface-dim); color: var(--text); }
+[data-theme="light"] {
+  --pico-primary: var(--brand);
+  --pico-primary-background: var(--brand);
+  --pico-primary-hover: var(--brand-hover);
+  --pico-primary-underline: var(--brand-hover);
+  --pico-primary-focus: rgba(37, 99, 235, 0.22);
+  --pico-color: var(--text);
+  --pico-muted-color: var(--text-muted);
+  --pico-background-color: var(--surface);
+  --pico-card-background-color: var(--surface);
+  --pico-border-color: var(--border);
+  --pico-muted-border-color: var(--border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+body {
+  background: var(--surface-dim);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  z-index: 9999;
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  color: var(--brand);
+  font-weight: 600;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+.skip-link:focus {
+  left: 0.75rem;
+  top: 0.75rem;
+}
+
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
 
 /* Lucide SVG icons rendered by lucide.createIcons() */
 .lucide {
@@ -43,33 +101,43 @@ body { background: var(--surface-dim); color: var(--text); }
 
 /* ── Site Header ─────────────────────────────────────────── */
 .site-header {
-  background: var(--surface);
+  background: rgba(255, 255, 255, 0.92);
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
-  position: sticky; top: 0; z-index: 100;
+  position: sticky;
+  top: 0;
+  z-index: 100;
   padding: 0;
+  backdrop-filter: saturate(180%) blur(10px);
 }
-.site-header nav { padding: 0.6rem 0; margin-bottom: 0; }
+@supports not (backdrop-filter: blur(1px)) {
+  .site-header { background: var(--surface); }
+}
+.site-header nav { padding: 0.65rem 0; margin-bottom: 0; }
 .site-header nav ul { margin: 0; }
+.site-nav a,
+.site-nav summary { cursor: pointer; }
 
 .brand {
   display: flex; align-items: center; gap: 0.5rem;
-  font-size: 1.15rem; font-weight: 700; color: var(--brand) !important;
+  font-size: 1.1rem; font-weight: 700; color: var(--logo) !important;
   text-decoration: none;
+  letter-spacing: -0.02em;
 }
-.brand i { font-size: 1.3rem; }
+.brand i { font-size: 1.25rem; color: var(--brand); }
 
 .nav-link {
   font-size: 0.9rem; color: var(--text-muted) !important;
   text-decoration: none; display: flex; align-items: center; gap: 0.35rem;
   transition: color var(--transition);
+  border-radius: 6px;
 }
 .nav-link:hover { color: var(--brand) !important; }
 
 .avatar-trigger { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
 .avatar-circle {
   width: 32px; height: 32px; border-radius: 50%;
-  background: linear-gradient(135deg, var(--brand), var(--brand-light));
+  background: linear-gradient(145deg, #334155, var(--brand));
   color: #fff; display: flex; align-items: center; justify-content: center;
   font-size: 0.85rem; font-weight: 700;
 }
@@ -85,11 +153,16 @@ body { background: var(--surface-dim); color: var(--text); }
 
 /* ── Footer ──────────────────────────────────────────────── */
 .site-footer {
-  text-align: center; padding: 1.5rem 0; margin-top: 1rem;
+  text-align: center;
+  padding: 2rem 0 2.25rem;
+  margin-top: 2rem;
   border-top: 1px solid var(--border);
-  color: var(--text-muted); font-size: 0.83rem;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
 }
-.site-footer p { margin: 0; }
+.site-footer-inner { max-width: 36rem; margin: 0 auto; }
+.site-footer-tagline { margin: 0 0 0.35rem; color: var(--text); font-weight: 500; }
+.site-footer-meta { margin: 0; opacity: 0.9; }
 
 /* ── Flash Toasts ────────────────────────────────────────── */
 .flash-stack { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.5rem; }
@@ -144,11 +217,13 @@ article header, article footer { padding: 0; margin: 0; background: none; border
 }
 .repo-card {
   padding: 0; overflow: hidden;
-  transition: box-shadow var(--transition), transform var(--transition);
+  transition: box-shadow var(--transition), border-color var(--transition);
+  border: 1px solid var(--border);
 }
-.repo-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+.repo-card:hover { box-shadow: var(--shadow-md); border-color: #bfdbfe; }
 .repo-card-link {
   text-decoration: none; color: inherit; display: block; padding: 1.5rem;
+  cursor: pointer;
 }
 .repo-card-link h3 { margin: 0 0 0.4rem; font-size: 1.1rem; color: var(--text); }
 .repo-desc {
@@ -175,7 +250,7 @@ article header, article footer { padding: 0; margin: 0; background: none; border
 
 /* ── Dashboard ───────────────────────────────────────────── */
 .repo-hero {
-  background: linear-gradient(135deg, var(--brand-bg) 0%, #faf5ff 100%);
+  background: linear-gradient(135deg, var(--surface-dim) 0%, var(--brand-bg) 100%);
   border: 1px solid var(--border); border-radius: var(--radius-lg);
   padding: 1.5rem 2rem; margin-bottom: 1.5rem;
   display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;
@@ -199,6 +274,7 @@ article header, article footer { padding: 0; margin: 0; background: none; border
   text-decoration: none; font-weight: 500;
   transition: all var(--transition); border: 1px solid var(--border);
   color: var(--text); background: var(--surface);
+  cursor: pointer;
 }
 .action-btn:hover { border-color: var(--brand); color: var(--brand); box-shadow: var(--shadow-sm); }
 .action-btn i { font-size: 1rem; }
@@ -322,6 +398,7 @@ article header, article footer { padding: 0; margin: 0; background: none; border
 .badge-log       { background: var(--surface-dim); color: var(--text-muted); }
 .badge-index     { background: var(--brand-bg); color: var(--brand); }
 .badge-muted     { background: var(--surface-dim); color: var(--text-muted); border: 1px solid var(--border); }
+.badge-public    { background: var(--success); color: #fff; font-size: 0.7rem; font-weight: 600; }
 
 /* ── Source / Upload ─────────────────────────────────────── */
 .upload-card {
@@ -343,7 +420,7 @@ article header, article footer { padding: 0; margin: 0; background: none; border
   transition: all var(--transition);
 }
 .drop-zone:hover, .drop-active {
-  background: rgba(79,70,229,0.08) !important;
+  background: rgba(37, 99, 235, 0.08) !important;
   border-color: var(--brand) !important;
 }
 
@@ -389,7 +466,6 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
   border: 1px solid #ffc107;
 }
 .badge-running .badge-pct { font-weight: 700; margin-left: 0.1em; }
-}
 .badge-error {
   background: #f8d7da !important; color: #842029 !important;
   border: 1px solid #f5c2c7;
@@ -515,7 +591,7 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
 
 /* ── Error Pages ─────────────────────────────────────────── */
 .error-page { text-align: center; padding: 4rem 1rem; }
-.error-page h1 { font-size: 6rem; margin-bottom: 0; color: var(--brand-light); font-weight: 800; }
+.error-page h1 { font-size: 6rem; margin-bottom: 0; color: #93c5fd; font-weight: 800; }
 .error-page p { color: var(--text-muted); font-size: 1.1rem; }
 
 /* ── Empty State ─────────────────────────────────────────── */

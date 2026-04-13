@@ -490,6 +490,8 @@ GET  /admin/                                 → 管理统计后台（仅 ADMIN_
 
 ### 6.2 页面设计
 
+**前端 UI/UX**：全站基于 Pico CSS + 自定义样式（`static/css/style.css`、`static/css/chat.css`）。视觉方向为偏瑞士风格的极简文档/工具型界面：Inter 字体、浅灰背景（`#F8FAFC`）、正文与次要文字对比度满足可读性、主操作与链接使用蓝色强调色（`#2563EB`），顶栏半透明毛玻璃 sticky、页脚简述产品能力。交互上为可点击元素提供 `cursor-pointer`、`:focus-visible` 轮廓与 150–300ms 过渡；尊重 `prefers-reduced-motion`。图标统一为 Lucide（SVG），不用 emoji 作界面图标。
+
 **首页 / 仓库列表**：卡片式展示用户的所有仓库，每个卡片显示名称、描述、来源数、页面数、最后更新时间。右上角「新建仓库」按钮。
 
 **仓库面板**：左侧是 Wiki 页面的树状导航（按类别），右侧默认显示 overview.md 的渲染内容。顶部工具栏有：上传文档、查询、维护检查、Schema、操作日志。

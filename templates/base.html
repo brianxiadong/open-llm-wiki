@@ -3,14 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f8fafc">
   <title>{% block title %}Open LLM Wiki{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   {% block head %}{% endblock %}
 </head>
 <body>
+  <a href="#main-content" class="skip-link">跳到主要内容</a>
   <header class="site-header">
-    <nav class="container">
+    <nav class="container site-nav" aria-label="主导航">
       <ul>
         <li>
           <a href="{{ url_for('index') }}" class="brand">
@@ -59,7 +64,7 @@
     </nav>
   </header>
 
-  <main class="container main-content">
+  <main id="main-content" class="container main-content" tabindex="-1">
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     <div class="flash-stack">
@@ -77,8 +82,11 @@
     {% block content %}{% endblock %}
   </main>
 
-  <footer class="site-footer container">
-    <p>Open LLM Wiki &mdash; 基于大语言模型的知识库平台</p>
+  <footer class="site-footer container" role="contentinfo">
+    <div class="site-footer-inner">
+      <p class="site-footer-tagline">Open LLM Wiki — 基于大语言模型的知识库平台</p>
+      <p class="site-footer-meta">上传文档 · 自动生成 Wiki · 对话检索</p>
+    </div>
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>

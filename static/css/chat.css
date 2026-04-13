@@ -2,6 +2,15 @@
    Chat-centric Knowledge Base Layout
    ============================================================ */
 
+.kb-readme-banner {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
 /* ── Top Bar ───────────────────────────────────────────────── */
 .kb-topbar {
   display: flex; justify-content: space-between; align-items: center;
@@ -225,7 +234,7 @@
 }
 .chat-welcome-icon {
   width: 56px; height: 56px; border-radius: 16px;
-  background: linear-gradient(135deg, var(--brand-bg), #f3e8ff);
+  background: linear-gradient(135deg, var(--brand-bg), var(--surface-dim));
   display: flex; align-items: center; justify-content: center;
   margin-bottom: 1rem;
 }
@@ -264,7 +273,7 @@
   background: var(--brand); color: #fff; font-size: 0.85rem;
 }
 .chat-msg-avatar-ai {
-  background: linear-gradient(135deg, var(--brand-bg), #f3e8ff);
+  background: linear-gradient(135deg, var(--brand-bg), var(--surface-dim));
   color: var(--brand);
 }
 
