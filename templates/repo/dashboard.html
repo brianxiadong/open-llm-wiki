@@ -59,7 +59,7 @@
     <div class="kb-upload-zone">
       <form method="POST" enctype="multipart/form-data" id="upload-form"
             action="{{ url_for('source.upload', username=username, repo_slug=repo.slug) }}">
-        <input type="file" name="file" accept=".md,.txt,.pdf,.doc,.docx,.pptx,.png,.jpg,.jpeg"
+        <input type="file" name="file" accept=".md,.txt,.pdf,.doc,.docx,.pptx,.png,.jpg,.jpeg,.csv,.xlsx,.xls"
                hidden id="upload-file-input">
         <label class="kb-upload-label" id="upload-drop-area">
           <i class="lucide-upload-cloud" aria-hidden="true"></i>
