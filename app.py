@@ -1806,6 +1806,48 @@ def _register_routes(app: Flask) -> None:
                 abort(403)
         data = request.get_json(silent=True) or {}
         question = data.get("q", "").strip()
+        session_key = data.get("session_key", "")
+        history: list[dict] = []
+        if session_key and current_user.is_authenticated:
+            from models import ConversationSession
+            cs = ConversationSession.query.filter_by(
+                repo_id=repo.id, user_id=current_user.id, session_key=session_key
+            ).first()
+            if cs:
+                try:
+                    history = json.loads(cs.messages_json)
+                except Exception:
+                    history = []
+
+        def _persist_session(answer_markdown: str) -> None:
+            if not session_key or not current_user.is_authenticated:
+                return
+            try:
+                session_history = history + [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content": answer_markdown[:2000]},
+                ]
+                session_history = session_history[-20:]
+                from models import ConversationSession
+                cs = ConversationSession.query.filter_by(
+                    repo_id=repo.id, user_id=current_user.id, session_key=session_key
+                ).first()
+                if cs:
+                    cs.messages_json = json.dumps(session_history, ensure_ascii=False)
+                    if cs.title == "新对话":
+                        cs.title = question[:60]
+                else:
+                    cs = ConversationSession(
+                        repo_id=repo.id,
+                        user_id=current_user.id,
+                        session_key=session_key,
+                        title=question[:60],
+                        messages_json=json.dumps(session_history, ensure_ascii=False),
+                    )
+                    db.session.add(cs)
+                db.session.commit()
+            except Exception as sess_exc:
+                logger.warning("Session update failed: %s", sess_exc)
 
         pre_answer = data.get("_rendered_answer")
         if pre_answer is not None:
@@ -1826,6 +1868,7 @@ def _register_routes(app: Flask) -> None:
                     "filename": fn,
                 }
 
+            _persist_session(pre_answer)
             return jsonify(
                 html=answer_html,
                 markdown=pre_answer,
@@ -1841,20 +1884,6 @@ def _register_routes(app: Flask) -> None:
 
         if not question:
             return jsonify(error="请输入问题"), 400
-
-        # -- Load conversation history ------------------------------------
-        session_key = data.get("session_key", "")
-        history: list[dict] = []
-        if session_key and current_user.is_authenticated:
-            from models import ConversationSession
-            cs = ConversationSession.query.filter_by(
-                repo_id=repo.id, user_id=current_user.id, session_key=session_key
-            ).first()
-            if cs:
-                try:
-                    history = json.loads(cs.messages_json)
-                except Exception:
-                    history = []
 
         try:
             result = current_app.wiki_engine.query_with_evidence(
@@ -1891,38 +1920,13 @@ def _register_routes(app: Flask) -> None:
                 ),
                 evidence_summary=result.get("evidence_summary", ""),
             )
-            from models import db
             db.session.add(ql)
             db.session.commit()
         except Exception as ql_exc:
             logger.warning("QueryLog write failed: %s", ql_exc)
 
         # -- Update conversation session ----------------------------------
-        if session_key and current_user.is_authenticated:
-            try:
-                history.append({"role": "user", "content": question})
-                history.append({"role": "assistant", "content": result.get("markdown", "")[:2000]})
-                history = history[-20:]
-                from models import ConversationSession
-                cs = ConversationSession.query.filter_by(
-                    repo_id=repo.id, user_id=current_user.id, session_key=session_key
-                ).first()
-                if cs:
-                    cs.messages_json = json.dumps(history, ensure_ascii=False)
-                    if cs.title == "新对话":
-                        cs.title = question[:60]
-                else:
-                    cs = ConversationSession(
-                        repo_id=repo.id,
-                        user_id=current_user.id,
-                        session_key=session_key,
-                        title=question[:60],
-                        messages_json=json.dumps(history, ensure_ascii=False),
-                    )
-                    db.session.add(cs)
-                db.session.commit()
-            except Exception as sess_exc:
-                logger.warning("Session update failed: %s", sess_exc)
+        _persist_session(result.get("markdown", ""))
 
         def _fn_to_ref(fn: str) -> dict:
             slug = fn.replace(".md", "")

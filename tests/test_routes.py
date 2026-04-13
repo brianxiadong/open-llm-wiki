@@ -578,6 +578,38 @@ def test_query_api_render_only_returns_confidence(sample_repo):
     assert data["confidence"]["level"] == "low"
 
 
+def test_query_api_render_only_stores_session_and_updates_title(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    question = "2024 Q4 市场趋势总结"
+    resp = client.post(
+        f"/alice/{slug}/query",
+        json={
+            "q": question,
+            "session_key": "stream-sess-1",
+            "_rendered_answer": "# 回答\n\n这里是流式查询后的回答。",
+            "_confidence": {"level": "medium", "score": 0.6, "reasons": []},
+            "_wiki_evidence": [],
+            "_chunk_evidence": [],
+            "_evidence_summary": "",
+            "_wiki_sources": [],
+            "_qdrant_sources": [],
+        },
+    )
+    assert resp.status_code == 200
+    with app.app_context():
+        from models import ConversationSession
+        import json as _j
+        cs = ConversationSession.query.filter_by(session_key="stream-sess-1").first()
+        assert cs is not None
+        assert cs.title == question
+        msgs = _j.loads(cs.messages_json)
+        assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"] == question
+        assert msgs[1]["role"] == "assistant"
+        assert "流式查询后的回答" in msgs[1]["content"]
+
+
 def test_query_stream_done_has_evidence(sample_repo, app):
     """SSE done event must include confidence and evidence fields."""
     from unittest.mock import patch

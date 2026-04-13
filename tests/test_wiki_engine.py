@@ -154,6 +154,45 @@ def test_query_with_pages(tmp_data_dir):
     assert "concept.md" in result["referenced_pages"]
 
 
+def test_query_stream_evidence_urls_include_repo_prefix(tmp_data_dir):
+    wiki_dir = os.path.join(tmp_data_dir, "alice", "r1", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+
+    with open(os.path.join(wiki_dir, "index.md"), "w", encoding="utf-8") as f:
+        f.write(
+            "---\ntitle: 首页\ntype: index\nupdated: 2026-01-01\n---\n\n# Index\n\n- [C](concept.md)\n"
+        )
+    with open(os.path.join(wiki_dir, "concept.md"), "w", encoding="utf-8") as f:
+        f.write(
+            "---\ntitle: Concept\ntype: concept\nupdated: 2026-01-01\n---\n\n# Concept\n\nDetails.\n"
+        )
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": ["concept.md"]}
+    mock_llm.chat_stream.return_value = iter(["Here", " is", " answer"])
+
+    mock_qdrant = MagicMock()
+    mock_qdrant.search_chunks.return_value = [{
+        "chunk_id": "concept.md#0",
+        "filename": "concept.md",
+        "page_title": "Concept",
+        "heading": "Intro",
+        "chunk_text": "Details.",
+        "score": 0.92,
+    }]
+
+    engine = WikiEngine(mock_llm, mock_qdrant, tmp_data_dir)
+    repo = MagicMock()
+    repo.slug = "r1"
+    repo.id = 42
+
+    events = list(engine.query_stream(repo, "alice", "What is it?"))
+    done = next(e for e in events if e["event"] == "done")
+
+    assert done["data"]["wiki_evidence"][0]["url"] == "/alice/r1/wiki/concept"
+    assert done["data"]["chunk_evidence"][0]["url"] == "/alice/r1/wiki/concept"
+
+
 def test_ingest_updates_overview(tmp_data_dir):
     """overview.md should be updated by LLM after ingest when pages are created."""
     base = os.path.join(tmp_data_dir, "alice", "test-ov")

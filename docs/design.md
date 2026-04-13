@@ -220,10 +220,10 @@ GET /{username}/{repo}/query/stream?q=<question>
         ▼ 前端用 done 中的 markdown 调用 POST /query（_rendered_answer 模式）渲染 HTML + 证据面板
 ```
 
-- **后端**：`WikiEngine.query_stream()` 为生成器，`LLMClient.chat_stream()` 使用 `stream=True`；Flask 路由使用 `stream_with_context` + `mimetype=text/event-stream`。
+- **后端**：`WikiEngine.query_stream()` 为生成器，`LLMClient.chat_stream()` 使用 `stream=True`；Flask 路由使用 `stream_with_context` + `mimetype=text/event-stream`。`done` 事件中的 `wiki_evidence` / `chunk_evidence` 链接必须输出为仓库级 Wiki 完整路径（`/{username}/{repo}/wiki/{page_slug}`），不能返回裸 `/{page_slug}`。
 - **前端**：`chat.js` 优先使用 `EventSource`；`answer_chunk` 事件实时更新加载气泡；`done` 后调用 `POST /query`（`_rendered_answer` 模式）获取完整渲染 HTML，并展示置信度 badge + 双证据面板。
 - **降级**：`queryStreamUrl` 缺失时自动回退到原 POST 轮询模式。
-- **渲染复用**：`POST /query` 若请求体含 `_rendered_answer`，则跳过 LLM 调用，直接渲染 Markdown 返回 HTML，同时返回 `confidence`、`wiki_evidence`、`chunk_evidence` 字段。
+- **渲染复用**：`POST /query` 若请求体含 `_rendered_answer`，则跳过 LLM 调用，直接渲染 Markdown 返回 HTML，同时返回 `confidence`、`wiki_evidence`、`chunk_evidence` 字段。该分支仍需像普通查询一样写入 `conversation_sessions`，以保证流式查询不会丢失历史消息，也不会让会话标题在重新加载后退回“新对话”。
 
 **Phase 1 新增 query API 返回字段：**
 ```json

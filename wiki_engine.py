@@ -631,6 +631,7 @@ class WikiEngine:
         """Stream query: yields dicts {"event": str, "data": dict}."""
         repo_slug = repo.slug
         repo_id = repo.id
+        wiki_base_url = f"/{username}/{repo_slug}/wiki"
         wiki_dir = self._wiki_dir(username, repo_slug)
         schema_content = _read_file(self._schema_path(username, repo_slug))
         index_content = _read_file(self._index_path(username, repo_slug))
@@ -733,7 +734,7 @@ class WikiEngine:
                 "filename": fn,
                 "title": fm_ev.get("title", page_slug),
                 "type": fm_ev.get("type", "unknown"),
-                "url": f"/{page_slug}",
+                "url": f"{wiki_base_url}/{page_slug}",
                 "reason": reason,
             })
         chunk_ev = []
@@ -745,7 +746,7 @@ class WikiEngine:
                 "filename": fn,
                 "title": hit.get("page_title", page_slug),
                 "heading": hit.get("heading", ""),
-                "url": f"/{page_slug}",
+                "url": f"{wiki_base_url}/{page_slug}",
                 "snippet": hit.get("chunk_text", "")[:200],
                 "score": hit.get("score", 0.0),
             })
