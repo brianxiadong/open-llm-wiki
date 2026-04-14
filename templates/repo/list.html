@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ username }} 的知识库 - Open LLM Wiki{% endblock %}
+{% block title %}{{ username }} 的知识库 - {{ site_name }}{% endblock %}
 
 {% block content %}
 <header class="page-header">
@@ -36,20 +36,7 @@
               <i class="lucide-book-open" aria-hidden="true"></i>
               {{ repo.page_count }}
             </span>
-            {% if repo.active_task_count %}
-            <span class="repo-stat repo-stat-active" title="{{ repo.active_task_count }} 个任务处理中">
-              <i class="lucide-loader" aria-hidden="true"></i>
-              {{ repo.active_task_count }} 处理中
-            </span>
-            {% endif %}
           </div>
-        <span class="repo-updated">
-          {% if repo.updated_at %}
-          更新于 {{ repo.updated_at.strftime('%Y-%m-%d') }}
-          {% else %}
-          —
-          {% endif %}
-        </span>
       </footer>
     </a>
   </article>

@@ -40,3 +40,4 @@ class Config:
     MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 
     ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+    SITE_NAME = os.environ.get("SITE_NAME", "Open LLM Wiki")

@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}查询追踪 {{ ql.trace_id }} - 管理后台{% endblock %}
+
+{% block content %}
+<div style="display:flex;gap:0.5rem;margin-bottom:1.5rem;flex-wrap:wrap;align-items:center;">
+  <a href="{{ url_for('admin.query_logs') }}" class="action-btn">← 返回记录列表</a>
+  <a href="{{ url_for('admin.dashboard') }}" class="action-btn">管理概览</a>
+</div>
+
+<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+  <h1 style="margin:0;">查询追踪</h1>
+  <code style="font-size:1.1rem;background:var(--pico-card-background-color);padding:0.25rem 0.7rem;border-radius:5px;border:1px solid var(--pico-muted-border-color);">{{ ql.trace_id }}</code>
+</div>
+
+<!-- 基本信息 -->
+<article style="padding:1.2rem;margin-bottom:1rem;">
+  <h4 style="margin-bottom:0.8rem;color:var(--pico-muted-color);font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;">基本信息</h4>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:0.8rem;">
+    <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">时间</div><strong>{{ ql.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</strong></div>
+    <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">用户</div><strong>{{ user.username if user else '匿名' }}</strong></div>
+    <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">知识库</div><strong>{{ repo.name if repo else '-' }}{% if repo %} ({{ repo.slug }}){% endif %}</strong></div>
+    <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">置信度</div>
+      <span class="confidence-badge confidence-{{ ql.confidence }}">{{ ql.confidence }}</span>
+    </div>
+    <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">耗时</div><strong>{{ ql.latency_ms or '-' }} ms</strong></div>
+    <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">查询模式</div><strong>{{ ql.query_mode or '-' }}</strong></div>
+    <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">Wiki 命中</div><strong>{{ ql.wiki_hit_count }}</strong></div>
+    <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">Chunk 命中</div><strong>{{ ql.chunk_hit_count }}</strong></div>
+  </div>
+</article>
+
+<!-- 问题 & 回答 -->
+<article style="padding:1.2rem;margin-bottom:1rem;">
+  <h4 style="margin-bottom:0.8rem;color:var(--pico-muted-color);font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;">问题</h4>
+  <blockquote style="margin:0 0 1.2rem 0;font-size:1rem;border-left:3px solid var(--pico-primary);padding-left:1rem;">{{ ql.question }}</blockquote>
+  <h4 style="margin-bottom:0.8rem;color:var(--pico-muted-color);font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;">完整回答</h4>
+  <div class="rendered-content" style="background:var(--pico-card-background-color);padding:1rem;border-radius:6px;border:1px solid var(--pico-muted-border-color);">
+    {{ answer_html | safe if answer_html else '<em style="color:var(--pico-muted-color);">暂无</em>' }}
+  </div>
+</article>
+
+<!-- 检索过程 -->
+<article style="padding:1.2rem;margin-bottom:1rem;">
+  <h4 style="margin-bottom:1rem;color:var(--pico-muted-color);font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;">检索过程</h4>
+
+  {% if retrieval.wiki %}
+  <div style="margin-bottom:1.2rem;">
+    <div style="font-size:0.88rem;font-weight:600;margin-bottom:0.5rem;display:flex;align-items:center;gap:0.4rem;">
+      📖 LLM Wiki 结构命中 ({{ retrieval.wiki | length }})
+    </div>
+    <table style="font-size:0.82rem;margin:0;">
+      <thead><tr><th>文件名</th><th>标题</th><th>匹配原因</th></tr></thead>
+      <tbody>
+        {% for item in retrieval.wiki %}
+        <tr>
+          <td><code style="font-size:0.78rem;">{{ item.filename }}</code></td>
+          <td>{{ item.title }}</td>
+          <td style="color:var(--pico-muted-color);">{{ item.reason }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if retrieval.chunks %}
+  <div style="margin-bottom:1.2rem;">
+    <div style="font-size:0.88rem;font-weight:600;margin-bottom:0.5rem;display:flex;align-items:center;gap:0.4rem;">
+      🔍 语义 Chunk 命中 ({{ retrieval.chunks | length }})
+    </div>
+    <table style="font-size:0.82rem;margin:0;">
+      <thead><tr><th>文件名</th><th>相似度</th><th>片段（前300字）</th></tr></thead>
+      <tbody>
+        {% for item in retrieval.chunks %}
+        <tr>
+          <td><code style="font-size:0.78rem;">{{ item.filename }}</code></td>
+          <td>{% if item.score %}{{ "%.1f"|format(item.score * 100) }}%{% else %}-{% endif %}</td>
+          <td style="max-width:340px;color:var(--pico-muted-color);white-space:pre-wrap;font-size:0.78rem;">{{ item.snippet }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if retrieval.facts %}
+  <div style="margin-bottom:1.2rem;">
+    <div style="font-size:0.88rem;font-weight:600;margin-bottom:0.5rem;display:flex;align-items:center;gap:0.4rem;">
+      📊 结构化事实命中 ({{ retrieval.facts | length }})
+    </div>
+    <table style="font-size:0.82rem;margin:0;">
+      <thead><tr><th>来源文件</th><th>相似度</th><th>字段值</th></tr></thead>
+      <tbody>
+        {% for item in retrieval.facts %}
+        <tr>
+          <td><code style="font-size:0.78rem;">{{ item.source_file }}</code></td>
+          <td>{% if item.score %}{{ "%.1f"|format(item.score * 100) }}%{% else %}-{% endif %}</td>
+          <td style="font-size:0.78rem;">
+            {% for k, v in (item.fields or {}).items() %}
+            <span style="display:inline-block;background:var(--pico-card-background-color);border:1px solid var(--pico-muted-border-color);border-radius:3px;padding:0.05rem 0.3rem;margin:0.1rem;">
+              <strong>{{ k }}</strong>: {{ v }}
+            </span>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if not retrieval.wiki and not retrieval.chunks and not retrieval.facts %}
+  <p style="color:var(--pico-muted-color);font-size:0.88rem;">暂无检索记录（旧数据或检索为空）</p>
+  {% endif %}
+</article>
+
+<!-- 数据文件 -->
+{% if source_files %}
+<article style="padding:1.2rem;">
+  <h4 style="margin-bottom:0.8rem;color:var(--pico-muted-color);font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;">知识库源文件 ({{ source_files | length }})</h4>
+  <div style="display:flex;flex-wrap:wrap;gap:0.4rem;">
+    {% for f in source_files %}
+    <code style="font-size:0.78rem;background:var(--pico-card-background-color);padding:0.15rem 0.45rem;border-radius:3px;border:1px solid var(--pico-muted-border-color);">{{ f }}</code>
+    {% endfor %}
+  </div>
+</article>
+{% endif %}
+{% endblock %}

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}注册 - Open LLM Wiki{% endblock %}
+{% block title %}注册 - {{ site_name }}{% endblock %}
 
 {% block content %}
 <div class="auth-container">
@@ -8,7 +8,7 @@
     <div class="auth-brand">
       <i class="lucide-user-plus" aria-hidden="true"></i>
       <h2>创建账号</h2>
-      <p>注册 Open LLM Wiki，开始建立与管理你的知识库</p>
+      <p>注册 {{ site_name }}，开始建立与管理你的知识库</p>
     </div>
 
     <form method="POST" action="{{ url_for('auth.register') }}">

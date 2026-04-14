@@ -161,7 +161,7 @@
     if (!isRestore) scrollToBottom();
   }
 
-  function addAIMessage(html, refs, markdown, wikiSources, qdrantSources, confidence, wikiEvidence, chunkEvidence, factEvidence, evidenceSummary, isRestore) {
+  function addAIMessage(html, refs, markdown, wikiSources, qdrantSources, confidence, wikiEvidence, chunkEvidence, factEvidence, evidenceSummary, isRestore, traceId) {
     var div = document.createElement('div');
     div.className = 'chat-msg chat-msg-ai';
 
@@ -285,11 +285,29 @@
 
     var saveBtn = '';
     if (markdown) {
+      var feedbackHtml = traceId
+        ? '<span class="chat-feedback-group" data-trace="' + escapeHtml(traceId) + '">' +
+          '<button class="chat-action-btn chat-fb-btn" data-rating="good" title="回答有帮助">' +
+          '<i class="lucide-thumbs-up" aria-hidden="true"></i></button>' +
+          '<button class="chat-action-btn chat-fb-btn" data-rating="bad" title="回答需改进">' +
+          '<i class="lucide-thumbs-down" aria-hidden="true"></i></button></span>'
+        : '';
       saveBtn = '<div class="chat-msg-actions">' +
+        feedbackHtml +
         '<button class="chat-action-btn chat-copy-btn" title="复制回答">' +
         '<i class="lucide-copy" aria-hidden="true"></i> 复制</button>' +
         '<button class="chat-action-btn chat-save-btn" title="保存为 Wiki 页面">' +
         '<i class="lucide-bookmark-plus" aria-hidden="true"></i> 保存为页面</button></div>';
+    }
+
+    // -- Trace ID footer --------------------------------------------------
+    var traceHtml = '';
+    if (traceId) {
+      traceHtml = '<div class="chat-trace-id">' +
+        '<span class="trace-id-label">查询ID:</span> ' +
+        '<code class="trace-id-code" id="trace-' + traceId + '">' + escapeHtml(traceId) + '</code>' +
+        '<button class="trace-copy-btn" type="button" title="复制查询ID" data-trace="' + escapeHtml(traceId) + '">' +
+        '<i class="lucide-copy" aria-hidden="true"></i></button></div>';
     }
 
     // -- Evidence button (replaces inline panels) -------------------------
@@ -308,7 +326,7 @@
       '<div class="chat-msg-body">' +
       confHtml +
       '<div class="chat-msg-content rendered-content">' + html + '</div>' +
-      (hasNewEvidence ? evidenceBtnHtml : sourceHtml) + saveBtn + '</div>';
+      (hasNewEvidence ? evidenceBtnHtml : sourceHtml) + saveBtn + traceHtml + '</div>';
 
     messages.appendChild(div);
     initIcons(div);
@@ -355,6 +373,51 @@
     var saveBtnEl = div.querySelector('.chat-save-btn');
     if (saveBtnEl && markdown) {
       saveBtnEl.addEventListener('click', function () { saveAsPage(markdown, saveBtnEl); });
+    }
+
+    var fbBtns = div.querySelectorAll('.chat-fb-btn');
+    fbBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var group = btn.closest('.chat-feedback-group');
+        var tid = group ? group.dataset.trace : '';
+        if (!tid) return;
+        var rating = btn.dataset.rating;
+        var comment = '';
+        if (rating === 'bad') {
+          comment = prompt('请简要描述问题（可选）：') || '';
+        }
+        fetch(cfg.feedbackUrl || (cfg.queryUrl.replace('/query', '/feedback')), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trace_id: tid, rating: rating, comment: comment })
+        }).then(function () {
+          group.querySelectorAll('.chat-fb-btn').forEach(function (b) { b.disabled = true; b.style.opacity = '0.4'; });
+          btn.style.opacity = '1';
+          btn.innerHTML = rating === 'good'
+            ? '<i class="lucide-thumbs-up" aria-hidden="true"></i> 已反馈'
+            : '<i class="lucide-thumbs-down" aria-hidden="true"></i> 已反馈';
+          initIcons(btn);
+        }).catch(function () {
+          if (window.showToast) showToast('反馈提交失败', 'warning');
+        });
+      });
+    });
+
+    var traceCopyBtn = div.querySelector('.trace-copy-btn');
+    if (traceCopyBtn) {
+      traceCopyBtn.addEventListener('click', function () {
+        var tid = traceCopyBtn.dataset.trace;
+        navigator.clipboard.writeText(tid).then(function () {
+          traceCopyBtn.innerHTML = '<i class="lucide-check" aria-hidden="true"></i>';
+          initIcons(traceCopyBtn);
+          setTimeout(function () {
+            traceCopyBtn.innerHTML = '<i class="lucide-copy" aria-hidden="true"></i>';
+            initIcons(traceCopyBtn);
+          }, 2000);
+        }).catch(function () {
+          if (window.showToast) showToast('复制失败', 'warning');
+        });
+      });
     }
 
     if (!isRestore) scrollToBottom();
@@ -404,6 +467,29 @@
       '<i class="lucide-alert-circle" aria-hidden="true"></i> ' + escapeHtml(text) + '</div></div>';
     messages.appendChild(div);
     initIcons(div);
+    scrollToBottom();
+  }
+
+  function addTimeoutMessage(originalQuestion) {
+    var div = document.createElement('div');
+    div.className = 'chat-msg chat-msg-ai chat-msg-error';
+    div.innerHTML = '<div class="chat-msg-avatar chat-msg-avatar-ai">' +
+      '<i class="lucide-bot" aria-hidden="true"></i></div>' +
+      '<div class="chat-msg-body"><div class="chat-msg-content chat-error-text">' +
+      '<i class="lucide-clock" aria-hidden="true"></i> 回答生成超时或连接中断' +
+      '</div><div class="chat-msg-actions">' +
+      '<button class="action-btn chat-retry-btn" style="font-size:0.8rem;padding:0.25rem 0.7rem;width:auto;">' +
+      '<i class="lucide-refresh-cw" aria-hidden="true"></i> 重试</button></div></div>';
+    messages.appendChild(div);
+    initIcons(div);
+    var retryBtn = div.querySelector('.chat-retry-btn');
+    if (retryBtn) {
+      retryBtn.addEventListener('click', function () {
+        div.remove();
+        input.value = originalQuestion;
+        form.dispatchEvent(new Event('submit'));
+      });
+    }
     scrollToBottom();
   }
 
@@ -645,7 +731,7 @@
           } else {
             addAIMessage(data.html || '', data.references || [],
               data.markdown || '', data.wiki_sources || [], data.qdrant_sources || [],
-              data.confidence, data.wiki_evidence, data.chunk_evidence, data.fact_evidence, data.evidence_summary);
+              data.confidence, data.wiki_evidence, data.chunk_evidence, data.fact_evidence, data.evidence_summary, false, data.trace_id || '');
           }
         })
         .catch(function () {
@@ -662,9 +748,24 @@
 
     var answerChunks = [];
     var streamingEl = null;
+    var lastActivity = Date.now();
+    var SSE_TIMEOUT_MS = 90000; // 90s total timeout
     var es = new EventSource(streamUrl + '?q=' + encodeURIComponent(q));
 
+    var timeoutTimer = setInterval(function () {
+      if (Date.now() - lastActivity > SSE_TIMEOUT_MS) {
+        clearInterval(timeoutTimer);
+        es.close();
+        removeLoadingMessage();
+        addTimeoutMessage(q);
+        isLoading = false;
+        submitBtn.disabled = false;
+        input.focus();
+      }
+    }, 3000);
+
     es.addEventListener('progress', function (e) {
+      lastActivity = Date.now();
       var d = JSON.parse(e.data);
       var loading = document.getElementById('chat-loading');
       if (loading) {
@@ -674,6 +775,7 @@
     });
 
     es.addEventListener('answer_chunk', function (e) {
+      lastActivity = Date.now();
       var d = JSON.parse(e.data);
       answerChunks.push(d.chunk);
       var loading = document.getElementById('chat-loading');
@@ -690,6 +792,7 @@
     });
 
     es.addEventListener('done', function (e) {
+      clearInterval(timeoutTimer);
       es.close();
       removeLoadingMessage();
       var d = JSON.parse(e.data);
@@ -717,11 +820,11 @@
             data.markdown || '', data.wiki_sources || [], data.qdrant_sources || [],
             data.confidence || confidence, data.wiki_evidence || wikiEvidence,
             data.chunk_evidence || chunkEvidence, data.fact_evidence || factEvidence,
-            data.evidence_summary || evidenceSummary);
+            data.evidence_summary || evidenceSummary, false, data.trace_id || '');
         })
         .catch(function () {
           addAIMessage('<p>' + escapeHtml(answer) + '</p>', [], answer, wikiSources, qdrantSources,
-            confidence, wikiEvidence, chunkEvidence, factEvidence, evidenceSummary);
+            confidence, wikiEvidence, chunkEvidence, factEvidence, evidenceSummary, false, '');
         });
       isLoading = false;
       submitBtn.disabled = false;
@@ -729,6 +832,7 @@
     });
 
     es.addEventListener('error', function (e) {
+      clearInterval(timeoutTimer);
       if (es.readyState === EventSource.CLOSED) return;
       es.close();
       removeLoadingMessage();
@@ -741,10 +845,11 @@
     });
 
     es.onerror = function () {
+      clearInterval(timeoutTimer);
       if (es.readyState === EventSource.CLOSED) return;
       es.close();
       removeLoadingMessage();
-      addErrorMessage('连接中断，请重试');
+      addTimeoutMessage(q);
       isLoading = false;
       submitBtn.disabled = false;
       input.focus();

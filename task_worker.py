@@ -34,27 +34,19 @@ class TaskWorker:
         logger.info("TaskWorker started")
 
     def _recover_stale_tasks(self) -> None:
-        """Reset tasks stuck in 'running' from a previous crash."""
+        """Reset ALL running tasks to queued on startup — they can't be running if the process just started."""
         with self._app.app_context():
             from models import Task, db
 
-            cutoff = datetime.now(timezone.utc) - __import__("datetime").timedelta(minutes=_STALE_TASK_MINUTES)
-            stale = (
-                Task.query
-                .filter_by(status="running")
-                .filter(
-                    (Task.started_at < cutoff) | (Task.started_at.is_(None))
-                )
-                .all()
-            )
+            stale = Task.query.filter_by(status="running").all()
             if stale:
                 for t in stale:
                     t.status = "queued"
                     t.progress = 0
-                    t.progress_msg = "Recovered from stale state"
+                    t.progress_msg = "Recovered after service restart"
                     t.started_at = None
                 db.session.commit()
-                logger.info("Recovered %d stale tasks back to queued", len(stale))
+                logger.info("Recovered %d interrupted tasks back to queued on startup", len(stale))
 
     def stop(self) -> None:
         self._stop_event.set()

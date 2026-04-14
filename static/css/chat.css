@@ -392,6 +392,45 @@
 }
 .chat-action-btn:hover { color: var(--brand); }
 
+/* ── Trace ID footer ─────────────────────────────────────────────────── */
+.chat-trace-id {
+  display: flex; align-items: center; gap: 0.35rem;
+  margin-top: 0.5rem; padding-top: 0.4rem;
+  border-top: 1px dashed var(--border-color, #d8dfe8);
+  font-size: 0.72rem; color: var(--text-muted);
+}
+.trace-id-label { opacity: 0.7; flex-shrink: 0; }
+.trace-id-code {
+  font-family: monospace; font-size: 0.72rem;
+  background: var(--surface-mid, #e8edf5);
+  padding: 0.1rem 0.35rem; border-radius: 3px;
+  color: var(--text-secondary, #4a5568); letter-spacing: 0.04em;
+  user-select: all;
+}
+.trace-copy-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; cursor: pointer; padding: 0.1rem 0.2rem;
+  color: var(--text-muted); opacity: 0.6; border-radius: 3px;
+  transition: opacity 0.15s, background 0.15s;
+}
+.trace-copy-btn:hover { opacity: 1; background: var(--surface-mid, #e8edf5); }
+.trace-copy-btn i { width: 11px; height: 11px; }
+
+/* ── Feedback buttons ─────────────────────────────────────────────────── */
+.chat-feedback-group {
+  display: inline-flex; align-items: center; gap: 0.15rem;
+  margin-right: 0.5rem; padding-right: 0.5rem;
+  border-right: 1px solid var(--border-color, #d8dfe8);
+}
+.chat-fb-btn {
+  padding: 0.15rem 0.35rem !important; border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+.chat-fb-btn:hover { background: var(--surface-mid, #e8edf5); }
+.chat-fb-btn[data-rating="good"]:hover { color: #2d9e5f; }
+.chat-fb-btn[data-rating="bad"]:hover { color: #c0392b; }
+.chat-fb-btn:disabled { cursor: default; }
+
 /* Typing indicator */
 .chat-typing {
   display: inline-flex; gap: 4px; align-items: center; padding: 0.3rem 0;

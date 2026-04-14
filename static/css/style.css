@@ -167,6 +167,21 @@ textarea:focus-visible {
   color: #fff; display: flex; align-items: center; justify-content: center;
   font-size: 0.85rem; font-weight: 700;
 }
+.btn-nav-tutorial {
+  display: inline-flex !important; align-items: center;
+  border: 1px solid var(--border-strong) !important;
+  background: #fff !important; color: var(--text) !important;
+  border-radius: 8px !important;
+  padding: 0.4rem 0.85rem !important; font-size: 0.9rem !important; font-weight: 600;
+  text-decoration: none !important;
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
+}
+.btn-nav-tutorial:hover {
+  border-color: var(--brand) !important; color: var(--brand) !important;
+  background: rgba(255, 255, 255, 0.95) !important;
+}
+
 .btn-nav-register {
   background: var(--brand) !important; color: #fff !important;
   border: none !important; border-radius: 8px !important;
@@ -448,6 +463,9 @@ article header, article footer { padding: 0; margin: 0; background: none; border
 .upload-row button,
 .upload-row .action-btn { width: auto !important; flex: 0 0 auto; }
 .upload-hint { font-size: 0.82rem; color: var(--text-muted); margin-top: 0.5rem; }
+
+/* Pico CSS sets button width:100% inside forms — override for action-btn everywhere */
+button.action-btn { width: auto !important; }
 
 /* ── Drop Zone ─────────────────────────────────────────────── */
 .drop-zone {

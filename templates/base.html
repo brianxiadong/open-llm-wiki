@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#f8fafc">
-  <title>{% block title %}Open LLM Wiki{% endblock %}</title>
+  <title>{% block title %}{{ site_name }}{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -20,11 +20,14 @@
         <li>
           <a href="{{ url_for('index') }}" class="brand">
             <i class="lucide-book-open"></i>
-            <span>Open LLM Wiki</span>
+            <span>{{ site_name }}</span>
           </a>
         </li>
       </ul>
       <ul>
+        <li>
+          <a href="{{ url_for('guide') }}" class="btn-nav-tutorial">使用教程</a>
+        </li>
         {% if current_user and current_user.is_authenticated %}
         <li>
           <a href="{{ url_for('repo.list_repos', username=current_user.username) }}" class="nav-link">
@@ -84,7 +87,7 @@
 
   <footer class="site-footer container" role="contentinfo">
     <div class="site-footer-inner">
-      <p class="site-footer-tagline">Open LLM Wiki — 基于大语言模型的知识库平台</p>
+      <p class="site-footer-tagline">{{ site_name }} — 基于大语言模型的知识库平台</p>
       <p class="site-footer-meta">上传文档 · 自动生成 Wiki · 对话检索</p>
     </div>
   </footer>

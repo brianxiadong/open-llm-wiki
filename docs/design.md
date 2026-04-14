@@ -437,6 +437,7 @@ POST /user/settings/tokens/{id}/revoke   → 吊销 API Token
 
 仓库管理：
 GET  /                                   → 首页（已登录则跳转仓库列表）
+GET  /guide                              → 使用教程（`templates/guide.html`，顶栏「使用教程」文字按钮）
 GET  /{username}                         → 用户的仓库列表
 POST /{username}/repos                   → 创建新仓库
 GET  /{username}/{repo}                  → 仓库面板（Wiki 概览 + README）
@@ -498,6 +499,8 @@ GET  /admin/                                 → 管理统计后台（仅 ADMIN_
 ### 6.2 页面设计
 
 **前端 UI/UX**：全站基于 Pico CSS + 自定义样式（`static/css/style.css`、`static/css/chat.css`）。视觉方向为文档/知识库工具型 SaaS，采用 Inter 字体与蓝灰分层（B2 + S2）：页面外层使用蓝灰壳层背景，导航/侧栏使用略深一层的蓝灰面板，主内容区保持更亮的白色阅读面。组件分隔不只依赖极淡的 1px 线，而是通过更清晰的蓝灰边框、轻阴影、面板底色差共同建立层级。主操作与链接使用蓝色强调色（`#2563EB`），顶栏为半透明毛玻璃 sticky，页脚简述产品能力。交互上为可点击元素提供 `cursor-pointer`、`:focus-visible` 轮廓与 150–300ms 过渡；尊重 `prefers-reduced-motion`。图标统一为 Lucide（SVG），不用 emoji 作界面图标。
+
+**顶栏**：右侧导航首项为「使用教程」文字按钮（无图标），链至 `/guide`。
 
 **首页 / 仓库列表**：卡片式展示用户的所有仓库，每个卡片显示名称、描述、来源数、页面数、最后更新时间。右上角「新建仓库」按钮。
 
@@ -1410,7 +1413,8 @@ open-llm-wiki/
 
 **部署目标**：`172.36.164.85`（Anolis OS 8.9, x86_64）
 
-**部署脚本**（`scripts/deploy.sh`）：
+**部署脚本**（`scripts/deploy.sh`）：在项目根 `.env` 中配置 `DEPLOY_HOST`、`DEPLOY_PORT`、`DEPLOY_USER`、`DEPLOY_PASSWORD`（可选 `DEPLOY_PATH`，默认 `/opt/open-llm-wiki`），执行 `./scripts/deploy.sh` 时会自动 `source` 该 `.env`。脚本用 `sshpass` 上传 tarball 并远程解压、执行迁移、重启 `llmwiki` 服务，**不会**覆盖服务器上的 `.env` 与 `data/`。
+
 ```bash
 #!/bin/bash
 set -e

@@ -10,3 +10,5 @@ dist/
 build/
 ._*
 tests/screenshots/
+.cursor/
+.superpowers/

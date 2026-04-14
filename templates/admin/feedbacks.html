@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}用户反馈 - 管理后台{% endblock %}
+
+{% block content %}
+<h1>用户反馈</h1>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+  <a href="{{ url_for('admin.dashboard') }}" class="action-btn">← 返回概览</a>
+  <a href="{{ url_for('admin.query_logs') }}" class="action-btn">查询记录</a>
+</div>
+
+<div style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center;">
+  <div style="display:flex;gap:0.5rem;">
+    <span style="background:#e8f5e9;color:#2d9e5f;padding:0.3rem 0.7rem;border-radius:6px;font-size:0.85rem;font-weight:600;">👍 {{ total_good }}</span>
+    <span style="background:#fde8e8;color:#c0392b;padding:0.3rem 0.7rem;border-radius:6px;font-size:0.85rem;font-weight:600;">👎 {{ total_bad }}</span>
+  </div>
+  <div style="display:flex;gap:0.4rem;">
+    <a href="{{ url_for('admin.feedbacks') }}" class="action-btn{% if not rating_filter %}" style="font-weight:700;{% endif %}">全部</a>
+    <a href="{{ url_for('admin.feedbacks', rating='bad') }}" class="action-btn{% if rating_filter == 'bad' %}" style="font-weight:700;color:#c0392b;{% endif %}">仅差评</a>
+    <a href="{{ url_for('admin.feedbacks', rating='good') }}" class="action-btn{% if rating_filter == 'good' %}" style="font-weight:700;color:#2d9e5f;{% endif %}">仅好评</a>
+  </div>
+</div>
+
+<article style="padding:0;overflow:auto;">
+  <table style="margin:0;font-size:0.83rem;">
+    <thead>
+      <tr>
+        <th>评价</th>
+        <th>时间</th>
+        <th>用户</th>
+        <th>知识库</th>
+        <th style="min-width:200px;">问题</th>
+        <th>用户备注</th>
+        <th>置信度</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for fb, user, repo, ql in pagination.items %}
+      <tr>
+        <td style="text-align:center;font-size:1.1rem;">
+          {% if fb.rating == 'good' %}👍{% else %}👎{% endif %}
+        </td>
+        <td style="white-space:nowrap;">{{ fb.created_at.strftime('%m-%d %H:%M') }}</td>
+        <td>{{ user.username if user else '匿名' }}</td>
+        <td>{{ repo.slug if repo else '-' }}</td>
+        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ ql.question if ql else '' }}">
+          {{ ql.question if ql else '-' }}
+        </td>
+        <td style="max-width:180px;color:var(--pico-muted-color);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ fb.comment or '' }}">
+          {{ fb.comment or '—' }}
+        </td>
+        <td>
+          {% if ql %}
+          <span class="confidence-badge confidence-{{ ql.confidence }}" style="font-size:0.75rem;padding:0.1rem 0.4rem;">{{ ql.confidence }}</span>
+          {% else %}-{% endif %}
+        </td>
+        <td>
+          {% if fb.trace_id %}
+          <a href="{{ url_for('admin.trace_detail', trace_id=fb.trace_id) }}" class="action-btn" style="font-size:0.75rem;padding:0.2rem 0.5rem;">追踪</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" style="text-align:center;color:var(--pico-muted-color);padding:2rem;">暂无反馈</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+
+{% if pagination.pages > 1 %}
+<div style="display:flex;gap:0.5rem;justify-content:center;margin-top:1.5rem;">
+  {% if pagination.has_prev %}
+  <a href="{{ url_for('admin.feedbacks', page=pagination.prev_num, rating=rating_filter) }}" class="action-btn">← 上一页</a>
+  {% endif %}
+  <span style="padding:0.4rem 0.6rem;font-size:0.85rem;">第 {{ pagination.page }} / {{ pagination.pages }} 页</span>
+  {% if pagination.has_next %}
+  <a href="{{ url_for('admin.feedbacks', page=pagination.next_num, rating=rating_filter) }}" class="action-btn">下一页 →</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

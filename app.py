@@ -120,13 +120,21 @@ def _get_repo_or_404(username: str, repo_slug: str) -> tuple:
     return user, repo
 
 
+def _is_admin() -> bool:
+    return current_user.is_authenticated and current_user.username == Config.ADMIN_USERNAME
+
+
 def _require_owner(repo: Repo) -> None:
-    if not current_user.is_authenticated or current_user.id != repo.user_id:
+    if not current_user.is_authenticated:
+        abort(403)
+    if current_user.id != repo.user_id and not _is_admin():
         abort(403)
 
 
 def _is_owner(repo: Repo) -> bool:
-    return current_user.is_authenticated and current_user.id == repo.user_id
+    return current_user.is_authenticated and (
+        current_user.id == repo.user_id or _is_admin()
+    )
 
 
 def _audit(
@@ -299,7 +307,7 @@ def create_app() -> Flask:
 
     @app.context_processor
     def inject_admin():
-        return {"admin_username": Config.ADMIN_USERNAME}
+        return {"admin_username": Config.ADMIN_USERNAME, "site_name": Config.SITE_NAME}
 
     @app.before_request
     def _check_api_token():
@@ -365,6 +373,10 @@ def _register_routes(app: Flask) -> None:
                 url_for("repo.list_repos", username=current_user.username)
             )
         return redirect(url_for("auth.login"))
+
+    @app.route("/guide")
+    def guide():
+        return render_template("guide.html")
 
     @app.route("/health")
     def health():
@@ -1027,6 +1039,38 @@ def _register_routes(app: Flask) -> None:
                 repo_slug=repo_slug,
                 page_slug="log",
             )
+        )
+
+    @wiki_bp.route("/<username>/<repo_slug>/wiki/pages")
+    def wiki_pages(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        if not repo.is_public and not _is_owner(repo):
+            abort(403)
+        wiki_dir = os.path.join(get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki")
+        all_pages = list_wiki_pages(wiki_dir) if os.path.isdir(wiki_dir) else []
+        # add slug derived from filename
+        for p in all_pages:
+            p["slug"] = p["filename"].replace(".md", "")
+        # group by type
+        groups: dict[str, list] = {}
+        for p in all_pages:
+            t = p.get("type", "other")
+            groups.setdefault(t, []).append(p)
+        type_order = ["overview", "concept", "reference", "comparison", "guide", "changelog", "other"]
+        type_labels = {
+            "overview": "概览", "concept": "概念", "reference": "参考",
+            "comparison": "对比", "guide": "指南", "changelog": "变更日志", "other": "其他",
+        }
+        sorted_groups = [(t, type_labels.get(t, t), groups[t]) for t in type_order if t in groups]
+        for t, pages in groups.items():
+            if t not in type_order:
+                sorted_groups.append((t, t, pages))
+        return render_template(
+            "wiki/pages.html",
+            username=username, repo=repo,
+            all_pages=all_pages,
+            sorted_groups=sorted_groups,
+            is_owner=_is_owner(repo),
         )
 
     @wiki_bp.route("/<username>/<repo_slug>/wiki/<page_slug>/edit", methods=["GET", "POST"])
@@ -1824,7 +1868,7 @@ def _register_routes(app: Flask) -> None:
         if not repo.is_public:
             if not current_user.is_authenticated:
                 return redirect(url_for("auth.login", next=request.url))
-            if current_user.id != repo.user_id:
+            if current_user.id != repo.user_id and not _is_admin():
                 abort(403)
         return render_template("ops/query.html", username=username, repo=repo)
 
@@ -1836,7 +1880,7 @@ def _register_routes(app: Flask) -> None:
         if not repo.is_public:
             if not current_user.is_authenticated:
                 return jsonify(error="请先登录"), 401
-            if current_user.id != repo.user_id:
+            if current_user.id != repo.user_id and not _is_admin():
                 abort(403)
         data = request.get_json(silent=True) or {}
         question = data.get("q", "").strip()
@@ -1859,7 +1903,7 @@ def _register_routes(app: Flask) -> None:
             try:
                 session_history = history + [
                     {"role": "user", "content": question},
-                    {"role": "assistant", "content": answer_markdown[:2000]},
+                    {"role": "assistant", "content": answer_markdown},
                 ]
                 session_history = session_history[-20:]
                 from models import ConversationSession
@@ -1889,10 +1933,42 @@ def _register_routes(app: Flask) -> None:
             pre_wiki = data.get("_wiki_sources", [])
             pre_qdrant = data.get("_qdrant_sources", [])
             pre_confidence = data.get("_confidence", {"level": "low", "score": 0.0, "reasons": []})
-            pre_wiki_ev = data.get("_wiki_evidence", [])
-            pre_chunk_ev = data.get("_chunk_evidence", [])
-            pre_fact_ev = data.get("_fact_evidence", [])
+            pre_wiki_ev = data.get("_wiki_evidence", []) or []
+            pre_chunk_ev = data.get("_chunk_evidence", []) or []
+            pre_fact_ev = data.get("_fact_evidence", []) or []
             pre_ev_summary = data.get("_evidence_summary", "")
+
+            import uuid as _uuid
+            import json as _json
+            _pre_trace_id = _uuid.uuid4().hex[:8]
+            try:
+                from models import QueryLog
+                _pre_conf = pre_confidence if isinstance(pre_confidence, dict) else {}
+                _pre_retrieval = {
+                    "wiki": [{"filename": e.get("filename", ""), "title": e.get("title", ""), "reason": e.get("reason", "")} for e in pre_wiki_ev],
+                    "chunks": [{"filename": e.get("filename", ""), "score": e.get("score"), "snippet": (e.get("snippet") or "")[:300]} for e in pre_chunk_ev],
+                    "facts": [{"source_file": e.get("source_file", ""), "score": e.get("score"), "fields": e.get("fields", {})} for e in pre_fact_ev],
+                }
+                _pre_ql = QueryLog(
+                    trace_id=_pre_trace_id,
+                    repo_id=repo.id,
+                    user_id=current_user.id if current_user.is_authenticated else None,
+                    question=question,
+                    answer_preview=pre_answer[:500],
+                    full_answer=pre_answer,
+                    confidence=_pre_conf.get("level", "low"),
+                    wiki_hit_count=len(pre_wiki_ev),
+                    chunk_hit_count=len(pre_chunk_ev),
+                    used_wiki_pages=_json.dumps([e.get("filename", "") for e in pre_wiki_ev], ensure_ascii=False),
+                    used_chunk_ids=_json.dumps([e.get("chunk_id", "") for e in pre_chunk_ev], ensure_ascii=False),
+                    evidence_summary=pre_ev_summary,
+                    retrieval_json=_json.dumps(_pre_retrieval, ensure_ascii=False),
+                    query_mode="stream",
+                )
+                db.session.add(_pre_ql)
+                db.session.commit()
+            except Exception as _pre_ql_exc:
+                logger.warning("QueryLog (stream) write failed: %s", _pre_ql_exc)
 
             def _src_to_ref(fn):
                 slug = fn.replace(".md", "")
@@ -1908,6 +1984,7 @@ def _register_routes(app: Flask) -> None:
                 html=answer_html,
                 markdown=pre_answer,
                 answer=pre_answer,
+                trace_id=_pre_trace_id,
                 confidence=pre_confidence,
                 wiki_evidence=pre_wiki_ev,
                 chunk_evidence=pre_chunk_ev,
@@ -1946,6 +2023,9 @@ def _register_routes(app: Flask) -> None:
         _answer   = result.get("markdown", "")
         _username = current_user.username if current_user.is_authenticated else None
 
+        import uuid as _uuid
+        _trace_id = _uuid.uuid4().hex[:8]  # 8-char hex, e.g. "a3f9c12b"
+
         try:
             from models import QueryLog
             import json as _json
@@ -1964,6 +2044,7 @@ def _register_routes(app: Flask) -> None:
                 ],
             }
             ql = QueryLog(
+                trace_id=_trace_id,
                 repo_id=repo.id,
                 user_id=current_user.id if current_user.is_authenticated else None,
                 question=question,
@@ -1996,6 +2077,7 @@ def _register_routes(app: Flask) -> None:
                 chunk_evidence=_chunk_ev,
                 fact_evidence=_fact_ev,
                 answer=_answer,
+                trace_id=_trace_id,
             )
         except Exception as tl_exc:
             logger.warning("QueryTraceLogger write failed: %s", tl_exc)
@@ -2021,6 +2103,7 @@ def _register_routes(app: Flask) -> None:
             html=answer_html,
             markdown=result.get("markdown", ""),
             answer=result.get("markdown", ""),
+            trace_id=_trace_id,
             confidence=result.get("confidence", {}),
             wiki_evidence=result.get("wiki_evidence", []),
             chunk_evidence=result.get("chunk_evidence", []),
@@ -2038,7 +2121,7 @@ def _register_routes(app: Flask) -> None:
         if not repo.is_public:
             if not current_user.is_authenticated:
                 return jsonify(error="请先登录"), 401
-            if current_user.id != repo.user_id:
+            if current_user.id != repo.user_id and not _is_admin():
                 abort(403)
         question = request.args.get("q", "").strip()
         if not question:
@@ -2364,6 +2447,27 @@ def _register_routes(app: Flask) -> None:
                 flash(f"检测失败：{exc}", "error")
         return render_template("ops/entity_check.html", username=username, repo=repo, result=result)
 
+    @ops_bp.route("/<username>/<repo_slug>/feedback", methods=["POST"])
+    def submit_feedback(username, repo_slug):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        data = request.get_json(silent=True) or {}
+        trace_id = data.get("trace_id", "").strip()
+        rating = data.get("rating", "").strip()
+        comment = data.get("comment", "").strip() or None
+        if not trace_id or rating not in ("good", "bad"):
+            return jsonify(error="参数错误"), 400
+        from models import QueryFeedback
+        fb = QueryFeedback(
+            trace_id=trace_id,
+            repo_id=repo.id,
+            user_id=current_user.id if current_user.is_authenticated else None,
+            rating=rating,
+            comment=comment,
+        )
+        db.session.add(fb)
+        db.session.commit()
+        return jsonify(ok=True)
+
     app.register_blueprint(ops_bp)
 
     # ── Admin ─────────────────────────────────────────────────────────
@@ -2479,6 +2583,135 @@ def _register_routes(app: Flask) -> None:
         )
         return render_template("admin/query_stats.html", total=total,
                                by_conf=by_conf, by_repo=by_repo, recent_low=recent_low)
+
+    @admin_bp.route("/query-logs")
+    @login_required
+    def query_logs():
+        _require_admin()
+        from models import QueryLog
+        page = request.args.get("page", 1, type=int)
+        q_filter = request.args.get("q", "").strip()
+        conf_filter = request.args.get("conf", "").strip()
+        user_filter = request.args.get("user", "").strip()
+
+        query = (
+            db.session.query(QueryLog, User, Repo)
+            .outerjoin(User, QueryLog.user_id == User.id)
+            .join(Repo, QueryLog.repo_id == Repo.id)
+            .order_by(QueryLog.created_at.desc())
+        )
+        if q_filter:
+            query = query.filter(QueryLog.question.ilike(f"%{q_filter}%"))
+        if conf_filter:
+            query = query.filter(QueryLog.confidence == conf_filter)
+        if user_filter:
+            query = query.filter(User.username == user_filter)
+
+        pagination = query.paginate(page=page, per_page=30)
+        return render_template(
+            "admin/query_logs.html",
+            pagination=pagination,
+            q_filter=q_filter,
+            conf_filter=conf_filter,
+            user_filter=user_filter,
+        )
+
+    @admin_bp.route("/trace/<trace_id>")
+    @login_required
+    def trace_detail(trace_id):
+        _require_admin()
+        from models import QueryLog
+        import json as _json
+
+        ql = QueryLog.query.filter_by(trace_id=trace_id).first_or_404()
+        user = User.query.get(ql.user_id) if ql.user_id else None
+        repo = Repo.query.get(ql.repo_id)
+
+        retrieval = {}
+        if ql.retrieval_json:
+            try:
+                retrieval = _json.loads(ql.retrieval_json)
+            except Exception:
+                pass
+
+        # list source files in the repo
+        source_files = []
+        if repo and user:
+            repo_user = User.query.get(repo.user_id)
+            repo_dir = os.path.join(Config.DATA_DIR, repo_user.username, repo.slug, "raw")
+            if os.path.isdir(repo_dir):
+                source_files = sorted(os.listdir(repo_dir))
+
+        _, answer_html = render_markdown(ql.full_answer or "", "") if ql.full_answer else ("", "")
+
+        return render_template(
+            "admin/trace_detail.html",
+            ql=ql, user=user, repo=repo,
+            retrieval=retrieval,
+            source_files=source_files,
+            answer_html=answer_html,
+        )
+
+    @admin_bp.route("/repos")
+    @login_required
+    def all_repos():
+        _require_admin()
+        from models import QueryLog
+        from sqlalchemy import func
+
+        q_filter = request.args.get("q", "").strip()
+
+        query = (
+            db.session.query(
+                Repo,
+                User,
+                func.count(QueryLog.id).label("query_count"),
+            )
+            .join(User, Repo.user_id == User.id)
+            .outerjoin(QueryLog, QueryLog.repo_id == Repo.id)
+            .group_by(Repo.id)
+            .order_by(Repo.id.desc())
+        )
+        if q_filter:
+            query = query.filter(
+                Repo.name.ilike(f"%{q_filter}%") |
+                Repo.slug.ilike(f"%{q_filter}%") |
+                User.username.ilike(f"%{q_filter}%")
+            )
+
+        rows = query.all()
+        return render_template("admin/repos.html", rows=rows, q_filter=q_filter)
+
+    @admin_bp.route("/feedbacks")
+    @login_required
+    def feedbacks():
+        _require_admin()
+        from models import QueryFeedback, QueryLog
+        page = request.args.get("page", 1, type=int)
+        rating_filter = request.args.get("rating", "").strip()
+
+        query = (
+            db.session.query(QueryFeedback, User, Repo, QueryLog)
+            .outerjoin(User, QueryFeedback.user_id == User.id)
+            .join(Repo, QueryFeedback.repo_id == Repo.id)
+            .outerjoin(QueryLog, QueryFeedback.trace_id == QueryLog.trace_id)
+            .order_by(QueryFeedback.created_at.desc())
+        )
+        if rating_filter:
+            query = query.filter(QueryFeedback.rating == rating_filter)
+
+        pagination = query.paginate(page=page, per_page=30)
+
+        total_good = QueryFeedback.query.filter_by(rating="good").count()
+        total_bad = QueryFeedback.query.filter_by(rating="bad").count()
+
+        return render_template(
+            "admin/feedbacks.html",
+            pagination=pagination,
+            rating_filter=rating_filter,
+            total_good=total_good,
+            total_bad=total_bad,
+        )
 
     app.register_blueprint(admin_bp)
 

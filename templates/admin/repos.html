@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}所有知识库 - 管理后台{% endblock %}
+
+{% block content %}
+<h1>所有知识库</h1>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+  <a href="{{ url_for('admin.dashboard') }}" class="action-btn">← 返回概览</a>
+  <a href="{{ url_for('admin.query_logs') }}" class="action-btn">查询记录</a>
+  <a href="{{ url_for('admin.query_stats') }}" class="action-btn">查询统计</a>
+</div>
+
+<form method="get" style="margin-bottom:1rem;">
+  <div style="display:flex;gap:0.5rem;align-items:center;max-width:520px;">
+    <input type="text" name="q" value="{{ q_filter }}" placeholder="搜索名称 / slug / 用户名…"
+      style="flex:1;min-width:0;padding:0.35rem 0.6rem;font-size:0.88rem;margin:0;width:auto;">
+    <button type="submit" class="action-btn" style="width:auto;flex-shrink:0;white-space:nowrap;">搜索</button>
+    {% if q_filter %}
+    <a href="{{ url_for('admin.all_repos') }}" class="action-btn" style="flex-shrink:0;white-space:nowrap;">清除</a>
+    {% endif %}
+  </div>
+</form>
+
+<p style="font-size:0.82rem;color:var(--pico-muted-color);margin-bottom:0.8rem;">共 {{ rows | length }} 个知识库</p>
+
+<article style="padding:0;overflow:auto;">
+  <table style="margin:0;font-size:0.85rem;">
+    <thead>
+      <tr>
+        <th>知识库</th>
+        <th>所有者</th>
+        <th>Wiki 页数</th>
+        <th>源文件数</th>
+        <th>查询次数</th>
+        <th>是否公开</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for repo, user, query_count in rows %}
+      <tr>
+        <td>
+          <div style="font-weight:600;">{{ repo.name }}</div>
+          <div style="font-size:0.75rem;color:var(--pico-muted-color);">{{ user.username }}/{{ repo.slug }}</div>
+        </td>
+        <td>
+          <a href="{{ url_for('repo.list_repos', username=user.username) }}" style="font-size:0.85rem;">{{ user.username }}</a>
+        </td>
+        <td style="text-align:center;">{{ repo.page_count }}</td>
+        <td style="text-align:center;">{{ repo.source_count }}</td>
+        <td style="text-align:center;">{{ query_count }}</td>
+        <td style="text-align:center;">
+          {% if repo.is_public %}
+          <span style="color:#2d9e5f;font-size:0.78rem;">✓ 公开</span>
+          {% else %}
+          <span style="color:var(--pico-muted-color);font-size:0.78rem;">私有</span>
+          {% endif %}
+        </td>
+        <td>
+          <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+            <a href="{{ url_for('repo.dashboard', username=user.username, repo_slug=repo.slug) }}"
+               class="action-btn" style="font-size:0.75rem;padding:0.2rem 0.5rem;">仪表盘</a>
+            <a href="{{ url_for('ops.query', username=user.username, repo_slug=repo.slug) }}"
+               class="action-btn" style="font-size:0.75rem;padding:0.2rem 0.5rem;">提问测试</a>
+            <a href="{{ url_for('admin.query_logs') }}?user={{ user.username }}"
+               class="action-btn" style="font-size:0.75rem;padding:0.2rem 0.5rem;">查询记录</a>
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" style="text-align:center;color:var(--pico-muted-color);padding:2rem;">暂无知识库</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+{% endblock %}

@@ -71,6 +71,7 @@ class QueryLog(db.Model):
     __tablename__ = "query_logs"
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    trace_id = db.Column(db.String(36), nullable=True, unique=True, index=True)
     repo_id = db.Column(db.Integer, db.ForeignKey("repos.id"), nullable=False, index=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     question = db.Column(db.Text, nullable=False)
@@ -130,6 +131,18 @@ class ApiToken(db.Model):
     is_active = db.Column(db.Boolean, nullable=False, default=True)
 
     user = db.relationship("User", backref="api_tokens")
+
+
+class QueryFeedback(db.Model):
+    __tablename__ = "query_feedbacks"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    trace_id = db.Column(db.String(36), nullable=False, index=True)
+    repo_id = db.Column(db.Integer, db.ForeignKey("repos.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    rating = db.Column(db.String(8), nullable=False)  # "good" or "bad"
+    comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utc_now)
 
 
 @login_manager.user_loader

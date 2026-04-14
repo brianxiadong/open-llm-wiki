@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ repo.name }} - Open LLM Wiki{% endblock %}
+{% block title %}{{ repo.name }} - {{ site_name }}{% endblock %}
 
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">
@@ -122,6 +122,10 @@
       <div class="kb-nav-heading">
         <i class="lucide-book-open" aria-hidden="true"></i>
         <span>Wiki ({{ repo.page_count }})</span>
+        <a href="{{ url_for('wiki.wiki_pages', username=username, repo_slug=repo.slug) }}"
+           class="action-btn" style="font-size:0.75rem;padding:0.15rem 0.5rem;margin-left:auto;">
+          <i class="lucide-layout-list" aria-hidden="true"></i> 管理
+        </a>
         <a href="{{ url_for('wiki.search', username=username, repo_slug=repo.slug) }}"
            class="kb-nav-more" title="搜索 Wiki">
           <i class="lucide-search" aria-hidden="true"></i>
@@ -229,6 +233,7 @@
     deleteSessionBaseUrl: '/{{ username }}/{{ repo.slug }}/sessions/',
     getSessionUrl: '{{ url_for("ops.get_session", username=username, repo_slug=repo.slug) }}',
     renderMarkdownUrl: '{{ url_for("ops.render_markdown_api", username=username, repo_slug=repo.slug) }}',
+    feedbackUrl: '{{ url_for("ops.submit_feedback", username=username, repo_slug=repo.slug) }}',
     wikiBaseUrl: '/{{ username }}/{{ repo.slug }}/wiki/',
     repoSlug: '{{ repo.slug }}',
     isOwner: {{ 'true' if is_owner else 'false' }},

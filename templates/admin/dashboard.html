@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}管理后台 - Open LLM Wiki{% endblock %}
+{% block title %}管理后台 - {{ site_name }}{% endblock %}
 
 {% block content %}
 <h1>管理后台</h1>
@@ -9,6 +9,9 @@
   <a href="{{ url_for('admin.audit_log') }}" class="action-btn">审计日志</a>
   <a href="{{ url_for('admin.health_detail') }}" class="action-btn">服务健康</a>
   <a href="{{ url_for('admin.query_stats') }}" class="action-btn">查询统计</a>
+  <a href="{{ url_for('admin.query_logs') }}" class="action-btn">查询记录</a>
+  <a href="{{ url_for('admin.all_repos') }}" class="action-btn">所有知识库</a>
+  <a href="{{ url_for('admin.feedbacks') }}" class="action-btn">用户反馈</a>
 </div>
 
 <div class="admin-stats-grid">

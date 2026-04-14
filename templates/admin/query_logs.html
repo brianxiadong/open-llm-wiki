@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}查询记录 - 管理后台{% endblock %}
+
+{% block content %}
+<h1>查询记录</h1>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+  <a href="{{ url_for('admin.dashboard') }}" class="action-btn">← 返回概览</a>
+  <a href="{{ url_for('admin.query_stats') }}" class="action-btn">查询统计</a>
+  <a href="{{ url_for('admin.health_detail') }}" class="action-btn">服务健康</a>
+  <a href="{{ url_for('admin.audit_log') }}" class="action-btn">审计日志</a>
+</div>
+
+<form method="get" style="margin-bottom:1rem;">
+  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end;">
+  <div>
+    <label style="font-size:0.82rem;margin-bottom:0.2rem;display:block;">关键词</label>
+    <input type="text" name="q" value="{{ q_filter }}" placeholder="搜索问题内容…"
+      style="width:220px;padding:0.35rem 0.6rem;font-size:0.88rem;margin:0;">
+  </div>
+  <div>
+    <label style="font-size:0.82rem;margin-bottom:0.2rem;display:block;">置信度</label>
+    <select name="conf" style="padding:0.35rem 0.6rem;font-size:0.88rem;width:auto;margin:0;">
+      <option value="">全部</option>
+      <option value="high" {{ 'selected' if conf_filter == 'high' }}>高</option>
+      <option value="medium" {{ 'selected' if conf_filter == 'medium' }}>中</option>
+      <option value="low" {{ 'selected' if conf_filter == 'low' }}>低</option>
+    </select>
+  </div>
+  <div>
+    <label style="font-size:0.82rem;margin-bottom:0.2rem;display:block;">用户名</label>
+    <input type="text" name="user" value="{{ user_filter }}" placeholder="用户名…"
+      style="width:130px;padding:0.35rem 0.6rem;font-size:0.88rem;margin:0;">
+  </div>
+  <button type="submit" class="action-btn" style="width:auto;height:fit-content;flex-shrink:0;">筛选</button>
+  {% if q_filter or conf_filter or user_filter %}
+  <a href="{{ url_for('admin.query_logs') }}" class="action-btn" style="flex-shrink:0;height:fit-content;">清除</a>
+  {% endif %}
+  </div>
+</form>
+
+<article style="padding:0;overflow:auto;">
+  <table style="margin:0;font-size:0.83rem;">
+    <thead>
+      <tr>
+        <th>查询ID</th>
+        <th>时间</th>
+        <th>用户</th>
+        <th>知识库</th>
+        <th style="min-width:240px;">问题</th>
+        <th>置信度</th>
+        <th>耗时(ms)</th>
+        <th>Wiki命中</th>
+        <th>Chunk命中</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ql, user, repo in pagination.items %}
+      <tr>
+        <td><code style="font-size:0.78rem;background:var(--pico-card-background-color);padding:0.1rem 0.3rem;border-radius:3px;">{{ ql.trace_id or '-' }}</code></td>
+        <td style="white-space:nowrap;">{{ ql.created_at.strftime('%m-%d %H:%M') }}</td>
+        <td>{{ user.username if user else '匿名' }}</td>
+        <td>{{ repo.slug if repo else '-' }}</td>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ ql.question }}">{{ ql.question }}</td>
+        <td>
+          <span class="confidence-badge confidence-{{ ql.confidence }}" style="font-size:0.75rem;padding:0.1rem 0.4rem;">{{ ql.confidence }}</span>
+        </td>
+        <td>{{ ql.latency_ms or '-' }}</td>
+        <td style="text-align:center;">{{ ql.wiki_hit_count }}</td>
+        <td style="text-align:center;">{{ ql.chunk_hit_count }}</td>
+        <td>
+          {% if ql.trace_id %}
+          <a href="{{ url_for('admin.trace_detail', trace_id=ql.trace_id) }}" class="action-btn" style="font-size:0.75rem;padding:0.2rem 0.5rem;">详情</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="10" style="text-align:center;color:var(--pico-muted-color);padding:2rem;">暂无记录</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+
+{% if pagination.pages > 1 %}
+<div style="display:flex;gap:0.5rem;justify-content:center;margin-top:1.5rem;flex-wrap:wrap;">
+  {% if pagination.has_prev %}
+  <a href="{{ url_for('admin.query_logs', page=pagination.prev_num, q=q_filter, conf=conf_filter, user=user_filter) }}" class="action-btn">← 上一页</a>
+  {% endif %}
+  <span style="padding:0.4rem 0.6rem;font-size:0.85rem;">第 {{ pagination.page }} / {{ pagination.pages }} 页（共 {{ pagination.total }} 条）</span>
+  {% if pagination.has_next %}
+  <a href="{{ url_for('admin.query_logs', page=pagination.next_num, q=q_filter, conf=conf_filter, user=user_filter) }}" class="action-btn">下一页 →</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
