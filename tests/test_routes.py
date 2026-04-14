@@ -761,6 +761,15 @@ def test_admin_query_stats_accessible(auth_client, app):
     assert "查询统计" in resp.data.decode("utf-8")
 
 
+def test_admin_feedbacks_accessible(auth_client, app):
+    with app.app_context():
+        from config import Config
+        Config.ADMIN_USERNAME = "alice"
+    resp = auth_client.get("/admin/feedbacks")
+    assert resp.status_code == 200
+    assert "用户反馈" in resp.data.decode("utf-8")
+
+
 # -- Public repo guest access --------------------------------------------------
 
 

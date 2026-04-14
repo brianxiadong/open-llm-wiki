@@ -15,9 +15,9 @@
     <span style="background:#fde8e8;color:#c0392b;padding:0.3rem 0.7rem;border-radius:6px;font-size:0.85rem;font-weight:600;">👎 {{ total_bad }}</span>
   </div>
   <div style="display:flex;gap:0.4rem;">
-    <a href="{{ url_for('admin.feedbacks') }}" class="action-btn{% if not rating_filter %}" style="font-weight:700;{% endif %}">全部</a>
-    <a href="{{ url_for('admin.feedbacks', rating='bad') }}" class="action-btn{% if rating_filter == 'bad' %}" style="font-weight:700;color:#c0392b;{% endif %}">仅差评</a>
-    <a href="{{ url_for('admin.feedbacks', rating='good') }}" class="action-btn{% if rating_filter == 'good' %}" style="font-weight:700;color:#2d9e5f;{% endif %}">仅好评</a>
+    <a href="{{ url_for('admin.feedbacks') }}" class="action-btn" {% if not rating_filter %}style="font-weight:700;"{% endif %}>全部</a>
+    <a href="{{ url_for('admin.feedbacks', rating='bad') }}" class="action-btn" {% if rating_filter == 'bad' %}style="font-weight:700;color:#c0392b;"{% endif %}>仅差评</a>
+    <a href="{{ url_for('admin.feedbacks', rating='good') }}" class="action-btn" {% if rating_filter == 'good' %}style="font-weight:700;color:#2d9e5f;"{% endif %}>仅好评</a>
   </div>
 </div>
 

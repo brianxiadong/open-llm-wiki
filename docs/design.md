@@ -494,6 +494,7 @@ GET  /{username}/search                      → 全局跨仓库搜索（仅 own
 
 管理后台：
 GET  /admin/                                 → 管理统计后台（仅 ADMIN_USERNAME，admin.dashboard）
+GET  /admin/feedbacks                        → 用户反馈列表（关联 query_logs 时 MySQL 上对 trace_id 统一 COLLATE，避免混用排序规则报错）
 ```
 
 ### 6.2 页面设计

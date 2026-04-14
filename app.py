@@ -2690,11 +2690,18 @@ def _register_routes(app: Flask) -> None:
         page = request.args.get("page", 1, type=int)
         rating_filter = request.args.get("rating", "").strip()
 
+        # MySQL：两表 trace_id 若 collation 不一致会报 Illegal mix of collations；SQLite 测试库无 COLLATE utf8mb4
+        if db.engine.dialect.name == "mysql":
+            trace_match = QueryFeedback.trace_id.collate(
+                "utf8mb4_unicode_ci"
+            ) == QueryLog.trace_id.collate("utf8mb4_unicode_ci")
+        else:
+            trace_match = QueryFeedback.trace_id == QueryLog.trace_id
         query = (
             db.session.query(QueryFeedback, User, Repo, QueryLog)
             .outerjoin(User, QueryFeedback.user_id == User.id)
             .join(Repo, QueryFeedback.repo_id == Repo.id)
-            .outerjoin(QueryLog, QueryFeedback.trace_id == QueryLog.trace_id)
+            .outerjoin(QueryLog, trace_match)
             .order_by(QueryFeedback.created_at.desc())
         )
         if rating_filter:
