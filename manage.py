@@ -299,5 +299,106 @@ def _regenerate_jsonl_from_originals(base: str, facts_dir: str):
         click.echo(f"  Regenerated: {fname} → {len(records)} records")
 
 
+@cli.command("search-query-logs")
+@click.option("--keyword", "-k", default=None, help="在问题或回答中搜索关键词")
+@click.option("--date", "-d", "log_date", default=None, help="指定日期 YYYY-MM-DD，默认今天")
+@click.option("--confidence", "-c", default=None, type=click.Choice(["high", "medium", "low"]), help="按置信度筛选")
+@click.option("--mode", "-m", default=None, type=click.Choice(["fact", "narrative", "hybrid"]), help="按查询模式筛选")
+@click.option("--tail", "-n", default=20, show_default=True, help="最多显示最新 N 条")
+@click.option("--full", is_flag=True, help="显示完整回答（默认只显示前 200 字）")
+def search_query_logs(keyword, log_date, confidence, mode, tail, full):
+    """在每日 JSONL 日志中搜索查询记录，方便追溯用户反馈。
+
+    示例：
+      python manage.py search-query-logs -k "LLaMA 2" -c low
+      python manage.py search-query-logs -d 2026-04-13 --full
+      python manage.py search-query-logs -k "训练数据" -n 5 --full
+    """
+    import glob
+    import json
+    from config import Config
+
+    log_dir = os.path.join(Config.DATA_DIR, "logs")
+    if not os.path.isdir(log_dir):
+        click.echo(f"日志目录不存在: {log_dir}", err=True)
+        return
+
+    if log_date:
+        patterns = [os.path.join(log_dir, f"query_trace_{log_date}.jsonl")]
+    else:
+        patterns = sorted(glob.glob(os.path.join(log_dir, "query_trace_*.jsonl")))
+
+    records = []
+    for path in patterns:
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if confidence and rec.get("confidence", {}).get("level") != confidence:
+                    continue
+                if mode and rec.get("mode") != mode:
+                    continue
+                if keyword:
+                    kw = keyword.lower()
+                    if kw not in (rec.get("question") or "").lower() and \
+                       kw not in (rec.get("answer") or "").lower():
+                        continue
+                records.append(rec)
+
+    records = records[-tail:]
+    if not records:
+        click.echo("没有找到匹配的记录。")
+        return
+
+    click.echo(f"找到 {len(records)} 条记录（最新 {tail} 条）\n")
+    sep = "─" * 72
+
+    for i, r in enumerate(records, 1):
+        conf = r.get("confidence", {})
+        conf_level = conf.get("level", "?")
+        conf_score = conf.get("score", 0)
+        wiki_n = len(r.get("wiki_hits", []))
+        chunk_n = len(r.get("chunk_hits", []))
+        fact_n = len(r.get("fact_hits", []))
+        latency = r.get("latency_ms")
+        latency_str = f"{latency}ms" if latency is not None else "?"
+
+        click.echo(sep)
+        click.echo(f"[{i}] {r.get('ts', '?')}  repo={r.get('repo', '?')}  user={r.get('user', '?')}")
+        click.echo(f"    mode={r.get('mode','?')}  confidence={conf_level}({conf_score:.2f})  latency={latency_str}")
+        click.echo(f"    证据: wiki×{wiki_n}  chunk×{chunk_n}  fact×{fact_n}")
+        click.echo(f"  Q: {r.get('question', '')}")
+
+        if wiki_n:
+            for h in r["wiki_hits"]:
+                click.echo(f"    [Wiki] {h.get('filename','')} — {h.get('reason','')}")
+        if chunk_n:
+            for h in r["chunk_hits"]:
+                score_pct = f"{int((h.get('score') or 0)*100)}%"
+                snippet = (h.get("snippet") or "")[:80].replace("\n", " ")
+                click.echo(f"    [Chunk {score_pct}] {h.get('filename','')} | {snippet}")
+        if fact_n:
+            for h in r["fact_hits"]:
+                score_pct = f"{int((h.get('score') or 0)*100)}%"
+                fields_str = ", ".join(f"{k}={v}" for k, v in list((h.get("fields") or {}).items())[:3])
+                click.echo(f"    [Fact {score_pct}] {h.get('source_file','')} | {fields_str}")
+
+        answer = r.get("answer", "")
+        if not full:
+            answer = answer[:200] + ("…" if len(answer) > 200 else "")
+        click.echo(f"  A: {answer}")
+
+    click.echo(sep)
+    click.echo(f"\n共 {len(records)} 条。使用 --full 查看完整回答，-k 按关键词筛选。")
+
+
 if __name__ == "__main__":
     cli()

@@ -293,6 +293,10 @@ def create_app() -> Flask:
         logging.warning("Qdrant service unavailable, running in degraded mode")
     app.wiki_engine = WikiEngine(app.llm, app.qdrant, Config.DATA_DIR)
 
+    # Query trace logger: daily JSONL files under DATA_DIR/logs/
+    from utils import QueryTraceLogger
+    app.query_trace_logger = QueryTraceLogger(os.path.join(Config.DATA_DIR, "logs"))
+
     @app.context_processor
     def inject_admin():
         return {"admin_username": Config.ADMIN_USERNAME}
@@ -1917,6 +1921,8 @@ def _register_routes(app: Flask) -> None:
         if not question:
             return jsonify(error="请输入问题"), 400
 
+        import time as _time
+        _t0 = _time.monotonic()
         try:
             result = current_app.wiki_engine.query_with_evidence(
                 repo, username, question, _wiki_base_url(username, repo_slug),
@@ -1925,37 +1931,74 @@ def _register_routes(app: Flask) -> None:
         except Exception as exc:
             logger.exception("Query failed for repo %s", repo.id)
             return jsonify(error=f"查询失败: {exc}"), 500
+        latency_ms = int((_time.monotonic() - _t0) * 1000)
 
         _, answer_html = render_markdown(
             result.get("markdown", ""), _wiki_base_url(username, repo_slug)
         )
 
-        # -- Write query log -------------------------------------------
+        # -- Write query log (DB + file) -----------------------------------
+        _wiki_ev  = result.get("wiki_evidence", []) or []
+        _chunk_ev = result.get("chunk_evidence", []) or []
+        _fact_ev  = result.get("fact_evidence", []) or []
+        _conf     = result.get("confidence", {}) or {}
+        _mode     = result.get("query_mode", "")
+        _answer   = result.get("markdown", "")
+        _username = current_user.username if current_user.is_authenticated else None
+
         try:
             from models import QueryLog
             import json as _json
+            _retrieval = {
+                "wiki": [
+                    {"filename": e.get("filename", ""), "title": e.get("title", ""), "reason": e.get("reason", "")}
+                    for e in _wiki_ev
+                ],
+                "chunks": [
+                    {"filename": e.get("filename", ""), "score": e.get("score"), "snippet": (e.get("snippet") or "")[:300]}
+                    for e in _chunk_ev
+                ],
+                "facts": [
+                    {"source_file": e.get("source_file", ""), "score": e.get("score"), "fields": e.get("fields", {})}
+                    for e in _fact_ev
+                ],
+            }
             ql = QueryLog(
                 repo_id=repo.id,
                 user_id=current_user.id if current_user.is_authenticated else None,
                 question=question,
-                answer_preview=result.get("markdown", "")[:500],
-                confidence=result.get("confidence", {}).get("level", "low"),
-                wiki_hit_count=len(result.get("wiki_evidence", [])),
-                chunk_hit_count=len(result.get("chunk_evidence", [])),
-                used_wiki_pages=_json.dumps(
-                    [e["filename"] for e in result.get("wiki_evidence", [])],
-                    ensure_ascii=False,
-                ),
-                used_chunk_ids=_json.dumps(
-                    [e["chunk_id"] for e in result.get("chunk_evidence", [])],
-                    ensure_ascii=False,
-                ),
+                answer_preview=_answer[:500],
+                full_answer=_answer,
+                confidence=_conf.get("level", "low"),
+                wiki_hit_count=len(_wiki_ev),
+                chunk_hit_count=len(_chunk_ev),
+                used_wiki_pages=_json.dumps([e.get("filename", "") for e in _wiki_ev], ensure_ascii=False),
+                used_chunk_ids=_json.dumps([e.get("chunk_id", "") for e in _chunk_ev], ensure_ascii=False),
                 evidence_summary=result.get("evidence_summary", ""),
+                retrieval_json=_json.dumps(_retrieval, ensure_ascii=False),
+                query_mode=_mode,
+                latency_ms=latency_ms,
             )
             db.session.add(ql)
             db.session.commit()
         except Exception as ql_exc:
             logger.warning("QueryLog write failed: %s", ql_exc)
+
+        try:
+            current_app.query_trace_logger.write(
+                repo=f"{username}/{repo.slug}",
+                user=_username,
+                question=question,
+                mode=_mode,
+                latency_ms=latency_ms,
+                confidence=_conf,
+                wiki_evidence=_wiki_ev,
+                chunk_evidence=_chunk_ev,
+                fact_evidence=_fact_ev,
+                answer=_answer,
+            )
+        except Exception as tl_exc:
+            logger.warning("QueryTraceLogger write failed: %s", tl_exc)
 
         # -- Update conversation session ----------------------------------
         _persist_session(result.get("markdown", ""))

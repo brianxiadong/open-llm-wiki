@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import date, datetime
+import threading
+from datetime import UTC, date, datetime
 
 import markdown as md_lib
 import yaml
@@ -487,3 +488,75 @@ def file_md5(path: str) -> str:
         for chunk in iter(lambda: f.read(8192), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+class QueryTraceLogger:
+    """每日滚动 JSONL 文件日志，每次查询写一行，方便追溯。
+
+    文件路径：<log_dir>/query_trace_YYYY-MM-DD.jsonl
+    每行格式：
+    {
+      "ts": "2026-04-13T22:31:21+08:00",
+      "repo": "xiadong/test-xiadong",
+      "user": "xiadong",
+      "question": "...",
+      "mode": "fact",
+      "latency_ms": 1234,
+      "confidence": {"level": "high", "score": 0.82},
+      "wiki_hits": [{"filename": "...", "title": "...", "reason": "..."}],
+      "chunk_hits": [{"filename": "...", "score": 0.91, "snippet": "..."}],
+      "fact_hits": [{"source_file": "...", "score": 0.87, "fields": {...}}],
+      "answer": "完整回答 markdown"
+    }
+    """
+
+    _lock = threading.Lock()
+
+    def __init__(self, log_dir: str) -> None:
+        self.log_dir = log_dir
+        os.makedirs(log_dir, exist_ok=True)
+
+    def _log_path(self) -> str:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        return os.path.join(self.log_dir, f"query_trace_{today}.jsonl")
+
+    def write(
+        self,
+        *,
+        repo: str,
+        user: str | None,
+        question: str,
+        mode: str,
+        latency_ms: int | None,
+        confidence: dict,
+        wiki_evidence: list,
+        chunk_evidence: list,
+        fact_evidence: list,
+        answer: str,
+    ) -> None:
+        record = {
+            "ts": datetime.now(tz=UTC).isoformat(),
+            "repo": repo,
+            "user": user or "anonymous",
+            "question": question,
+            "mode": mode,
+            "latency_ms": latency_ms,
+            "confidence": confidence,
+            "wiki_hits": [
+                {"filename": e.get("filename", ""), "title": e.get("title", ""), "reason": e.get("reason", "")}
+                for e in (wiki_evidence or [])
+            ],
+            "chunk_hits": [
+                {"filename": e.get("filename", ""), "score": e.get("score"), "snippet": (e.get("snippet") or "")[:300]}
+                for e in (chunk_evidence or [])
+            ],
+            "fact_hits": [
+                {"source_file": e.get("source_file", ""), "score": e.get("score"), "fields": e.get("fields", {})}
+                for e in (fact_evidence or [])
+            ],
+            "answer": answer,
+        }
+        line = json.dumps(record, ensure_ascii=False)
+        with self._lock:
+            with open(self._log_path(), "a", encoding="utf-8") as f:
+                f.write(line + "\n")

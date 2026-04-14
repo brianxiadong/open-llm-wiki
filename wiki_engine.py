@@ -1051,6 +1051,7 @@ class WikiEngine:
             "chunk_evidence": chunk_evidence,
             "fact_evidence": fact_evidence,
             "evidence_summary": evidence_summary,
+            "query_mode": query_mode,
             "referenced_pages": list(loaded),
             "wiki_sources": [e["filename"] for e in wiki_evidence],
             "qdrant_sources": list(chunk_fns),

@@ -75,12 +75,16 @@ class QueryLog(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     question = db.Column(db.Text, nullable=False)
     answer_preview = db.Column(db.Text, nullable=True)
+    full_answer = db.Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
     confidence = db.Column(db.String(16), nullable=False, default="low")
     wiki_hit_count = db.Column(db.Integer, nullable=False, default=0)
     chunk_hit_count = db.Column(db.Integer, nullable=False, default=0)
     used_wiki_pages = db.Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
     used_chunk_ids = db.Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
     evidence_summary = db.Column(db.Text, nullable=True)
+    retrieval_json = db.Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
+    query_mode = db.Column(db.String(16), nullable=False, default="")
+    latency_ms = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=_utc_now)
 
 
