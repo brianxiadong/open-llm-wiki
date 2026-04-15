@@ -120,6 +120,24 @@ def test_dashboard_chat_tools_have_visible_labels(client, app):
     assert "清空对话" in html
 
 
+def test_dashboard_recovers_missing_overview_link(client, app):
+    _login(client, app)
+    _create_repo(client)
+    from config import Config
+    from models import Repo, db
+
+    overview_path = os.path.join(Config.DATA_DIR, "fe_alice", "fe-test", "wiki", "overview.md")
+    os.remove(overview_path)
+
+    with app.app_context():
+        repo = Repo.query.filter_by(slug="fe-test").first()
+        repo.page_count = 0
+        db.session.commit()
+
+    html = _html(client.get("/fe_alice/fe-test"))
+    assert "概览" in html
+
+
 def test_dashboard_chat_config_is_valid_json_script(client, app):
     _login(client, app)
     _create_repo(client)

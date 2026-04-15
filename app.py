@@ -326,15 +326,15 @@ def _default_wiki_page_content(repo_name: str, page_slug: str) -> str:
     raise ValueError(f"Unsupported core wiki page: {page_slug}")
 
 
-def _ensure_core_wiki_page(wiki_dir: str, repo_name: str, page_slug: str) -> str:
+def _ensure_core_wiki_page(wiki_dir: str, repo_name: str, page_slug: str) -> tuple[str, bool]:
     filepath = os.path.join(wiki_dir, f"{page_slug}.md")
     if page_slug not in CORE_WIKI_PAGE_SLUGS or os.path.isfile(filepath):
-        return filepath
+        return filepath, False
     os.makedirs(wiki_dir, exist_ok=True)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(_default_wiki_page_content(repo_name, page_slug))
     logger.info("Recreated missing core wiki page: %s", filepath)
-    return filepath
+    return filepath, True
 
 
 def _sync_repo_counts(repo: Repo, username: str) -> None:
@@ -982,6 +982,9 @@ def _register_routes(app: Flask) -> None:
             abort(403)
         base = get_repo_path(Config.DATA_DIR, username, repo_slug)
         wiki_dir = os.path.join(base, "wiki")
+        _, overview_created = _ensure_core_wiki_page(wiki_dir, repo.name, "overview")
+        if overview_created:
+            _sync_repo_counts(repo, username)
 
         pages = _enrich_pages(wiki_dir)
 
@@ -1245,7 +1248,9 @@ def _register_routes(app: Flask) -> None:
         wiki_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
         )
-        filepath = _ensure_core_wiki_page(wiki_dir, repo.name, page_slug)
+        filepath, page_created = _ensure_core_wiki_page(wiki_dir, repo.name, page_slug)
+        if page_created:
+            _sync_repo_counts(repo, username)
         if not os.path.isfile(filepath):
             abort(404)
 
@@ -1382,7 +1387,9 @@ def _register_routes(app: Flask) -> None:
         wiki_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
         )
-        filepath = _ensure_core_wiki_page(wiki_dir, repo.name, page_slug)
+        filepath, page_created = _ensure_core_wiki_page(wiki_dir, repo.name, page_slug)
+        if page_created:
+            _sync_repo_counts(repo, username)
         if not os.path.isfile(filepath):
             abort(404)
 

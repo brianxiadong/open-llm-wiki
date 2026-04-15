@@ -369,14 +369,24 @@ def test_wiki_overview_recreated_when_missing(sample_repo, app):
     import os
 
     from config import Config
+    from models import Repo, db
 
     overview_path = os.path.join(Config.DATA_DIR, "alice", slug, "wiki", "overview.md")
     os.remove(overview_path)
+
+    with app.app_context():
+        repo = Repo.query.filter_by(slug=slug).first()
+        repo.page_count = 0
+        db.session.commit()
 
     resp = client.get(f"/alice/{slug}/wiki/overview")
     assert resp.status_code == 200
     assert os.path.isfile(overview_path)
     assert "暂无概览内容" in resp.data.decode("utf-8")
+
+    with app.app_context():
+        repo = Repo.query.filter_by(slug=slug).first()
+        assert repo.page_count >= 1
 
 
 def test_wiki_graph(sample_repo):
