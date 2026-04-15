@@ -70,7 +70,7 @@ def migrate():
             statement = statement.strip()
             if statement:
                 cursor.execute(statement)
-        cursor.execute("INSERT INTO schema_version (version) VALUES (%s)", (version,))
+        cursor.execute("INSERT IGNORE INTO schema_version (version) VALUES (%s)", (version,))
         conn.commit()
         click.echo(f"已执行迁移: {filename}")
         applied += 1

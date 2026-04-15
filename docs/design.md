@@ -1268,7 +1268,7 @@ migrations/
 └── ...
 ```
 
-`manage.py migrate` 读取已执行过的版本号（存在 `schema_version` 表中），按序执行新的迁移文件。简单可控。
+`manage.py migrate` 读取已执行过的版本号（存在 `schema_version` 表中），按序执行新的迁移文件。迁移执行器对 `schema_version` 写入使用 `INSERT IGNORE`，兼容历史 SQL 文件中已包含版本登记语句的情况，避免重复插入导致部署中断。
 
 ### 12.4 日志
 
