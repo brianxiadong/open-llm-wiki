@@ -466,10 +466,10 @@
 }
 .chat-input-form { margin: 0; }
 .chat-input-row {
-  --chat-control-height: 40px;
-  display: flex; gap: 0.5rem; align-items: flex-end;
+  --chat-control-height: 52px;
+  display: flex; gap: 0.5rem; align-items: stretch;
   background: #ffffff; border: 1px solid var(--border-strong);
-  border-radius: 12px; padding: 0.4rem 0.5rem 0.4rem 0.75rem;
+  border-radius: 12px; padding: 0.3rem 0.5rem 0.3rem 0.75rem;
   transition: border-color var(--transition);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
@@ -478,14 +478,16 @@
 }
 .chat-input-row textarea {
   flex: 1; border: none !important; background: transparent !important;
-  box-shadow: none !important; resize: none; padding: 0.5rem 0;
+  box-shadow: none !important; resize: none; padding: 0.85rem 0;
   font-size: 0.92rem; line-height: 1.5; margin: 0;
   min-height: var(--chat-control-height); max-height: 160px;
+  align-self: stretch;
   outline: none !important;
 }
 .chat-input-row #chat-submit {
-  width: var(--chat-control-height); height: var(--chat-control-height);
-  align-self: center;
+  width: var(--chat-control-height);
+  min-height: var(--chat-control-height);
+  height: auto;
   border-radius: 10px; border: none;
   background: var(--brand); color: #fff;
   display: flex; align-items: center; justify-content: center;
@@ -519,7 +521,7 @@
   }
 }
 
-.chat-history-btn { position: relative; display: inline-flex; align-items: center; }
+.chat-history-btn { position: relative; display: inline-flex; align-items: stretch; }
 .chat-history-btn summary { list-style: none; }
 .chat-history-btn summary::-webkit-details-marker { display: none; }
 .chat-history-btn > ul { position: absolute; bottom: 100%; right: 0; background: #ffffff; border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.25rem 0; box-shadow: var(--shadow-md); z-index: 100; list-style: none; margin: 0; }
@@ -529,8 +531,9 @@
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  height: var(--chat-control-height, 40px);
-  align-self: center;
+  min-height: var(--chat-control-height, 52px);
+  height: auto;
+  align-self: stretch;
   padding: 0 0.72rem;
   border-radius: 9px;
   border: 1px solid var(--border);
@@ -542,9 +545,7 @@
   font-weight: 600;
   transition: border-color var(--transition), color var(--transition), background var(--transition);
 }
-.chat-history-btn {
-  align-self: center;
-}
+.chat-history-btn { align-self: stretch; }
 .chat-utility-btn:hover {
   border-color: var(--brand-light);
   color: var(--brand);
@@ -560,6 +561,7 @@
 }
 .chat-history-btn summary.chat-utility-btn {
   display: inline-flex;
+  min-height: var(--chat-control-height, 52px);
   margin: 0;
 }
 
