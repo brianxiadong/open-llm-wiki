@@ -363,6 +363,22 @@ def test_wiki_nonexistent(sample_repo):
     assert resp.status_code == 404
 
 
+def test_wiki_overview_recreated_when_missing(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    import os
+
+    from config import Config
+
+    overview_path = os.path.join(Config.DATA_DIR, "alice", slug, "wiki", "overview.md")
+    os.remove(overview_path)
+
+    resp = client.get(f"/alice/{slug}/wiki/overview")
+    assert resp.status_code == 200
+    assert os.path.isfile(overview_path)
+    assert "暂无概览内容" in resp.data.decode("utf-8")
+
+
 def test_wiki_graph(sample_repo):
     client, repo_info = sample_repo
     slug = repo_info["slug"]
@@ -707,6 +723,21 @@ def test_wiki_edit_page_empty_content(sample_repo):
         follow_redirects=True,
     )
     assert resp.status_code == 200
+
+
+def test_wiki_edit_page_recreates_missing_overview(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    import os
+
+    from config import Config
+
+    overview_path = os.path.join(Config.DATA_DIR, "alice", slug, "wiki", "overview.md")
+    os.remove(overview_path)
+
+    resp = client.get(f"/alice/{slug}/wiki/overview/edit")
+    assert resp.status_code == 200
+    assert os.path.isfile(overview_path)
 
 
 def test_wiki_delete_page(sample_repo, app):

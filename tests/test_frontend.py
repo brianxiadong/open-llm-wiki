@@ -6,6 +6,7 @@ Catches structural bugs like nested forms, missing elements, broken links.
 
 from __future__ import annotations
 
+import os
 import re
 
 
@@ -217,6 +218,19 @@ def test_wiki_page_has_breadcrumb(client, app):
     _create_repo(client)
     html = _html(client.get("/fe_alice/fe-test/wiki/overview"))
     assert "breadcrumb" in html
+
+
+def test_wiki_overview_recovers_when_file_missing(client, app):
+    _login(client, app)
+    _create_repo(client)
+    from config import Config
+
+    overview_path = os.path.join(Config.DATA_DIR, "fe_alice", "fe-test", "wiki", "overview.md")
+    os.remove(overview_path)
+
+    html = _html(client.get("/fe_alice/fe-test/wiki/overview"))
+    assert "rendered-content" in html
+    assert "暂无概览内容" in html
 
 
 # ── Graph ────────────────────────────────────────────────────

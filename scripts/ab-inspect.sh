@@ -32,13 +32,58 @@ shot() {
   agent-browser screenshot "$1" 2>/dev/null && echo "  📸 $1" || echo "  ⚠ 截图跳过"
 }
 
+report_console() {
+  local output
+  output=$(agent-browser console 2>/dev/null || true)
+  if [ -n "${output// }" ]; then
+    echo "  🪵 Console:"
+    echo "$output"
+  fi
+}
+
+report_errors() {
+  local output
+  output=$(agent-browser errors 2>/dev/null || true)
+  if [ -n "${output// }" ]; then
+    echo "  ⚠ Page errors:"
+    echo "$output"
+  fi
+}
+
+report_chat_metrics() {
+  local metrics
+  metrics=$(agent-browser eval "
+    (function () {
+      var row = document.querySelector('.chat-input-row');
+      var history = document.querySelector('#chat-history-details summary');
+      var clear = document.querySelector('#clear-session-btn');
+      var send = document.querySelector('#chat-submit');
+      if (!row || !history || !clear || !send) return '';
+      return JSON.stringify({
+        row: row.offsetHeight,
+        history: history.offsetHeight,
+        clear: clear.offsetHeight,
+        send: send.offsetHeight
+      });
+    })();
+  " 2>/dev/null | tr -d '"')
+  if [ -n "$metrics" ]; then
+    echo "  📏 Chat controls: $metrics"
+  fi
+}
+
 inspect() {
   local name="$1" url="$2" file="$3"
   log "$name"
+  agent-browser console --clear 2>/dev/null || true
+  agent-browser errors --clear 2>/dev/null || true
   agent-browser open "$url" 2>&1
   agent-browser wait --load networkidle 2>&1
   sleep 1
   agent-browser snapshot -i 2>&1
+  [ "$name" = "Dashboard" ] && report_chat_metrics
+  report_console
+  report_errors
   shot "$SHOT_DIR/$file"
   sleep 0.5
 }

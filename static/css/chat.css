@@ -466,9 +466,10 @@
 }
 .chat-input-form { margin: 0; }
 .chat-input-row {
+  --chat-control-height: 40px;
   display: flex; gap: 0.5rem; align-items: flex-end;
   background: #ffffff; border: 1px solid var(--border-strong);
-  border-radius: 12px; padding: 0.35rem 0.5rem 0.35rem 0.75rem;
+  border-radius: 12px; padding: 0.4rem 0.5rem 0.4rem 0.75rem;
   transition: border-color var(--transition);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
@@ -477,13 +478,15 @@
 }
 .chat-input-row textarea {
   flex: 1; border: none !important; background: transparent !important;
-  box-shadow: none !important; resize: none; padding: 0.4rem 0;
+  box-shadow: none !important; resize: none; padding: 0.5rem 0;
   font-size: 0.92rem; line-height: 1.5; margin: 0;
-  min-height: 24px; max-height: 160px;
+  min-height: var(--chat-control-height); max-height: 160px;
   outline: none !important;
 }
 .chat-input-row #chat-submit {
-  width: 36px; height: 36px; border-radius: 8px; border: none;
+  width: var(--chat-control-height); height: var(--chat-control-height);
+  align-self: center;
+  border-radius: 10px; border: none;
   background: var(--brand); color: #fff;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; flex-shrink: 0;
@@ -524,8 +527,10 @@
 .chat-utility-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.35rem;
-  height: 36px;
+  height: var(--chat-control-height, 40px);
+  align-self: center;
   padding: 0 0.72rem;
   border-radius: 9px;
   border: 1px solid var(--border);
@@ -533,8 +538,12 @@
   color: var(--text-muted);
   cursor: pointer;
   font-size: 0.8rem;
+  line-height: 1;
   font-weight: 600;
   transition: border-color var(--transition), color var(--transition), background var(--transition);
+}
+.chat-history-btn {
+  align-self: center;
 }
 .chat-utility-btn:hover {
   border-color: var(--brand-light);
@@ -548,6 +557,10 @@
 }
 .chat-utility-btn span {
   white-space: nowrap;
+}
+.chat-history-btn summary.chat-utility-btn {
+  display: inline-flex;
+  margin: 0;
 }
 
 /* ── Evidence panels ──────────────────────────────────────────────────── */

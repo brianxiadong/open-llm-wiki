@@ -291,6 +291,21 @@ make test
 make test-e2e
 ```
 
+### 页面巡检
+
+```bash
+make inspect
+```
+
+`make inspect` 会通过 `agent-browser` 打开关键页面并输出：
+
+- 页面 snapshot
+- 巡检截图
+- console / page errors
+- Dashboard 聊天输入区控件高度指标
+
+适合排查“按钮点击没反应”“一直加载中”“控件高度不齐”“资源加载失败”这类浏览器侧问题。
+
 ### 页面巡检截图
 
 ```bash

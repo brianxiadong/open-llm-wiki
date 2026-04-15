@@ -302,6 +302,41 @@ def _enrich_pages(wiki_dir: str) -> list[dict]:
     return pages
 
 
+CORE_WIKI_PAGE_SLUGS = {"index", "log", "overview"}
+
+
+def _default_wiki_page_content(repo_name: str, page_slug: str) -> str:
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if page_slug == "index":
+        return (
+            f"---\ntitle: 首页\ntype: index\nupdated: {now_str}\n---\n\n"
+            f"# {repo_name}\n\n暂无内容，请上传文档并摄入。\n"
+        )
+    if page_slug == "log":
+        return (
+            "---\ntitle: Ingestion Log\ntype: log\n---\n\n"
+            f"# Ingestion Log\n\n- {now_str}: 知识库创建\n"
+        )
+    if page_slug == "overview":
+        return (
+            f"---\ntitle: 概览\ntype: overview\nupdated: {now_str}\n---\n\n"
+            f"# {repo_name} 概览\n\n"
+            "暂无概览内容。上传文档并摄入后，此页面将自动更新。\n"
+        )
+    raise ValueError(f"Unsupported core wiki page: {page_slug}")
+
+
+def _ensure_core_wiki_page(wiki_dir: str, repo_name: str, page_slug: str) -> str:
+    filepath = os.path.join(wiki_dir, f"{page_slug}.md")
+    if page_slug not in CORE_WIKI_PAGE_SLUGS or os.path.isfile(filepath):
+        return filepath
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(_default_wiki_page_content(repo_name, page_slug))
+    logger.info("Recreated missing core wiki page: %s", filepath)
+    return filepath
+
+
 def _sync_repo_counts(repo: Repo, username: str) -> None:
     base = get_repo_path(Config.DATA_DIR, username, repo.slug)
     repo.source_count = len(list_raw_sources(os.path.join(base, "raw")))
@@ -910,31 +945,14 @@ def _register_routes(app: Flask) -> None:
 
             base = ensure_repo_dirs(Config.DATA_DIR, current_user.username, slug)
             wiki_dir = os.path.join(base, "wiki")
-            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
             schema_template_key = request.form.get("schema_template", "default")
             _, schema_content = SCHEMA_TEMPLATES.get(schema_template_key, SCHEMA_TEMPLATES["default"])
             with open(os.path.join(wiki_dir, "schema.md"), "w", encoding="utf-8") as f:
                 f.write(schema_content)
 
-            with open(os.path.join(wiki_dir, "index.md"), "w", encoding="utf-8") as f:
-                f.write(
-                    f"---\ntitle: 首页\ntype: index\nupdated: {now_str}\n---\n\n"
-                    f"# {name}\n\n暂无内容，请上传文档并摄入。\n"
-                )
-
-            with open(os.path.join(wiki_dir, "log.md"), "w", encoding="utf-8") as f:
-                f.write(
-                    "---\ntitle: Ingestion Log\ntype: log\n---\n\n"
-                    f"# Ingestion Log\n\n- {now_str}: 知识库创建\n"
-                )
-
-            with open(os.path.join(wiki_dir, "overview.md"), "w", encoding="utf-8") as f:
-                f.write(
-                    f"---\ntitle: 概览\ntype: overview\nupdated: {now_str}\n---\n\n"
-                    f"# {name} 概览\n\n"
-                    "暂无概览内容。上传文档并摄入后，此页面将自动更新。\n"
-                )
+            for page_slug in sorted(CORE_WIKI_PAGE_SLUGS):
+                _ensure_core_wiki_page(wiki_dir, name, page_slug)
 
             if app.qdrant:
                 try:
@@ -1227,7 +1245,7 @@ def _register_routes(app: Flask) -> None:
         wiki_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
         )
-        filepath = os.path.join(wiki_dir, f"{page_slug}.md")
+        filepath = _ensure_core_wiki_page(wiki_dir, repo.name, page_slug)
         if not os.path.isfile(filepath):
             abort(404)
 
@@ -1364,7 +1382,7 @@ def _register_routes(app: Flask) -> None:
         wiki_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
         )
-        filepath = os.path.join(wiki_dir, f"{page_slug}.md")
+        filepath = _ensure_core_wiki_page(wiki_dir, repo.name, page_slug)
         if not os.path.isfile(filepath):
             abort(404)
 
