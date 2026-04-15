@@ -287,6 +287,8 @@ CREATE TABLE users (
     id            INT AUTO_INCREMENT PRIMARY KEY,
     username      VARCHAR(64) UNIQUE NOT NULL,
     email         VARCHAR(255) UNIQUE NULL,
+    email_verified TINYINT(1) NOT NULL DEFAULT 0,
+    email_verified_at DATETIME NULL,
     password_hash VARCHAR(256) NOT NULL,
     display_name  VARCHAR(128),
     created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -429,6 +431,7 @@ GET  /login                              → 登录页
 POST /login                              → 登录
 GET  /register                           → 注册页（开放注册）
 POST /register                           → 注册
+GET  /verify-email/{token}               → 邮箱验证
 GET  /forgot-password                    → 找回密码页
 POST /forgot-password                    → 发送重置邮件
 GET  /reset-password/{token}             → 重置密码页
@@ -437,6 +440,7 @@ GET  /logout                             → 登出
 
 用户：
 GET  /user/settings                      → 个人设置页（显示名称、邮箱、密码）
+POST /user/settings                     → 更新个人资料 / 修改密码 / 删除当前账号
 GET  /user/settings/tokens               → API Token 管理页
 POST /user/settings/tokens/create        → 创建 API Token
 POST /user/settings/tokens/{id}/revoke   → 吊销 API Token
@@ -522,13 +526,17 @@ GET  /admin/feedbacks                        → 用户反馈列表（关联 que
 
 **来源证据页**（`templates/source/list.html`、`templates/source/view.html`）：公开仓库允许访客查看来源列表和来源 Markdown 预览，用于承接 evidence 链接；上传、下载原始文件、删除、重命名和摄入按钮仅 owner 可见。
 
-**认证页**（`templates/auth/login.html`、`templates/auth/register.html`、`templates/auth/forgot_password.html`、`templates/auth/reset_password.html`）：注册时收集邮箱，登录支持用户名或邮箱，忘记密码通过 SMTP 发送一次性重置链接。
+**认证页**（`templates/auth/login.html`、`templates/auth/register.html`、`templates/auth/forgot_password.html`、`templates/auth/reset_password.html`）：注册时收集邮箱并创建未验证账号，系统发送一次性邮箱验证链接；用户完成验证后才允许登录。登录支持用户名或邮箱，若账号未验证则拒绝登录并重发验证邮件。忘记密码通过 SMTP 发送一次性重置链接；若邮件服务未配置，注册和找回密码都会直接提示不可用，不继续尝试发信。
 
 **关系图**：用 D3.js 力导向图展示页面间的链接关系。类似 Obsidian 的 graph view。
 
 **全局搜索页**（`templates/user/search.html`）：按知识库分组展示跨仓库关键词搜索结果，含摘要和匹配次数。
 
+**个人设置页**（`templates/user/settings.html`、`templates/user/tokens.html`）：包含「基本信息」「修改密码」「危险操作」三个区域。删除账号时要求再次输入当前用户名和密码确认，提交后会同步清理名下知识库目录、向量索引、任务、会话、API Token 以及关联查询记录中的用户引用，并立即注销当前会话；E2E 测试脚本会复用这条删除流程自动回收 `e2e_*` 账号。
+
 **知识库设置页**（`templates/repo/settings.html`）：由「基本信息」「Wiki Schema」「导入 Wiki（ZIP）」「README」「删除知识库」五个独立表单区块组成；每个表单都显式携带 `action` 隐藏字段，避免未启用 CSRF 模板变量时提交丢失操作类型。
+
+**基础壳层**（`templates/base.html` + `static/css/style.css`）：站点统一头部、页脚与全局设计令牌都在这里定义。为了适配内网和离线环境，正文不再依赖 Google Fonts，而是使用系统自带中文优先字体栈；Pico CSS、Lucide、EasyMDE、D3 也全部 vendoring 到 `static/vendor/` 由应用自身提供，避免 CDN 或外网不可达时页面样式、图标、编辑器和图谱功能失效。
 
 **管理后台**（`templates/admin/dashboard.html`）：展示用户总数、知识库总数、任务统计、磁盘占用及最近注册用户列表。仅 ADMIN_USERNAME 可访问。
 
@@ -570,7 +578,7 @@ SECRET_KEY=change-me-to-a-random-string
 DATA_DIR=./data
 APP_BASE_URL=https://wiki.example.com
 
-# SMTP / 找回密码
+# SMTP / 注册验证 / 找回密码
 MAIL_HOST=smtp.example.com
 MAIL_PORT=465
 MAIL_USERNAME=noreply@example.com
@@ -744,7 +752,7 @@ open-llm-wiki/
 ├── app.py                 ← Flask 应用入口 + 路由注册
 ├── config.py              ← 配置（环境变量加载）
 ├── models.py              ← MySQL 数据库模型（用 Flask-SQLAlchemy + PyMySQL）
-├── mailer.py              ← SMTP 发信封装（找回密码）
+├── mailer.py              ← SMTP 发信封装（邮箱验证 / 找回密码）
 ├── llm_client.py          ← OpenAI 兼容 LLM 客户端封装
 ├── wiki_engine.py         ← 核心 Wiki 操作（ingest / query / lint）
 ├── qdrant_service.py      ← Qdrant 向量检索服务（embedding + 读写）
@@ -1126,22 +1134,23 @@ sources: []
 
 注册时需要填写：
 - 用户名（唯一，用于 URL 路径如 `/{username}/{repo}`）
-- 邮箱（唯一，用于找回密码）
+- 邮箱（唯一，用于注册验证与找回密码）
 - 显示名称
 - 密码（二次确认）
 
-登录支持“用户名或邮箱 + 密码”。忘记密码通过带时效签名的重置链接完成，不在数据库额外持久化 reset token。
+登录支持“用户名或邮箱 + 密码”。新注册账号默认 `email_verified=false`，必须先通过邮件中的签名链接完成验证后才允许登录；线上存量用户在迁移时回填为已验证。忘记密码通过带时效签名的重置链接完成，不在数据库额外持久化 reset token。
 
 ### 11.2 用户功能
 
 | 功能 | 说明 |
 |------|------|
-| 登录 | 用户名或邮箱 + 密码 |
-| 注册 | 开放，填写用户名 / 邮箱 / 显示名称 / 密码 |
+| 登录 | 用户名或邮箱 + 密码；未验证邮箱的账号禁止登录 |
+| 注册 | 开放，填写用户名 / 邮箱 / 显示名称 / 密码，并发送邮箱验证邮件 |
 | 登出 | 清除 session |
 | 修改显示名称 / 邮箱 | 个人设置页 |
 | 修改密码 | 需验证旧密码 |
-| 找回密码 | 输入邮箱后发送重置链接 |
+| 邮箱验证 | 点击验证链接后激活登录权限；未验证账号登录时自动重发验证邮件 |
+| 找回密码 | 输入邮箱后发送重置链接；若 SMTP 未配置，则页面提示暂时无法发送找回密码邮件 |
 
 ### 11.3 权限模型
 
@@ -1402,7 +1411,7 @@ tests/
 open-llm-wiki/
 ├── app.py                 ← Flask 应用工厂 + 路由注册
 ├── config.py              ← 配置加载 + 校验
-├── mailer.py              ← SMTP 发信与找回密码邮件
+├── mailer.py              ← SMTP 发信、邮箱验证与找回密码邮件
 ├── manage.py              ← CLI 管理命令（init-db / migrate / check / rebuild-*-index）
 ├── models.py              ← SQLAlchemy 模型
 ├── llm_client.py          ← LLM 客户端
@@ -1419,6 +1428,8 @@ open-llm-wiki/
 ├── .env                   ← 环境变量（不提交）
 ├── .env.example           ← 环境变量模板
 ├── .gitignore
+├── deploy/
+│   └── llmwiki.service    ← 受版本控制的 systemd 服务文件模板
 ├── migrations/            ← SQL 迁移文件
 │   └── 001_init.sql
 ├── scripts/
@@ -1433,6 +1444,9 @@ open-llm-wiki/
 │   │   ├── login.html
 │   │   ├── register.html
 │   │   └── reset_password.html
+│   ├── user/
+│   │   ├── settings.html
+│   │   └── tokens.html
 │   ├── repo/
 │   ├── wiki/
 │   ├── source/
@@ -1442,7 +1456,12 @@ open-llm-wiki/
 │       └── tasks.html    ← 任务队列看板
 ├── static/
 │   ├── css/
-│   └── js/
+│   ├── js/
+│   └── vendor/
+│       ├── pico/
+│       ├── lucide/
+│       ├── easymde/
+│       └── d3/
 ├── tests/                 ← 测试
 ├── logs/                  ← 日志文件（不提交）
 ├── data/                  ← 用户数据（不提交）
@@ -1454,55 +1473,60 @@ open-llm-wiki/
 
 **部署目标**：`172.36.164.85`（Anolis OS 8.9, x86_64）
 
-**部署脚本**（`scripts/deploy.sh`）：在项目根 `.env` 中配置 `DEPLOY_HOST`、`DEPLOY_PORT`、`DEPLOY_USER`、`DEPLOY_PASSWORD`（可选 `DEPLOY_PATH`，默认 `/opt/open-llm-wiki`），执行 `./scripts/deploy.sh` 时会自动 `source` 该 `.env`。脚本用 `sshpass` 上传 tarball 并远程解压、执行迁移、重启 `llmwiki` 服务，**不会**覆盖服务器上的 `.env` 与 `data/`。
+**部署脚本**（`scripts/deploy.sh`）：在项目根本地 `.env` 中配置 `DEPLOY_HOST`、`DEPLOY_PORT`、`DEPLOY_USER`、`DEPLOY_PASSWORD`（可选 `DEPLOY_PATH`，默认 `/opt/open-llm-wiki`），执行 `./scripts/deploy.sh` 时会自动 `source` 该 `.env`。这些凭据仅保存在本地工作区，**不提交 Git**。脚本用 `sshpass` 上传 tarball，并将仓库内的 `deploy/llmwiki.service` 安装到 `/etc/systemd/system/llmwiki.service`，随后执行迁移、`daemon-reload`、重启 `llmwiki` 服务并校验 unit 已加载 `/opt/open-llm-wiki/.env`。服务器上的业务 `.env` 与 `data/` 不会被部署覆盖。
 
 ```bash
 #!/bin/bash
 set -e
 
-REMOTE_USER=$DEPLOY_USER
-REMOTE_HOST=$DEPLOY_HOST
-REMOTE_PORT=$DEPLOY_PORT
-REMOTE_DIR=/opt/open-llm-wiki
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SERVER_HOST="${DEPLOY_HOST:-172.36.164.85}"
+SERVER_PORT="${DEPLOY_PORT:-2234}"
+SERVER_USER="${DEPLOY_USER:-root}"
+SERVER_PATH="${DEPLOY_PATH:-/opt/open-llm-wiki}"
+TARBALL="/tmp/llmwiki-deploy.tar.gz"
 
 echo "打包项目..."
-tar czf /tmp/open-llm-wiki.tar.gz \
-    --exclude='.git' --exclude='data' --exclude='.venv' \
-    --exclude='__pycache__' --exclude='logs' --exclude='.env' \
-    -C "$(dirname "$0")/.." .
+tar czf "$TARBALL" \
+    --exclude=".venv" --exclude="__pycache__" --exclude="*.pyc" \
+    --exclude=".env" --exclude="data" --exclude=".git" --exclude="**/._*" \
+    --exclude="*.tar.gz" -C "$PROJECT_ROOT" .
 
 echo "上传到服务器..."
-scp -P $REMOTE_PORT /tmp/open-llm-wiki.tar.gz $REMOTE_USER@$REMOTE_HOST:/tmp/
+sshpass -p "$DEPLOY_PASSWORD" scp -o StrictHostKeyChecking=no -P "$SERVER_PORT" \
+    "$TARBALL" "${SERVER_USER}@${SERVER_HOST}:/tmp/"
 
-echo "部署..."
-ssh -p $REMOTE_PORT $REMOTE_USER@$REMOTE_HOST << 'EOF'
-    mkdir -p /opt/open-llm-wiki
-    cd /opt/open-llm-wiki
-    tar xzf /tmp/open-llm-wiki.tar.gz
-    python3 -m venv .venv 2>/dev/null || true
-    .venv/bin/pip install -r requirements.txt -q
+echo "解压并重启..."
+sshpass -p "$DEPLOY_PASSWORD" ssh -o StrictHostKeyChecking=no -p "$SERVER_PORT" \
+    "${SERVER_USER}@${SERVER_HOST}" "
+    cd $SERVER_PATH
+    tar xzf /tmp/llmwiki-deploy.tar.gz --exclude='**/._*' 2>/dev/null
+    install -m 644 deploy/llmwiki.service /etc/systemd/system/llmwiki.service
     .venv/bin/python manage.py migrate
-    # 重启服务（systemd）
-    systemctl restart open-llm-wiki
-    rm /tmp/open-llm-wiki.tar.gz
-EOF
+    systemctl daemon-reload
+    systemctl restart llmwiki
+    systemctl show llmwiki -p EnvironmentFiles | grep '/opt/open-llm-wiki/.env'
+    curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:5000/health
+  "
 
-echo "部署完成。"
+echo "✓ 部署完成"
 ```
 
-**Systemd 服务文件**（`/etc/systemd/system/open-llm-wiki.service`）：
+**Systemd 服务文件**（`deploy/llmwiki.service` → `/etc/systemd/system/llmwiki.service`）：
 ```ini
 [Unit]
 Description=Open LLM Wiki
-After=network.target
+After=network.target mysql.service
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/open-llm-wiki
 EnvironmentFile=/opt/open-llm-wiki/.env
-ExecStart=/opt/open-llm-wiki/.venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 app:app
-Restart=always
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/open-llm-wiki/.venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 --timeout 300 'app:create_app()'
+Restart=on-failure
 RestartSec=5
 
 [Install]

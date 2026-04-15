@@ -21,11 +21,20 @@ SCREENSHOT_DIR = os.path.join(os.path.dirname(__file__), "screenshots")
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 TEST_USER = f"e2e_{os.getpid()}"
+TEST_EMAIL = f"{TEST_USER}@example.com"
 TEST_PASS = "e2eTest1234"
 
 
 def _shot(page: Page, name: str):
     page.screenshot(path=os.path.join(SCREENSHOT_DIR, f"{name}.png"), full_page=True)
+
+
+def _delete_test_account(page: Page):
+    page.goto(f"{BASE_URL}/user/settings")
+    page.locator('input[name="confirm_username"]').fill(TEST_USER)
+    page.locator('input[name="delete_password"]').fill(TEST_PASS)
+    page.locator('[data-testid="delete-account-submit"]').click()
+    page.wait_for_url(re.compile(r"/login"))
 
 
 # ─── Fixtures ────────────────────────────────────────────────
@@ -47,13 +56,18 @@ def authed_page(browser_context):
     page = browser_context.new_page()
     page.goto(f"{BASE_URL}/register")
     page.fill('input[name="username"]', TEST_USER)
+    if page.locator('input[name="email"]').count():
+        page.fill('input[name="email"]', TEST_EMAIL)
     page.fill('input[name="display_name"]', "E2E测试用户")
     page.fill('input[name="password"]', TEST_PASS)
     page.fill('input[name="confirm_password"]', TEST_PASS)
     page.click('button[type="submit"]')
     page.wait_for_url(re.compile(r"/" + TEST_USER))
     yield page
-    page.close()
+    try:
+        _delete_test_account(page)
+    finally:
+        page.close()
 
 
 @pytest.fixture(scope="module")
@@ -193,6 +207,7 @@ def test_user_settings(authed_page):
     page.goto(f"{BASE_URL}/user/settings")
     _shot(page, "11_user_settings")
     expect(page.locator('input[name="display_name"]')).to_be_visible()
+    expect(page.locator('input[name="confirm_username"]')).to_be_visible()
 
 
 # ─── Health Check ────────────────────────────────────────────

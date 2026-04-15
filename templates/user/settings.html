@@ -85,5 +85,43 @@
       <button type="submit">更新密码</button>
     </form>
   </article>
+
+  <article>
+    <header>
+      <h3 style="display: flex; align-items: center; gap: 0.45rem; margin: 0 0 1rem; font-size: 1.1rem">
+        <i class="lucide-triangle-alert" style="font-size: 1.15rem; color: #c2410c" aria-hidden="true"></i>
+        危险操作
+      </h3>
+    </header>
+    <form method="POST" action="{{ url_for('user.settings') }}">
+      {% if csrf_token is defined %}
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% endif %}
+      <input type="hidden" name="action" value="delete_account">
+
+      <p class="muted" style="font-size: 0.9rem; margin: 0 0 0.9rem">
+        删除账号会同步清理名下知识库、API Token、会话和测试过程中产生的关联数据，操作后无法恢复。
+      </p>
+
+      <label for="confirm_username">
+        <i class="lucide-user-round-x" style="font-size: 0.9rem" aria-hidden="true"></i>
+        输入当前用户名确认
+      </label>
+      <input type="text" id="confirm_username" name="confirm_username"
+             placeholder="请输入 {{ current_user.username }}" required autocomplete="off">
+
+      <label for="delete_password">
+        <i class="lucide-shield-alert" style="font-size: 0.9rem" aria-hidden="true"></i>
+        当前密码
+      </label>
+      <input type="password" id="delete_password" name="delete_password"
+             required autocomplete="current-password">
+
+      <button type="submit" data-testid="delete-account-submit"
+              style="margin-top: 0.25rem; background: #b91c1c; border-color: #b91c1c">
+        删除当前账号
+      </button>
+    </form>
+  </article>
 </div>
 {% endblock %}

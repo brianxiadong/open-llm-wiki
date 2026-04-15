@@ -1,0 +1,16 @@
+[Unit]
+Description=Open LLM Wiki
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/open-llm-wiki
+EnvironmentFile=/opt/open-llm-wiki/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/open-llm-wiki/.venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 --timeout 300 'app:create_app()'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

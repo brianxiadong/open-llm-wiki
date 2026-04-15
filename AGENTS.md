@@ -60,6 +60,7 @@ Agent 在回复"已完成"之前，必须自查：
 | Wiki 页面不显示 | LLM 输出 ` ```yaml ` 包裹 | `test_clean_llm_markdown` |
 | 摄入 0 created | 服务器无法连外网 LLM | 启动时 `manage.py check` |
 | 进度 SSE 阻塞 worker | 摄入在 HTTP 线程内执行 | `test_task_queued_on_upload` |
+| 未验证邮箱仍可登录 | 缺少 `email_verified` 登录门禁 | `test_login_blocks_unverified_user_and_resends_verification_email` |
 
 ## 3. 架构约束
 
@@ -82,6 +83,13 @@ Agent 在回复"已完成"之前，必须自查：
 | MinerU | http://172.36.237.175:8000 |
 | Qdrant | http://172.36.164.85:6333 |
 | MySQL | 172.36.164.85:3306 / llmwiki |
+
+### 4.1 部署约定（强制）
+
+- 生产 `systemd` 服务名固定为 `llmwiki`，服务文件来源于仓库内 `deploy/llmwiki.service`
+- `deploy/llmwiki.service` 必须包含 `EnvironmentFile=/opt/open-llm-wiki/.env`，否则应用将读不到 `MAIL_*` 等运行时配置
+- 服务器连接信息仅保存在项目根本地 `.env` 的 `DEPLOY_HOST / DEPLOY_PORT / DEPLOY_USER / DEPLOY_PASSWORD`，用于 `scripts/deploy.sh`
+- 本地 `.env` 绝不提交到 Git；仓库只提交 `.env.example`
 
 ## 5. 代码风格
 

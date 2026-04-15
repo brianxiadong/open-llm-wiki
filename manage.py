@@ -107,6 +107,13 @@ def check():
     """检查外部服务连通性"""
     results = {}
 
+    mail_required = ("MAIL_HOST", "MAIL_USERNAME", "MAIL_PASSWORD", "MAIL_FROM")
+    missing_mail = [key for key in mail_required if not os.environ.get(key)]
+    if missing_mail:
+        results["mail"] = f"fail: missing {', '.join(missing_mail)}"
+    else:
+        results["mail"] = "ok"
+
     # MySQL
     try:
         import pymysql

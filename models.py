@@ -20,6 +20,8 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     username = db.Column(db.String(64), unique=True, nullable=False, index=True)
     email = db.Column(db.String(255), unique=True, nullable=True, index=True)
+    email_verified = db.Column(db.Boolean, nullable=False, default=False)
+    email_verified_at = db.Column(db.DateTime, nullable=True)
     password_hash = db.Column(db.String(256), nullable=False)
     display_name = db.Column(db.String(128), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=_utc_now)

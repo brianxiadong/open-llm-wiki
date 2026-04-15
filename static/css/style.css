@@ -35,7 +35,9 @@
   --shadow-md: 0 12px 30px rgba(37, 99, 235, 0.09);
   --shadow-lg: 0 18px 38px rgba(37, 99, 235, 0.12);
   --transition: 0.2s cubic-bezier(.4, 0, .2, 1);
-  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans CJK SC", "Source Han Sans SC", system-ui, -apple-system,
+    "Segoe UI", Roboto, sans-serif;
 }
 
 [data-theme="light"] {

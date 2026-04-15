@@ -3,7 +3,7 @@
 {% block title %}编辑 {{ page_slug }} - {{ site_name }}{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/easymde/easymde.min.css') }}">
 <style>
 .wiki-edit-container { max-width: 900px; margin: 0 auto; }
 .edit-actions { margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center; }
@@ -36,7 +36,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/easymde/easymde.min.js') }}"></script>
 <script>
   var easyMDE = new EasyMDE({
     element: document.getElementById('wiki-editor'),

@@ -64,7 +64,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/d3/d3.v7.min.js') }}"></script>
 <script>var graphData = {{ graph_data|tojson }};</script>
 <script src="{{ url_for('static', filename='js/graph.js') }}"></script>
 {% endblock %}

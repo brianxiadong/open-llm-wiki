@@ -44,9 +44,12 @@ sshpass -p "$DEPLOY_PASSWORD" ssh -o StrictHostKeyChecking=no -p "$SERVER_PORT" 
   "${SERVER_USER}@${SERVER_HOST}" "
     cd $SERVER_PATH
     tar xzf /tmp/llmwiki-deploy.tar.gz --exclude='**/._*' 2>/dev/null
+    install -m 644 deploy/llmwiki.service /etc/systemd/system/llmwiki.service
     .venv/bin/python manage.py migrate 2>&1 | grep -E '迁移|migration|error|Error' | head -10
+    systemctl daemon-reload
     systemctl restart llmwiki
     sleep 3
+    systemctl show llmwiki -p EnvironmentFiles | grep '/opt/open-llm-wiki/.env'
     curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:5000/health
   "
 

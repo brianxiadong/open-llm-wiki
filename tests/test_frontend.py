@@ -17,6 +17,7 @@ def _login(client, app):
         if not User.query.filter_by(username="fe_alice").first():
             u = User(username="fe_alice", email="fe_alice@example.com", display_name="FE Alice")
             u.set_password("pass1234")
+            u.email_verified = True
             db.session.add(u)
             db.session.commit()
     client.post("/login", data={"username": "fe_alice", "password": "pass1234"})
@@ -34,6 +35,16 @@ def _html(resp) -> str:
     return resp.data.decode("utf-8")
 
 
+def _assert_no_external_assets(html: str) -> None:
+    asset_urls = re.findall(
+        r"""<(?:link|script)\b[^>]+(?:href|src)=["']([^"']+)["']""",
+        html,
+        re.IGNORECASE,
+    )
+    external = [url for url in asset_urls if url.startswith(("http://", "https://", "//"))]
+    assert external == [], f"Unexpected external assets: {external}"
+
+
 # ── Auth pages ───────────────────────────────────────────────
 
 def test_login_has_form(client):
@@ -41,6 +52,13 @@ def test_login_has_form(client):
     assert '<input' in html and 'name="username"' in html
     assert 'name="password"' in html
     assert '<button' in html or 'type="submit"' in html
+
+
+def test_base_template_does_not_load_google_fonts(client):
+    html = _html(client.get("/login"))
+    assert "fonts.googleapis.com" not in html
+    assert "fonts.gstatic.com" not in html
+    _assert_no_external_assets(html)
 
 
 def test_register_has_confirm_password(client):
@@ -198,6 +216,16 @@ def test_graph_has_container(client, app):
     _create_repo(client)
     html = _html(client.get("/fe_alice/fe-test/graph"))
     assert "graph-container" in html
+    _assert_no_external_assets(html)
+
+
+def test_wiki_edit_page_uses_local_assets(client, app):
+    _login(client, app)
+    _create_repo(client)
+    html = _html(client.get("/fe_alice/fe-test/wiki/overview/edit"))
+    assert "easymde.min.css" in html
+    assert "easymde.min.js" in html
+    _assert_no_external_assets(html)
 
 
 # ── Settings ─────────────────────────────────────────────────
@@ -220,6 +248,14 @@ def test_user_settings_has_display_name(client, app):
     _login(client, app)
     html = _html(client.get("/user/settings"))
     assert 'name="display_name"' in html
+
+
+def test_user_settings_has_delete_account_form(client, app):
+    _login(client, app)
+    html = _html(client.get("/user/settings"))
+    assert 'name="action" value="delete_account"' in html
+    assert 'name="confirm_username"' in html
+    assert 'name="delete_password"' in html
 
 
 # ── Task queue ───────────────────────────────────────────────

@@ -5,6 +5,8 @@ import json
 import os
 from unittest.mock import patch
 
+from click.testing import CliRunner
+
 
 # -- Auth ------------------------------------------------------------------
 
@@ -20,23 +22,39 @@ def test_register_page_get(client):
 
 
 def test_register_and_login(client, app):
+    from app import _build_verification_token
+
     with app.app_context():
         from models import User
 
         assert User.query.filter_by(username="routeuser1").first() is None
 
-    resp = client.post(
-        "/register",
-        data={
-            "username": "routeuser1",
-            "email": "routeuser1@example.com",
-            "display_name": "Route User",
-            "password": "password123",
-            "confirm_password": "password123",
-        },
-        follow_redirects=False,
-    )
+    with patch("mailer.Mailer.send_email_verification") as send_mail:
+        resp = client.post(
+            "/register",
+            data={
+                "username": "routeuser1",
+                "email": "routeuser1@example.com",
+                "display_name": "Route User",
+                "password": "password123",
+                "confirm_password": "password123",
+            },
+            follow_redirects=False,
+        )
+
     assert resp.status_code == 302
+    send_mail.assert_called_once()
+
+    with app.app_context():
+        from models import User
+
+        user = User.query.filter_by(username="routeuser1").first()
+        assert user is not None
+        assert user.email_verified is False
+        token = _build_verification_token(user)
+
+    verify_resp = client.get(f"/verify-email/{token}", follow_redirects=False)
+    assert verify_resp.status_code == 302
 
     resp2 = client.post(
         "/login",
@@ -80,6 +98,7 @@ def test_login_wrong_password(client, app):
 
         u = User(username="wrongpwuser", email="wrongpw@example.com", display_name="W")
         u.set_password("rightpass123")
+        u.email_verified = True
         db.session.add(u)
         db.session.commit()
 
@@ -169,6 +188,114 @@ def test_user_settings_change_password(auth_client, app):
         user = User.query.filter_by(username="alice").first()
         assert user is not None
         assert user.check_password("newpass123") is True
+
+
+def test_user_settings_delete_account_requires_exact_username(auth_client, app):
+    resp = auth_client.post(
+        "/user/settings",
+        data={
+            "action": "delete_account",
+            "confirm_username": "alice-typo",
+            "delete_password": "password123",
+        },
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    with app.app_context():
+        from models import User
+
+        user = User.query.filter_by(username="alice").first()
+        assert user is not None
+
+
+def test_user_settings_delete_account_cascades_related_data(auth_client, app):
+    from config import Config
+    from utils import get_repo_path
+
+    with app.app_context():
+        from models import ApiToken, AuditLog, ConversationSession, QueryFeedback, QueryLog, Repo, Task, User, db
+
+        user = User.query.filter_by(username="alice").first()
+        assert user is not None
+
+        repo = Repo(user_id=user.id, name="Delete KB", slug="delete-kb", description="cleanup target")
+        db.session.add(repo)
+        db.session.flush()
+
+        db.session.add(Task(repo_id=repo.id, type="ingest", status="done", input_data="cleanup.md"))
+        db.session.add(
+            ConversationSession(
+                repo_id=repo.id,
+                user_id=user.id,
+                session_key="cleanup-session",
+                messages_json='[{"role":"user","content":"cleanup"}]',
+            )
+        )
+        db.session.add(ApiToken(user_id=user.id, name="cleanup token", token_hash="tok-hash"))
+        db.session.add(
+            QueryLog(
+                trace_id="trace-delete-account",
+                repo_id=repo.id,
+                user_id=user.id,
+                question="cleanup?",
+            )
+        )
+        db.session.add(
+            QueryFeedback(
+                trace_id="trace-delete-account",
+                repo_id=repo.id,
+                user_id=user.id,
+                rating="good",
+            )
+        )
+        db.session.add(
+            AuditLog(
+                user_id=user.id,
+                username=user.username,
+                action="pre_delete_check",
+            )
+        )
+        db.session.commit()
+
+        repo_path = get_repo_path(Config.DATA_DIR, user.username, repo.slug)
+        os.makedirs(os.path.join(repo_path, "raw"), exist_ok=True)
+        with open(os.path.join(repo_path, "raw", "cleanup.md"), "w", encoding="utf-8") as fh:
+            fh.write("# cleanup")
+
+    with patch.object(app.qdrant, "delete_collection") as delete_collection, \
+         patch.object(app.qdrant, "delete_chunk_collection") as delete_chunk_collection, \
+         patch.object(app.qdrant, "delete_fact_collection") as delete_fact_collection:
+        resp = auth_client.post(
+            "/user/settings",
+            data={
+                "action": "delete_account",
+                "confirm_username": "alice",
+                "delete_password": "password123",
+            },
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    assert "/login" in (resp.headers.get("Location") or "")
+    delete_collection.assert_called_once_with(repo.id)
+    delete_chunk_collection.assert_called_once_with(repo.id)
+    delete_fact_collection.assert_called_once_with(repo.id)
+
+    with app.app_context():
+        from models import ApiToken, AuditLog, ConversationSession, QueryFeedback, QueryLog, Repo, Task, User
+
+        assert User.query.filter_by(username="alice").first() is None
+        assert Repo.query.filter_by(slug="delete-kb").first() is None
+        assert Task.query.count() == 0
+        assert ConversationSession.query.count() == 0
+        assert ApiToken.query.count() == 0
+        assert QueryLog.query.count() == 0
+        assert QueryFeedback.query.count() == 0
+        delete_audit = AuditLog.query.filter_by(action="delete_account").first()
+        assert delete_audit is not None
+        assert delete_audit.user_id is None
+        assert delete_audit.username == "alice"
+        assert not os.path.isdir(os.path.join(Config.DATA_DIR, "alice"))
 
 
 def test_repo_settings_update_info_and_schema(sample_repo, app):
@@ -332,6 +459,7 @@ def test_forgot_password_sends_reset_email(client, app):
 
         user = User(username="mailuser", email="mailuser@example.com", display_name="Mail User")
         user.set_password("password123")
+        user.email_verified = True
         db.session.add(user)
         db.session.commit()
 
@@ -346,6 +474,123 @@ def test_forgot_password_sends_reset_email(client, app):
     send_mail.assert_called_once()
 
 
+def test_forgot_password_shows_error_when_mail_service_is_disabled(client, app):
+    original_host = app.mailer._host
+    app.mailer._host = ""
+    try:
+        with patch.object(app.mailer, "send_password_reset") as send_mail:
+            resp = client.post(
+                "/forgot-password",
+                data={"email": "mailuser@example.com"},
+                follow_redirects=False,
+            )
+    finally:
+        app.mailer._host = original_host
+
+    assert resp.status_code == 200
+    assert "邮件服务未配置，暂时无法发送找回密码邮件" in resp.data.decode("utf-8")
+    send_mail.assert_not_called()
+
+
+def test_manage_check_reports_missing_mail_configuration():
+    from manage import cli
+
+    runner = CliRunner()
+    with patch.dict(
+        os.environ,
+        {
+            "DB_HOST": "127.0.0.1",
+            "DB_PORT": "3306",
+            "DB_USER": "root",
+            "DB_PASSWORD": "secret",
+            "DB_NAME": "llmwiki",
+            "MINERU_API_URL": "http://mineru.local",
+            "QDRANT_URL": "http://qdrant.local",
+            "EMBEDDING_API_BASE": "http://embed.local/v1",
+            "EMBEDDING_MODEL": "bge-m3",
+            "EMBEDDING_API_KEY": "",
+            "MAIL_HOST": "",
+            "MAIL_USERNAME": "",
+            "MAIL_PASSWORD": "",
+            "MAIL_FROM": "",
+        },
+        clear=False,
+    ), patch("pymysql.connect"), patch("manage.httpx.get") as http_get, patch("openai.OpenAI") as openai_cls:
+        http_get.return_value.status_code = 200
+        openai_cls.return_value.embeddings.create.return_value = object()
+        result = runner.invoke(cli, ["check"])
+
+    assert result.exit_code == 0
+    assert "✗ mail: fail: missing MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD, MAIL_FROM" in result.output
+    assert "✓ mysql: ok" in result.output
+
+
+def test_register_requires_mail_service_for_email_verification(client, app):
+    original_host = app.mailer._host
+    app.mailer._host = ""
+    try:
+        resp = client.post(
+            "/register",
+            data={
+                "username": "nomailuser",
+                "email": "nomail@example.com",
+                "display_name": "No Mail",
+                "password": "password123",
+                "confirm_password": "password123",
+            },
+            follow_redirects=False,
+        )
+    finally:
+        app.mailer._host = original_host
+
+    assert resp.status_code == 200
+    assert "邮件服务未配置，暂时无法完成注册" in resp.data.decode("utf-8")
+
+
+def test_login_blocks_unverified_user_and_resends_verification_email(client, app):
+    with app.app_context():
+        from models import User, db
+
+        user = User(username="pendinguser", email="pending@example.com", display_name="Pending User")
+        user.set_password("password123")
+        db.session.add(user)
+        db.session.commit()
+
+    with patch("mailer.Mailer.send_email_verification") as send_mail:
+        resp = client.post(
+            "/login",
+            data={"username": "pendinguser", "password": "password123"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 200
+    assert "账号尚未完成邮箱验证，已重新发送验证邮件，请查收邮箱" in resp.data.decode("utf-8")
+    send_mail.assert_called_once()
+
+
+def test_verify_email_marks_user_verified(client, app):
+    with app.app_context():
+        from app import _build_verification_token
+        from models import User, db
+
+        user = User(username="verifyuser", email="verify@example.com", display_name="Verify User")
+        user.set_password("password123")
+        db.session.add(user)
+        db.session.commit()
+        token = _build_verification_token(user)
+
+    resp = client.get(f"/verify-email/{token}", follow_redirects=False)
+    assert resp.status_code == 302
+
+    with app.app_context():
+        from models import User
+
+        user = User.query.filter_by(username="verifyuser").first()
+        assert user is not None
+        assert user.email_verified is True
+        assert user.email_verified_at is not None
+
+
 def test_reset_password_flow(client, app):
     with app.app_context():
         from models import User, db
@@ -353,6 +598,7 @@ def test_reset_password_flow(client, app):
 
         user = User(username="resetuser", email="resetuser@example.com")
         user.set_password("password123")
+        user.email_verified = True
         db.session.add(user)
         db.session.commit()
         token = _build_reset_token(user)
@@ -972,6 +1218,7 @@ def test_admin_dashboard_as_admin(app):
         if not User.query.filter_by(username="alice").first():
             u = User(username="alice", email="alice-admin@example.com", display_name="Alice")
             u.set_password("password123")
+            u.email_verified = True
             db.session.add(u)
             db.session.commit()
     client.post("/login", data={"username": "alice", "password": "password123"})

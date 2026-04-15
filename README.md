@@ -159,6 +159,7 @@ cp .env.example .env
 
 这会检查：
 
+- 邮件服务配置是否完整
 - MySQL
 - MinerU
 - Qdrant
@@ -205,6 +206,8 @@ make prod
 | `QDRANT_URL` | Qdrant 地址 |
 | `MINERU_API_URL` | MinerU 服务地址 |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | MySQL 配置 |
+| `MAIL_HOST` / `MAIL_PORT` / `MAIL_USERNAME` / `MAIL_PASSWORD` / `MAIL_FROM` | SMTP 注册验证 / 找回密码配置 |
+| `DEPLOY_HOST` / `DEPLOY_PORT` / `DEPLOY_USER` / `DEPLOY_PASSWORD` | 部署服务器连接信息，仅保存在本地 `.env` |
 | `SECRET_KEY` | Flask Secret |
 | `DATA_DIR` | 数据目录 |
 | `ADMIN_USERNAME` | 管理员用户名 |
@@ -253,6 +256,7 @@ make format
 ├── static/                # CSS / JS / 静态资源
 ├── tests/                 # 单元、契约、前端、路由、E2E 测试
 ├── scripts/               # 对比测试、E2E 脚本等
+├── deploy/                # 生产部署资产（systemd service 模板）
 ├── migrations/            # SQL 迁移文件
 └── docs/design.md         # 完整设计文档
 ```

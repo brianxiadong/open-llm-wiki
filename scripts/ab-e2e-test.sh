@@ -16,6 +16,7 @@ export AGENT_BROWSER_DEFAULT_TIMEOUT=60000
 
 BASE_URL="${1:-http://172.36.164.85:5000}"
 USER="${2:-e2e_$$}"
+EMAIL="${USER}@example.com"
 PASS="${3:-e2ePass1234}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -25,10 +26,23 @@ mkdir -p "$SHOT_DIR"
 PASSED=0
 FAILED=0
 ERRORS=""
+USER_REGISTERED=0
 
 # ── 工具函数 ─────────────────────────────────────────────────
 
-cleanup() { agent-browser close 2>/dev/null || true; }
+cleanup_test_user() {
+  [ "${USER_REGISTERED:-0}" -eq 1 ] || return 0
+  nav "$BASE_URL/user/settings"
+  agent-browser fill 'input[name="confirm_username"]' "$USER" 2>/dev/null || true
+  agent-browser fill 'input[name="delete_password"]' "$PASS" 2>/dev/null || true
+  agent-browser click '[data-testid="delete-account-submit"]' 2>/dev/null || true
+  agent-browser wait --load networkidle 2>/dev/null || true
+}
+
+cleanup() {
+  cleanup_test_user
+  agent-browser close 2>/dev/null || true
+}
 trap cleanup EXIT
 
 fail_shot() {
@@ -144,13 +158,18 @@ test_register_page() {
 test_register_user() {
   nav "$BASE_URL/register"
   agent-browser fill 'input[name="username"]' "$USER" 2>/dev/null
+  agent-browser fill 'input[name="email"]' "$EMAIL" 2>/dev/null || true
   agent-browser fill 'input[name="display_name"]' "E2E测试" 2>/dev/null
   agent-browser fill 'input[name="password"]' "$PASS" 2>/dev/null
   agent-browser fill 'input[name="confirm_password"]' "$PASS" 2>/dev/null
   agent-browser click 'button[type="submit"]' 2>/dev/null
   agent-browser wait --load networkidle 2>/dev/null
   sleep 1
-  assert_url_contains "$USER" "注册后跳转"
+  if assert_url_contains "$USER" "注册后跳转"; then
+    USER_REGISTERED=1
+    return 0
+  fi
+  return 1
 }
 
 test_login() {
@@ -284,7 +303,8 @@ test_repo_settings() {
 
 test_user_settings() {
   nav "$BASE_URL/user/settings"
-  assert_exists 'input[name="display_name"]' "显示名称"
+  assert_exists 'input[name="display_name"]' "显示名称" &&
+  assert_exists 'input[name="confirm_username"]' "删除账号确认输入框"
 }
 
 test_health_endpoint() {

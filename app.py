@@ -32,7 +32,18 @@ from exceptions import MineruClientError, QdrantServiceError
 from llm_client import LLMClient
 from mailer import Mailer
 from mineru_client import MineruClient
-from models import Repo, Task, User, db, login_manager
+from models import (
+    ApiToken,
+    AuditLog,
+    ConversationSession,
+    QueryFeedback,
+    QueryLog,
+    Repo,
+    Task,
+    User,
+    db,
+    login_manager,
+)
 from qdrant_service import QdrantService
 from task_worker import TaskWorker
 from utils import (
@@ -165,8 +176,16 @@ def _reset_serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(Config.SECRET_KEY, salt="password-reset")
 
 
+def _verification_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(Config.SECRET_KEY, salt="email-verification")
+
+
 def _build_reset_token(user: User) -> str:
     return _reset_serializer().dumps({"user_id": user.id, "password_hash": user.password_hash})
+
+
+def _build_verification_token(user: User) -> str:
+    return _verification_serializer().dumps({"user_id": user.id, "email": user.email})
 
 
 def _verify_reset_token(token: str) -> User | None:
@@ -183,11 +202,35 @@ def _verify_reset_token(token: str) -> User | None:
     return user
 
 
+def _verify_verification_token(token: str) -> User | None:
+    try:
+        payload = _verification_serializer().loads(token, max_age=Config.PASSWORD_RESET_EXPIRES)
+    except (BadSignature, SignatureExpired):
+        return None
+
+    user = db.session.get(User, payload.get("user_id"))
+    if user is None or not user.email:
+        return None
+    if payload.get("email") != user.email:
+        return None
+    return user
+
+
 def _external_url(endpoint: str, **values) -> str:
     relative = url_for(endpoint, _external=False, **values)
     if Config.APP_BASE_URL:
         return f"{Config.APP_BASE_URL}{relative}"
     return url_for(endpoint, _external=True, **values)
+
+
+def _send_verification_email(user: User) -> None:
+    verify_url = _external_url("auth.verify_email", token=_build_verification_token(user))
+    current_app.mailer.send_email_verification(
+        user.email,
+        user.username,
+        verify_url,
+        Config.SITE_NAME,
+    )
 
 
 def _audit(
@@ -264,6 +307,64 @@ def _sync_repo_counts(repo: Repo, username: str) -> None:
     repo.source_count = len(list_raw_sources(os.path.join(base, "raw")))
     repo.page_count = len(list_wiki_pages(os.path.join(base, "wiki")))
     db.session.commit()
+
+
+def _delete_repo_data(app: Flask, repo: Repo, username: str) -> str:
+    repo_path = get_repo_path(Config.DATA_DIR, username, repo.slug)
+
+    if app.qdrant:
+        for fn_name in (
+            "delete_collection",
+            "delete_chunk_collection",
+            "delete_fact_collection",
+        ):
+            try:
+                getattr(app.qdrant, fn_name)(repo.id)
+            except Exception:
+                logger.warning("Failed to run %s for repo %s", fn_name, repo.id)
+
+    Task.query.filter_by(repo_id=repo.id).delete(synchronize_session=False)
+    ConversationSession.query.filter_by(repo_id=repo.id).delete(
+        synchronize_session=False
+    )
+    QueryFeedback.query.filter_by(repo_id=repo.id).delete(
+        synchronize_session=False
+    )
+    QueryLog.query.filter_by(repo_id=repo.id).delete(synchronize_session=False)
+    db.session.delete(repo)
+    return repo_path
+
+
+def _delete_user_account(app: Flask, user: User) -> None:
+    repo_paths = [
+        _delete_repo_data(app, repo, user.username)
+        for repo in Repo.query.filter_by(user_id=user.id).all()
+    ]
+
+    ApiToken.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+    ConversationSession.query.filter_by(user_id=user.id).delete(
+        synchronize_session=False
+    )
+    QueryLog.query.filter_by(user_id=user.id).update(
+        {"user_id": None}, synchronize_session=False
+    )
+    QueryFeedback.query.filter_by(user_id=user.id).update(
+        {"user_id": None}, synchronize_session=False
+    )
+    AuditLog.query.filter_by(user_id=user.id).update(
+        {"user_id": None}, synchronize_session=False
+    )
+
+    db.session.delete(user)
+    db.session.commit()
+
+    for repo_path in repo_paths:
+        if os.path.isdir(repo_path):
+            shutil.rmtree(repo_path, ignore_errors=True)
+
+    user_dir = os.path.join(Config.DATA_DIR, user.username)
+    if os.path.isdir(user_dir):
+        shutil.rmtree(user_dir, ignore_errors=True)
 
 
 def _purge_source_wiki(app, repo, username: str, source_filename: str) -> int:
@@ -496,6 +597,17 @@ def _register_routes(app: Flask) -> None:
                 or_(User.username == username, User.email == email)
             ).first()
             if user and user.check_password(password):
+                if user.email and not user.email_verified:
+                    if current_app.mailer.enabled:
+                        try:
+                            _send_verification_email(user)
+                            flash("账号尚未完成邮箱验证，已重新发送验证邮件，请查收邮箱", "warning")
+                        except Exception as exc:
+                            logger.exception("send verification mail failed")
+                            flash(f"账号尚未完成邮箱验证，且重发验证邮件失败: {exc}", "error")
+                    else:
+                        flash("账号尚未完成邮箱验证，且邮件服务未配置，请联系管理员", "error")
+                    return render_template("auth/login.html")
                 login_user(user)
                 _audit("login")
                 next_url = request.args.get("next")
@@ -540,18 +652,43 @@ def _register_routes(app: Flask) -> None:
             if User.query.filter_by(email=email).first():
                 flash("邮箱已被使用", "error")
                 return render_template("auth/register.html")
+            if not current_app.mailer.enabled:
+                flash("邮件服务未配置，暂时无法完成注册", "error")
+                return render_template("auth/register.html")
 
             user = User(username=username, email=email, display_name=display_name or None)
             user.set_password(password)
             db.session.add(user)
-            db.session.commit()
+            try:
+                db.session.flush()
+                _send_verification_email(user)
+                db.session.commit()
+            except Exception as exc:
+                db.session.rollback()
+                logger.exception("send verification mail failed on register")
+                flash(f"验证邮件发送失败: {exc}", "error")
+                return render_template("auth/register.html")
 
-            login_user(user)
-            flash("注册成功", "success")
-            return redirect(
-                url_for("repo.list_repos", username=user.username)
-            )
+            flash("注册成功，请先查收验证邮件并完成邮箱认证后再登录", "success")
+            return redirect(url_for("auth.login"))
         return render_template("auth/register.html")
+
+    @auth_bp.route("/verify-email/<token>", methods=["GET"])
+    def verify_email(token):
+        user = _verify_verification_token(token)
+        if user is None:
+            flash("验证链接无效或已过期，请重新登录后获取新的验证邮件", "error")
+            return redirect(url_for("auth.login"))
+        if user.email_verified:
+            flash("邮箱已完成验证，请直接登录", "success")
+            return redirect(url_for("auth.login"))
+
+        user.email_verified = True
+        user.email_verified_at = datetime.now(timezone.utc)
+        db.session.commit()
+        _audit("verify_email", "user", user.id, user.email)
+        flash("邮箱验证成功，请登录", "success")
+        return redirect(url_for("auth.login"))
 
     @auth_bp.route("/forgot-password", methods=["GET", "POST"])
     def forgot_password():
@@ -659,6 +796,22 @@ def _register_routes(app: Flask) -> None:
                     current_user.set_password(new_pw)
                     db.session.commit()
                     flash("密码修改成功", "success")
+            elif action == "delete_account":
+                confirm_username = request.form.get("confirm_username", "").strip()
+                password = request.form.get("delete_password", "")
+                if confirm_username != current_user.username:
+                    flash("请输入当前用户名以确认删除账号", "error")
+                elif not current_user.check_password(password):
+                    flash("当前密码错误，无法删除账号", "error")
+                else:
+                    app_obj = current_app._get_current_object()
+                    username = current_user.username
+                    user_id = current_user.id
+                    _audit("delete_account", "user", user_id, username)
+                    _delete_user_account(app_obj, current_user)
+                    logout_user()
+                    flash("账号及其关联知识库已删除", "success")
+                    return redirect(url_for("auth.login"))
             return redirect(url_for("user.settings"))
         return render_template("user/settings.html")
 
@@ -914,19 +1067,9 @@ def _register_routes(app: Flask) -> None:
         user, repo = _get_repo_or_404(username, repo_slug)
         _require_owner(repo)
 
-        if app.qdrant:
-            try:
-                app.qdrant.delete_collection(repo.id)
-            except Exception:
-                logger.warning(
-                    "Failed to delete Qdrant collection for repo %s", repo.id
-                )
-
-        Task.query.filter_by(repo_id=repo.id).delete()
-        db.session.delete(repo)
+        repo_path = _delete_repo_data(app, repo, username)
         db.session.commit()
 
-        repo_path = get_repo_path(Config.DATA_DIR, username, repo_slug)
         if os.path.isdir(repo_path):
             shutil.rmtree(repo_path, ignore_errors=True)
 

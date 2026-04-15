@@ -97,6 +97,7 @@ def auth_client(client, app):
         from models import User, db
         user = User(username="alice", email="alice@example.com", display_name="Alice")
         user.set_password("password123")
+        user.email_verified = True
         db.session.add(user)
         db.session.commit()
 
