@@ -203,6 +203,38 @@ def test_source_list_has_upload_zone(client, app):
     assert "upload" in html.lower(), "Should have upload section"
 
 
+def test_source_list_has_upload_selected_state_markup(client, app):
+    _login(client, app)
+    _create_repo(client)
+    html = _html(client.get("/fe_alice/fe-test/sources"))
+    assert 'id="file-selected"' in html
+    assert "upload-selected" in html
+    assert "确认上传" in html
+
+
+def test_source_list_batch_ingest_starts_disabled(client, app):
+    import io
+
+    _login(client, app)
+    _create_repo(client)
+    client.post(
+        "/fe_alice/fe-test/sources/upload",
+        data={"file": (io.BytesIO(b"# one"), "one.md")},
+        content_type="multipart/form-data",
+    )
+    html = _html(client.get("/fe_alice/fe-test/sources"))
+    assert 'id="batch-ingest-btn"' in html
+    assert 'id="batch-ingest-btn" class="btn-sm btn-sm-primary" disabled' in html
+
+
+def test_source_list_has_url_import_summary(client, app):
+    _login(client, app)
+    _create_repo(client)
+    html = _html(client.get("/fe_alice/fe-test/sources"))
+    assert "url-import-summary" in html
+    assert 'name="url"' in html
+
+
 def test_public_source_list_accessible_to_guest(client, app):
     _login(client, app)
     _create_repo(client)

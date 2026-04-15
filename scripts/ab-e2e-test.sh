@@ -18,6 +18,9 @@ BASE_URL="${1:-http://172.36.164.85:5000}"
 USER="${2:-e2e_$$}"
 EMAIL="${USER}@example.com"
 PASS="${3:-e2ePass1234}"
+REPO_SLUG="${AB_E2E_REPO_SLUG:-ab-test-$$}"
+USE_EXISTING_USER=0
+[ "$#" -ge 2 ] && USE_EXISTING_USER=1
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SHOT_DIR="$SCRIPT_DIR/../tests/screenshots"
@@ -27,6 +30,7 @@ PASSED=0
 FAILED=0
 ERRORS=""
 USER_REGISTERED=0
+REPO_CREATED=0
 
 # ── 工具函数 ─────────────────────────────────────────────────
 
@@ -39,7 +43,31 @@ cleanup_test_user() {
   agent-browser wait --load networkidle 2>/dev/null || true
 }
 
+cleanup_test_repo() {
+  [ "${USER_REGISTERED:-0}" -eq 1 ] && return 0
+  [ "${REPO_CREATED:-0}" -eq 1 ] || return 0
+  nav "$BASE_URL/$USER/$REPO_SLUG/settings"
+  if ! assert_url_contains "$REPO_SLUG" "清理仓库进入设置页"; then
+    nav "$BASE_URL/login"
+    agent-browser fill 'input[name="username"]' "$USER" 2>/dev/null || true
+    agent-browser fill 'input[name="password"]' "$PASS" 2>/dev/null || true
+    agent-browser click 'button[type="submit"]' 2>/dev/null || true
+    agent-browser wait --load networkidle 2>/dev/null || true
+    nav "$BASE_URL/$USER/$REPO_SLUG/settings"
+  fi
+  agent-browser eval "
+    (function () {
+      var form = document.querySelector('form[action$=\"/$USER/$REPO_SLUG/delete\"]');
+      if (!form) return false;
+      form.submit();
+      return true;
+    })();
+  " 2>/dev/null || true
+  agent-browser wait --load networkidle 2>/dev/null || true
+}
+
 cleanup() {
+  cleanup_test_repo
   cleanup_test_user
   agent-browser close 2>/dev/null || true
 }
@@ -123,6 +151,19 @@ nav() {
   sleep 0.8
 }
 
+submit_form() {
+  local selector="${1:-form}"
+  agent-browser eval "
+    (function () {
+      var form = document.querySelector('$selector');
+      if (!form) return false;
+      if (form.requestSubmit) form.requestSubmit();
+      else form.submit();
+      return true;
+    })();
+  " 2>/dev/null
+}
+
 # 运行一个测试
 run_test() {
   local name="$1"
@@ -156,13 +197,14 @@ test_register_page() {
 }
 
 test_register_user() {
+  [ "${USE_EXISTING_USER:-0}" -eq 1 ] && return 0
   nav "$BASE_URL/register"
   agent-browser fill 'input[name="username"]' "$USER" 2>/dev/null
   agent-browser fill 'input[name="email"]' "$EMAIL" 2>/dev/null || true
   agent-browser fill 'input[name="display_name"]' "E2E测试" 2>/dev/null
   agent-browser fill 'input[name="password"]' "$PASS" 2>/dev/null
   agent-browser fill 'input[name="confirm_password"]' "$PASS" 2>/dev/null
-  agent-browser click 'button[type="submit"]' 2>/dev/null
+  submit_form 'form' >/dev/null
   agent-browser wait --load networkidle 2>/dev/null
   sleep 1
   if assert_url_contains "$USER" "注册后跳转"; then
@@ -176,7 +218,7 @@ test_login() {
   nav "$BASE_URL/login"
   agent-browser fill 'input[name="username"]' "$USER" 2>/dev/null
   agent-browser fill 'input[name="password"]' "$PASS" 2>/dev/null
-  agent-browser click 'button[type="submit"]' 2>/dev/null
+  submit_form 'form' >/dev/null
   agent-browser wait --load networkidle 2>/dev/null
   sleep 1
   assert_url_contains "$USER" "登录后跳转"
@@ -185,33 +227,37 @@ test_login() {
 test_create_repo() {
   nav "$BASE_URL/repos/new"
   agent-browser fill 'input[name="name"]' "AB测试知识库" 2>/dev/null
-  agent-browser fill 'input[name="slug"]' "ab-test" 2>/dev/null
+  agent-browser fill 'input[name="slug"]' "$REPO_SLUG" 2>/dev/null
   agent-browser fill 'textarea[name="description"]' "agent-browser E2E" 2>/dev/null
-  agent-browser click 'button[type="submit"]' 2>/dev/null
+  submit_form 'form' >/dev/null
   agent-browser wait --load networkidle 2>/dev/null
   sleep 1
-  assert_url_contains "ab-test" "创建后跳转"
+  if assert_url_contains "$REPO_SLUG" "创建后跳转"; then
+    REPO_CREATED=1
+    return 0
+  fi
+  return 1
 }
 
 test_dashboard_layout() {
-  nav "$BASE_URL/$USER/ab-test"
+  nav "$BASE_URL/$USER/$REPO_SLUG"
   assert_exists ".kb-sidebar" "左侧栏" &&
   assert_exists ".kb-chat" "对话区" &&
   assert_exists "#chat-input" "聊天输入框"
 }
 
 test_dashboard_upload_zone() {
-  nav "$BASE_URL/$USER/ab-test"
+  nav "$BASE_URL/$USER/$REPO_SLUG"
   assert_exists ".kb-upload-zone" "上传区域"
 }
 
 test_dashboard_icons_render() {
-  nav "$BASE_URL/$USER/ab-test"
+  nav "$BASE_URL/$USER/$REPO_SLUG"
   assert_eval "document.querySelectorAll('svg.lucide').length >= 4" "SVG 图标渲染"
 }
 
 test_dashboard_more_menu() {
-  nav "$BASE_URL/$USER/ab-test"
+  nav "$BASE_URL/$USER/$REPO_SLUG"
   assert_eval "
     var menu = document.querySelector('.kb-more-menu');
     menu && menu.querySelectorAll('a').length >= 4;
@@ -219,13 +265,46 @@ test_dashboard_more_menu() {
 }
 
 test_sources_empty() {
-  nav "$BASE_URL/$USER/ab-test/sources"
+  nav "$BASE_URL/$USER/$REPO_SLUG/sources"
   assert_exists ".empty-state" "空状态提示" &&
   assert_exists ".upload-card" "上传卡片"
 }
 
+test_upload_selection_state() {
+  nav "$BASE_URL/$USER/$REPO_SLUG/sources"
+  local tmpfile="/tmp/ab-e2e-select-$$.md"
+  echo -e "# Selected File\n\nPending upload state.\n" > "$tmpfile"
+  agent-browser upload '#file-input' "$tmpfile" 2>/dev/null
+  sleep 0.5
+  local ok=0
+  assert_visible "#file-selected" "已选文件态可见" &&
+  assert_visible '#file-selected button[type="submit"]' "确认上传按钮可见" &&
+  assert_eval "
+    var drop = document.getElementById('drop-zone');
+    drop && getComputedStyle(drop).display === 'none';
+  " "拖拽区隐藏" &&
+  assert_eval "
+    var txt = document.getElementById('file-name-display');
+    txt && txt.textContent.indexOf('ab-e2e-select-$$.md') !== -1;
+  " "文件名显示正确" &&
+  ok=1
+  rm -f "$tmpfile"
+  [ "$ok" -eq 1 ]
+}
+
+test_url_import_disclosure() {
+  nav "$BASE_URL/$USER/$REPO_SLUG/sources"
+  agent-browser click '.url-import-summary' 2>/dev/null
+  sleep 0.4
+  assert_eval "
+    var details = document.querySelector('.url-import-section');
+    var input = document.querySelector('.url-import-form input[name=\"url\"]');
+    details && details.open && input && input.offsetHeight > 0;
+  " "URL 导入展开后表单可见"
+}
+
 test_upload_file() {
-  nav "$BASE_URL/$USER/ab-test/sources"
+  nav "$BASE_URL/$USER/$REPO_SLUG/sources"
   # 创建临时文件
   local tmpfile="/tmp/ab-e2e-test-doc.md"
   echo -e "# E2E Test Doc\n\nContent for agent-browser testing.\n\n## Key Points\n\n- Point A\n- Point B" > "$tmpfile"
@@ -240,7 +319,7 @@ test_upload_file() {
 }
 
 test_upload_auto_queues_task() {
-  nav "$BASE_URL/$USER/ab-test/tasks"
+  nav "$BASE_URL/$USER/$REPO_SLUG/tasks"
   assert_eval "
     var body = document.body.innerText;
     body.includes('ab-e2e-test-doc') && (
@@ -252,14 +331,32 @@ test_upload_auto_queues_task() {
   " "任务队列中存在摄入任务"
 }
 
+test_batch_actions_state() {
+  nav "$BASE_URL/$USER/$REPO_SLUG/sources"
+  assert_eval "
+    var del = document.getElementById('batch-delete-btn');
+    var ingest = document.getElementById('batch-ingest-btn');
+    del && del.disabled && ingest && ingest.disabled;
+  " "批量按钮默认禁用" || return 1
+  agent-browser click '.source-cb' 2>/dev/null || return 1
+  sleep 0.4
+  assert_eval "
+    var del = document.getElementById('batch-delete-btn');
+    var ingest = document.getElementById('batch-ingest-btn');
+    del && !del.disabled && ingest && !ingest.disabled &&
+      del.innerText.indexOf('(1)') !== -1 &&
+      ingest.innerText.indexOf('(1)') !== -1;
+  " "勾选后批量按钮启用并显示数量"
+}
+
 test_task_queue_page() {
-  nav "$BASE_URL/$USER/ab-test/tasks"
+  nav "$BASE_URL/$USER/$REPO_SLUG/tasks"
   assert_text_contains "h2" "任务队列" "页面标题" &&
   assert_exists "table" "任务表格"
 }
 
 test_no_nested_forms() {
-  nav "$BASE_URL/$USER/ab-test/sources"
+  nav "$BASE_URL/$USER/$REPO_SLUG/sources"
   assert_eval "
     var forms = document.querySelectorAll('form');
     var nested = false;
@@ -271,32 +368,32 @@ test_no_nested_forms() {
 }
 
 test_wiki_overview() {
-  nav "$BASE_URL/$USER/ab-test/wiki/overview"
+  nav "$BASE_URL/$USER/$REPO_SLUG/wiki/overview"
   assert_exists ".wiki-page-layout" "页面布局" &&
   assert_exists ".rendered-content" "渲染内容"
 }
 
 test_graph_page() {
-  nav "$BASE_URL/$USER/ab-test/graph"
+  nav "$BASE_URL/$USER/$REPO_SLUG/graph"
   assert_exists "#graph-container" "图谱容器"
 }
 
 test_query_page() {
-  nav "$BASE_URL/$USER/ab-test/query"
+  nav "$BASE_URL/$USER/$REPO_SLUG/query"
   assert_exists "#query-input" "查询输入框" &&
   assert_exists "#query-submit" "查询按钮" &&
   assert_visible "#query-input" "输入框可见"
 }
 
 test_dashboard_chat_input() {
-  nav "$BASE_URL/$USER/ab-test"
+  nav "$BASE_URL/$USER/$REPO_SLUG"
   assert_exists "#chat-input" "对话输入框" &&
   assert_exists "#chat-submit" "发送按钮" &&
   assert_visible "#chat-input" "输入框可见"
 }
 
 test_repo_settings() {
-  nav "$BASE_URL/$USER/ab-test/settings"
+  nav "$BASE_URL/$USER/$REPO_SLUG/settings"
   assert_exists 'input[name="name"]' "名称输入框" &&
   assert_exists 'textarea' "描述文本框"
 }
@@ -318,7 +415,7 @@ test_404_page() {
 }
 
 test_no_broken_layout() {
-  nav "$BASE_URL/$USER/ab-test"
+  nav "$BASE_URL/$USER/$REPO_SLUG"
   assert_eval "
     var sb = document.querySelector('.kb-sidebar');
     var chat = document.querySelector('.kb-chat');
@@ -327,12 +424,12 @@ test_no_broken_layout() {
 }
 
 test_breadcrumb_navigation() {
-  nav "$BASE_URL/$USER/ab-test/wiki/overview"
+  nav "$BASE_URL/$USER/$REPO_SLUG/wiki/overview"
   assert_count_gte ".breadcrumb li" 3 "面包屑 >= 3 级"
 }
 
 test_nav_brand_link() {
-  nav "$BASE_URL/$USER/ab-test"
+  nav "$BASE_URL/$USER/$REPO_SLUG"
   agent-browser click ".brand" 2>/dev/null
   agent-browser wait --load networkidle 2>/dev/null
   sleep 0.5
@@ -367,7 +464,10 @@ run_test "布局尺寸检查"      test_no_broken_layout
 echo ""
 echo "── 文档管理 ──"
 run_test "空文档列表"        test_sources_empty
+run_test "上传选择态"        test_upload_selection_state
+run_test "URL 导入展开"      test_url_import_disclosure
 run_test "上传文件"          test_upload_file
+run_test "批量按钮状态"      test_batch_actions_state
 run_test "上传自动排队"      test_upload_auto_queues_task
 run_test "无嵌套 form"       test_no_nested_forms
 

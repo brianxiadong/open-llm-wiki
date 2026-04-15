@@ -30,7 +30,7 @@
 
 {# ── 上传区域 ── #}
 {% if is_owner %}
-<article class="upload-card" id="upload-zone" style="margin-bottom:1.5rem;">
+<article class="upload-card" id="upload-zone">
   <form method="POST" id="upload-form"
         action="{{ url_for('source.upload', username=username, repo_slug=repo.slug) }}"
         enctype="multipart/form-data">
@@ -45,18 +45,24 @@
              accept=".md,.txt,.pdf,.doc,.docx,.pptx,.png,.jpg,.jpeg,.csv,.xlsx,.xls" required
              style="display:none;">
     </div>
-    <div id="file-selected" style="display:none;margin-top:0.75rem;">
-      <div style="display:flex;align-items:center;gap:0.5rem;justify-content:center;">
-        <i class="lucide-file" aria-hidden="true"></i>
-        <span id="file-name-display"></span>
-        <button type="button" id="clear-file" class="btn-sm" style="padding:0.15rem 0.5rem;">
+    <div id="file-selected" class="upload-selected" style="display:none;">
+      <div class="upload-selected-meta">
+        <span class="upload-selected-label">已选择文件</span>
+        <div class="upload-selected-file">
+          <i class="lucide-file" aria-hidden="true"></i>
+          <span id="file-name-display"></span>
+        </div>
+        <button type="button" id="clear-file" class="btn-sm upload-selected-clear">
           <i class="lucide-x" aria-hidden="true"></i>
+          重新选择
         </button>
       </div>
-      <button type="submit" class="action-btn action-btn-primary" style="margin-top:0.75rem;">
-        <i class="lucide-upload" aria-hidden="true"></i>
-        确认上传
-      </button>
+      <div class="upload-selected-actions">
+        <button type="submit" class="action-btn action-btn-primary upload-selected-submit">
+          <i class="lucide-upload" aria-hidden="true"></i>
+          确认上传
+        </button>
+      </div>
     </div>
   </form>
 </article>
@@ -65,7 +71,7 @@
 {# ── URL 导入 ── #}
 {% if is_owner %}
 <details class="url-import-section">
-  <summary>
+  <summary class="url-import-summary">
     <i data-lucide="link" aria-hidden="true"></i> 从 URL 导入网页
   </summary>
   <form method="POST"
@@ -95,7 +101,7 @@
       <i class="lucide-trash-2" aria-hidden="true"></i>
       批量删除
     </button>
-    <button type="button" id="batch-ingest-btn" class="btn-sm btn-sm-primary">
+    <button type="button" id="batch-ingest-btn" class="btn-sm btn-sm-primary" disabled>
       <i class="lucide-zap" aria-hidden="true"></i>
       批量摄入未处理
     </button>
@@ -234,9 +240,9 @@
 
 {# ── 重命名弹窗 ── #}
 <dialog id="rename-dialog">
-  <article style="min-width:340px;">
-    <header style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
-      <h3 style="margin:0;font-size:1.1rem;">
+  <article class="rename-dialog-card">
+    <header class="rename-dialog-header">
+      <h3 class="rename-dialog-title">
         <i class="lucide-pencil" aria-hidden="true"></i> 重命名文件
       </h3>
       <button type="button" class="flash-close" onclick="document.getElementById('rename-dialog').close()" aria-label="关闭">&times;</button>
@@ -244,7 +250,7 @@
     <form method="POST" id="rename-form">
       <label for="rename-input">新文件名</label>
       <input type="text" id="rename-input" name="new_name" required>
-      <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">
+      <div class="rename-dialog-actions">
         <button type="button" class="btn-sm" onclick="document.getElementById('rename-dialog').close()">取消</button>
         <button type="submit" class="btn-sm btn-sm-primary">确认</button>
       </div>
@@ -352,23 +358,32 @@
   /* ── 全选 / 批量删除 ── */
   var selectAll = document.getElementById('select-all');
   var batchBtn = document.getElementById('batch-delete-btn');
+  var batchIngestBtn = document.getElementById('batch-ingest-btn');
   var checkboxes = document.querySelectorAll('.source-cb');
 
-  function updateBatchBtn() {
-    if (!batchBtn) return;
+  function updateBatchActions() {
     var checked = document.querySelectorAll('.source-cb:checked').length;
-    batchBtn.disabled = checked === 0;
-    batchBtn.textContent = checked > 0 ? '批量删除 (' + checked + ')' : '批量删除';
+    if (batchBtn) {
+      batchBtn.disabled = checked === 0;
+      batchBtn.innerHTML = '<i class="lucide-trash-2" aria-hidden="true"></i>' +
+        (checked > 0 ? '批量删除 (' + checked + ')' : '批量删除');
+    }
+    if (batchIngestBtn) {
+      batchIngestBtn.disabled = checked === 0;
+      batchIngestBtn.innerHTML = '<i class="lucide-zap" aria-hidden="true"></i>' +
+        (checked > 0 ? '批量摄入 (' + checked + ')' : '批量摄入未处理');
+    }
+    if (typeof lucide !== 'undefined') lucide.createIcons();
   }
 
   if (selectAll) {
     selectAll.addEventListener('change', function() {
       var visible = document.querySelectorAll('#source-tbody tr:not([style*="display: none"]) .source-cb');
       visible.forEach(function(cb) { cb.checked = selectAll.checked; });
-      updateBatchBtn();
+      updateBatchActions();
     });
   }
-  checkboxes.forEach(function(cb) { cb.addEventListener('change', updateBatchBtn); });
+  checkboxes.forEach(function(cb) { cb.addEventListener('change', updateBatchActions); });
 
   if (batchBtn) {
     batchBtn.addEventListener('click', function() {
@@ -387,9 +402,9 @@
     });
   }
 
-  var batchIngestBtn = document.getElementById('batch-ingest-btn');
   if (batchIngestBtn) {
     batchIngestBtn.addEventListener('click', function() {
+      if (batchIngestBtn.disabled) return;
       var meta = document.getElementById('batch-data');
       var form = document.createElement('form');
       form.method = 'POST';
@@ -413,6 +428,8 @@
         if (val === 'all') { tr.style.display = ''; }
         else { tr.style.display = tr.dataset.status === val ? '' : 'none'; }
       });
+      if (selectAll) selectAll.checked = false;
+      updateBatchActions();
     });
   }
 
@@ -440,6 +457,8 @@
       rows.forEach(function(r) { tbody.appendChild(r); });
     });
   }
+
+  updateBatchActions();
 
   /* ── 单文件删除 ── */
   document.querySelectorAll('.delete-one-btn').forEach(function(btn) {
