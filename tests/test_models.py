@@ -8,13 +8,14 @@ from models import db, User, Repo, Task, load_user, ConversationSession, AuditLo
 
 def test_user_create(app):
     with app.app_context():
-        u = User(username="bob", display_name="Bob")
+        u = User(username="bob", email="bob@example.com", display_name="Bob")
         u.set_password("secret")
         db.session.add(u)
         db.session.commit()
         u2 = User.query.filter_by(username="bob").first()
         assert u2 is not None
         assert u2.username == "bob"
+        assert u2.email == "bob@example.com"
         assert u2.display_name == "Bob"
         assert u2.password_hash
         assert u2.id is not None
@@ -22,7 +23,7 @@ def test_user_create(app):
 
 def test_user_password(app):
     with app.app_context():
-        u = User(username="carol")
+        u = User(username="carol", email="carol@example.com")
         u.set_password("correct-horse")
         db.session.add(u)
         db.session.commit()
@@ -34,11 +35,25 @@ def test_user_password(app):
 
 def test_user_unique_username(app):
     with app.app_context():
-        u1 = User(username="dup")
+        u1 = User(username="dup", email="dup1@example.com")
         u1.set_password("a")
         db.session.add(u1)
         db.session.commit()
-        u2 = User(username="dup")
+        u2 = User(username="dup", email="dup2@example.com")
+        u2.set_password("b")
+        db.session.add(u2)
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+
+def test_user_unique_email(app):
+    with app.app_context():
+        u1 = User(username="dup_email_1", email="dup@example.com")
+        u1.set_password("a")
+        db.session.add(u1)
+        db.session.commit()
+        u2 = User(username="dup_email_2", email="dup@example.com")
         u2.set_password("b")
         db.session.add(u2)
         with pytest.raises(IntegrityError):
@@ -48,7 +63,7 @@ def test_user_unique_username(app):
 
 def test_repo_create(app):
     with app.app_context():
-        u = User(username="owner")
+        u = User(username="owner", email="owner@example.com")
         u.set_password("x")
         db.session.add(u)
         db.session.commit()
@@ -70,7 +85,7 @@ def test_repo_create(app):
 
 def test_repo_unique_constraint(app):
     with app.app_context():
-        u = User(username="u1")
+        u = User(username="u1", email="u1@example.com")
         u.set_password("x")
         db.session.add(u)
         db.session.commit()
@@ -84,7 +99,7 @@ def test_repo_unique_constraint(app):
 
 def test_task_create(app):
     with app.app_context():
-        u = User(username="taskuser")
+        u = User(username="taskuser", email="taskuser@example.com")
         u.set_password("x")
         db.session.add(u)
         db.session.commit()
@@ -103,7 +118,7 @@ def test_task_create(app):
 
 def test_user_loader(app):
     with app.app_context():
-        u = User(username="loader_user")
+        u = User(username="loader_user", email="loader@example.com")
         u.set_password("pw")
         db.session.add(u)
         db.session.commit()
@@ -194,3 +209,18 @@ def test_api_token_creation(sample_repo, app):
         fetched = ApiToken.query.filter_by(name="ci-token").first()
         assert fetched is not None
         assert fetched.is_active is True
+
+
+def test_task_cancel_requested_default_false(app):
+    with app.app_context():
+        u = User(username="taskflag", email="taskflag@example.com")
+        u.set_password("pw")
+        db.session.add(u)
+        db.session.commit()
+        repo = Repo(user_id=u.id, name="Repo", slug="repo")
+        db.session.add(repo)
+        db.session.commit()
+        task = Task(repo_id=repo.id, type="ingest", status="queued")
+        db.session.add(task)
+        db.session.commit()
+        assert task.cancel_requested is False

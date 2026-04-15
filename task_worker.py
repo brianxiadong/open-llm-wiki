@@ -41,12 +41,32 @@ class TaskWorker:
             stale = Task.query.filter_by(status="running").all()
             if stale:
                 for t in stale:
-                    t.status = "queued"
-                    t.progress = 0
-                    t.progress_msg = "Recovered after service restart"
-                    t.started_at = None
+                    if t.cancel_requested:
+                        t.status = "cancelled"
+                        t.progress_msg = "Cancelled after service restart"
+                        t.finished_at = datetime.now(timezone.utc)
+                    else:
+                        t.status = "queued"
+                        t.progress = 0
+                        t.progress_msg = "Recovered after service restart"
+                        t.started_at = None
                 db.session.commit()
                 logger.info("Recovered %d interrupted tasks back to queued on startup", len(stale))
+
+    def _cancel_requested(self, task_id: int) -> bool:
+        from models import Task, db
+
+        db.session.expire_all()
+        fresh = db.session.get(Task, task_id)
+        return bool(fresh and fresh.cancel_requested)
+
+    def _mark_cancelled(self, task) -> None:
+        from models import db
+
+        task.status = "cancelled"
+        task.progress_msg = task.progress_msg or "Task cancelled"
+        task.finished_at = datetime.now(timezone.utc)
+        db.session.commit()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -102,6 +122,9 @@ class TaskWorker:
                 return  # another worker claimed it
 
             db.session.refresh(task)
+            if task.cancel_requested:
+                self._mark_cancelled(task)
+                return
             repo = db.session.get(Repo, task.repo_id)
             owner = db.session.get(User, repo.user_id)
             if not repo or not owner:
@@ -141,7 +164,16 @@ class TaskWorker:
 
         wiki_engine = self._app.wiki_engine
 
+        if self._cancel_requested(task.id):
+            task.progress_msg = "Task cancelled before start"
+            self._mark_cancelled(task)
+            return
+
         for event in wiki_engine.ingest(repo, owner.username, task.input_data):
+            if self._cancel_requested(task.id):
+                task.progress_msg = "Task cancelled by user"
+                self._mark_cancelled(task)
+                return
             phase = event.get("phase", "")
             progress = event.get("progress", 0)
             message = event.get("message", "")
@@ -156,6 +188,11 @@ class TaskWorker:
                 task.finished_at = datetime.now(timezone.utc)
                 db.session.commit()
                 return
+
+        if self._cancel_requested(task.id):
+            task.progress_msg = "Task cancelled by user"
+            self._mark_cancelled(task)
+            return
 
         task.status = "done"
         task.progress = 100
@@ -190,6 +227,10 @@ class TaskWorker:
         rebuilt = 0
         qdrant = self._app.qdrant
         for page in pages:
+            if self._cancel_requested(task.id):
+                task.progress_msg = "Task cancelled by user"
+                self._mark_cancelled(task)
+                return
             fpath = os.path.join(wiki_dir, page["filename"])
             try:
                 with open(fpath, "r", encoding="utf-8") as f:

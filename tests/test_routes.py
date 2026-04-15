@@ -29,6 +29,7 @@ def test_register_and_login(client, app):
         "/register",
         data={
             "username": "routeuser1",
+            "email": "routeuser1@example.com",
             "display_name": "Route User",
             "password": "password123",
             "confirm_password": "password123",
@@ -50,6 +51,7 @@ def test_register_short_password(client):
         "/register",
         data={
             "username": "shortuser",
+            "email": "short@example.com",
             "display_name": "S",
             "password": "short",
             "confirm_password": "short",
@@ -63,6 +65,7 @@ def test_register_mismatch_password(client):
         "/register",
         data={
             "username": "mismatchuser",
+            "email": "mismatch@example.com",
             "display_name": "M",
             "password": "password123",
             "confirm_password": "password999",
@@ -75,7 +78,7 @@ def test_login_wrong_password(client, app):
     with app.app_context():
         from models import User, db
 
-        u = User(username="wrongpwuser", display_name="W")
+        u = User(username="wrongpwuser", email="wrongpw@example.com", display_name="W")
         u.set_password("rightpass123")
         db.session.add(u)
         db.session.commit()
@@ -135,7 +138,7 @@ def test_repo_settings_get(sample_repo):
 def test_user_settings_update_profile(auth_client, app):
     resp = auth_client.post(
         "/user/settings",
-        data={"action": "update_profile", "display_name": "Alice Beta"},
+        data={"action": "update_profile", "display_name": "Alice Beta", "email": "alice.beta@example.com"},
         follow_redirects=True,
     )
     assert resp.status_code == 200
@@ -145,6 +148,7 @@ def test_user_settings_update_profile(auth_client, app):
         user = User.query.filter_by(username="alice").first()
         assert user is not None
         assert user.display_name == "Alice Beta"
+        assert user.email == "alice.beta@example.com"
 
 
 def test_user_settings_change_password(auth_client, app):
@@ -249,6 +253,18 @@ def test_sources_list(sample_repo):
     assert resp.status_code == 200
 
 
+def test_public_sources_list_accessible_without_login(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "update_info", "name": "Test KB", "description": "", "is_public": "on"},
+    )
+    client.get("/logout")
+    resp = client.get(f"/alice/{slug}/sources")
+    assert resp.status_code == 200
+
+
 def test_upload_md_file(sample_repo):
     client, repo_info = sample_repo
     slug = repo_info["slug"]
@@ -310,6 +326,52 @@ def test_query_page(sample_repo):
     assert resp.status_code == 200
 
 
+def test_forgot_password_sends_reset_email(client, app):
+    with app.app_context():
+        from models import User, db
+
+        user = User(username="mailuser", email="mailuser@example.com", display_name="Mail User")
+        user.set_password("password123")
+        db.session.add(user)
+        db.session.commit()
+
+    with patch.object(app.mailer, "send_password_reset") as send_mail:
+        resp = client.post(
+            "/forgot-password",
+            data={"email": "mailuser@example.com"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    send_mail.assert_called_once()
+
+
+def test_reset_password_flow(client, app):
+    with app.app_context():
+        from models import User, db
+        from app import _build_reset_token
+
+        user = User(username="resetuser", email="resetuser@example.com")
+        user.set_password("password123")
+        db.session.add(user)
+        db.session.commit()
+        token = _build_reset_token(user)
+
+    resp = client.post(
+        f"/reset-password/{token}",
+        data={"password": "newpassword123", "confirm_password": "newpassword123"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+    with app.app_context():
+        from models import User
+
+        user = User.query.filter_by(username="resetuser").first()
+        assert user is not None
+        assert user.check_password("newpassword123") is True
+
+
 def test_query_api(sample_repo, app):
     client, repo_info = sample_repo
     slug = repo_info["slug"]
@@ -352,8 +414,10 @@ def test_health(client, app):
     assert "status" in data
 
 
-def test_protected_route_redirect(client):
-    resp = client.get("/alice/test-kb/sources", follow_redirects=False)
+def test_protected_route_redirect(sample_repo):
+    client, repo_info = sample_repo
+    client.get("/logout")
+    resp = client.get(f"/{repo_info['username']}/{repo_info['slug']}/sources", follow_redirects=False)
     assert resp.status_code == 302
     assert "login" in (resp.headers.get("Location") or "").lower()
 
@@ -819,6 +883,7 @@ def test_task_status_api_returns_json(sample_repo, app):
         "progress": 55,
         "progress_msg": "halfway",
         "input_data": "doc.md",
+        "cancel_requested": False,
     }
 
 
@@ -905,7 +970,7 @@ def test_admin_dashboard_as_admin(app):
     with app.app_context():
         from models import User, db
         if not User.query.filter_by(username="alice").first():
-            u = User(username="alice", display_name="Alice")
+            u = User(username="alice", email="alice-admin@example.com", display_name="Alice")
             u.set_password("password123")
             db.session.add(u)
             db.session.commit()
@@ -944,7 +1009,7 @@ def test_global_search_unauthorized(client, app):
     with app.app_context():
         from models import User, db
         if not User.query.filter_by(username="alice").first():
-            u = User(username="alice", display_name="Alice")
+            u = User(username="alice", email="alice-search@example.com", display_name="Alice")
             u.set_password("password123")
             db.session.add(u)
             db.session.commit()

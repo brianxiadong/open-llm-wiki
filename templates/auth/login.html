@@ -18,9 +18,9 @@
 
       <label for="username">
         <i class="lucide-user" style="font-size: 0.9rem" aria-hidden="true"></i>
-        用户名
+        用户名或邮箱
       </label>
-      <input type="text" id="username" name="username" placeholder="请输入用户名" required autofocus autocomplete="username">
+      <input type="text" id="username" name="username" placeholder="请输入用户名或邮箱" required autofocus autocomplete="username">
 
       <label for="password">
         <i class="lucide-lock" style="font-size: 0.9rem" aria-hidden="true"></i>
@@ -31,6 +31,7 @@
       <button type="submit" style="width: 100%; margin-top: 0.25rem">登录</button>
     </form>
 
+    <p class="auth-footer"><a href="{{ url_for('auth.forgot_password') }}">忘记密码？</a></p>
     <p class="auth-footer">还没有账号？<a href="{{ url_for('auth.register') }}">立即注册</a></p>
   </article>
 </div>

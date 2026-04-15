@@ -43,6 +43,14 @@ def app(tmp_data_dir):
     Config.TESTING = True
     Config.WTF_CSRF_ENABLED = False
     Config.SECRET_KEY = "test-secret"
+    Config.APP_BASE_URL = "http://testserver"
+    Config.MAIL_HOST = "smtp.test.local"
+    Config.MAIL_PORT = 465
+    Config.MAIL_USERNAME = "noreply@test.local"
+    Config.MAIL_PASSWORD = "secret"
+    Config.MAIL_USE_SSL = True
+    Config.MAIL_FROM = "noreply@test.local"
+    Config.PASSWORD_RESET_EXPIRES = 3600
 
     mock_qdrant_client = MagicMock()
     mock_qdrant_client.collection_exists.return_value = True
@@ -87,7 +95,7 @@ def auth_client(client, app):
     """A test client that is already logged in as 'alice'."""
     with app.app_context():
         from models import User, db
-        user = User(username="alice", display_name="Alice")
+        user = User(username="alice", email="alice@example.com", display_name="Alice")
         user.set_password("password123")
         db.session.add(user)
         db.session.commit()

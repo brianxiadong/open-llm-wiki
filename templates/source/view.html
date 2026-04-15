@@ -30,6 +30,13 @@
     {% elif source.ingested %}
     <span class="badge badge-source">已摄入</span>
     {% endif %}
+    {% if is_owner %}
+    <a href="{{ url_for('source.download_source', username=username, repo_slug=repo.slug, source_id=source.id) }}"
+       class="action-btn" download>
+      <i class="lucide-download" aria-hidden="true"></i>
+      下载原始文件
+    </a>
+    {% endif %}
   </div>
 </header>
 

@@ -41,3 +41,12 @@ class Config:
 
     ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
     SITE_NAME = os.environ.get("SITE_NAME", "Open LLM Wiki")
+    APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
+
+    MAIL_HOST = os.environ.get("MAIL_HOST", "")
+    MAIL_PORT = int(os.environ.get("MAIL_PORT", "465"))
+    MAIL_USERNAME = os.environ.get("MAIL_USERNAME", "")
+    MAIL_PASSWORD = os.environ.get("MAIL_PASSWORD", "")
+    MAIL_USE_SSL = os.environ.get("MAIL_USE_SSL", "true").lower() == "true"
+    MAIL_FROM = os.environ.get("MAIL_FROM", MAIL_USERNAME or "")
+    PASSWORD_RESET_EXPIRES = int(os.environ.get("PASSWORD_RESET_EXPIRES", "3600"))

@@ -160,6 +160,7 @@
   <section class="kb-chat" id="chat-area">
 
     {# ── Session Bar ────────────────────────────────────── #}
+    {% if is_owner %}
     <div class="chat-session-bar" id="chat-session-bar">
       <div class="chat-session-list" id="chat-session-list">
         <span style="color:var(--pico-muted-color);font-size:0.82rem;padding:0 0.25rem;">加载中…</span>
@@ -169,6 +170,7 @@
         <span>新对话</span>
       </button>
     </div>
+    {% endif %}
 
     <div class="chat-messages" id="chat-messages">
       {# Welcome message #}
@@ -226,17 +228,19 @@
   window.__chatConfig = {
     queryUrl: '{{ url_for("ops.query_api", username=username, repo_slug=repo.slug) }}',
     queryStreamUrl: '{{ url_for("ops.query_stream", username=username, repo_slug=repo.slug) }}',
-    saveUrl: '{{ url_for("ops.save_query_page", username=username, repo_slug=repo.slug) }}',
-    clearSessionUrl: '{{ url_for("ops.clear_session", username=username, repo_slug=repo.slug) }}',
-    listSessionsUrl: '{{ url_for("ops.list_sessions", username=username, repo_slug=repo.slug) }}',
-    newSessionUrl: '{{ url_for("ops.new_session", username=username, repo_slug=repo.slug) }}',
-    deleteSessionBaseUrl: '/{{ username }}/{{ repo.slug }}/sessions/',
-    getSessionUrl: '{{ url_for("ops.get_session", username=username, repo_slug=repo.slug) }}',
+    saveUrl: {{ ('"' ~ url_for("ops.save_query_page", username=username, repo_slug=repo.slug) ~ '"') if is_owner else '""' }},
+    clearSessionUrl: {{ ('"' ~ url_for("ops.clear_session", username=username, repo_slug=repo.slug) ~ '"') if is_owner else '""' }},
+    listSessionsUrl: {{ ('"' ~ url_for("ops.list_sessions", username=username, repo_slug=repo.slug) ~ '"') if is_owner else '""' }},
+    newSessionUrl: {{ ('"' ~ url_for("ops.new_session", username=username, repo_slug=repo.slug) ~ '"') if is_owner else '""' }},
+    deleteSessionBaseUrl: {{ ('"/' ~ username ~ '/' ~ repo.slug ~ '/sessions/"') if is_owner else '""' }},
+    getSessionUrl: {{ ('"' ~ url_for("ops.get_session", username=username, repo_slug=repo.slug) ~ '"') if is_owner else '""' }},
     renderMarkdownUrl: '{{ url_for("ops.render_markdown_api", username=username, repo_slug=repo.slug) }}',
     feedbackUrl: '{{ url_for("ops.submit_feedback", username=username, repo_slug=repo.slug) }}',
     wikiBaseUrl: '/{{ username }}/{{ repo.slug }}/wiki/',
     repoSlug: '{{ repo.slug }}',
     isOwner: {{ 'true' if is_owner else 'false' }},
+    canSave: {{ 'true' if is_owner else 'false' }},
+    canManageSessions: {{ 'true' if is_owner else 'false' }},
   };
 </script>
 <script src="{{ url_for('static', filename='js/chat.js') }}"></script>

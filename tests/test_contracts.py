@@ -219,6 +219,41 @@ def test_task_queue_page_accessible(app, auth_client, sample_repo):
     assert "任务队列" in resp.data.decode("utf-8")
 
 
+def test_task_can_be_cancelled_from_queue(app, sample_repo):
+    import io
+
+    client, repo_info = sample_repo
+    client.post(
+        f"/{repo_info['username']}/{repo_info['slug']}/sources/upload",
+        data={"file": (io.BytesIO(b"# queued"), "cancel-me.md")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        from models import Task
+
+        task = Task.query.filter_by(
+            repo_id=repo_info["id"],
+            type="ingest",
+            input_data="cancel-me.md",
+        ).first()
+        assert task is not None
+        task_id = task.id
+
+    resp = client.post(f"/api/tasks/{task_id}/cancel")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+
+    with app.app_context():
+        from models import Task
+
+        task = Task.query.get(task_id)
+        assert task.status == "cancelled"
+        assert task.cancel_requested is True
+
+
 # ── New evidence/confidence JSON schema ──────────────────────────────────
 
 

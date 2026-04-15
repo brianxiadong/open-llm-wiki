@@ -292,12 +292,15 @@
           '<button class="chat-action-btn chat-fb-btn" data-rating="bad" title="回答需改进">' +
           '<i class="lucide-thumbs-down" aria-hidden="true"></i></button></span>'
         : '';
+      var saveActionHtml = cfg.canSave
+        ? '<button class="chat-action-btn chat-save-btn" title="保存为 Wiki 页面">' +
+          '<i class="lucide-bookmark-plus" aria-hidden="true"></i> 保存为页面</button>'
+        : '';
       saveBtn = '<div class="chat-msg-actions">' +
         feedbackHtml +
         '<button class="chat-action-btn chat-copy-btn" title="复制回答">' +
         '<i class="lucide-copy" aria-hidden="true"></i> 复制</button>' +
-        '<button class="chat-action-btn chat-save-btn" title="保存为 Wiki 页面">' +
-        '<i class="lucide-bookmark-plus" aria-hidden="true"></i> 保存为页面</button></div>';
+        saveActionHtml + '</div>';
     }
 
     // -- Trace ID footer --------------------------------------------------
@@ -695,12 +698,11 @@
   }
 
   // 页面加载时拉取会话列表
-  if (sessionBar && cfg.listSessionsUrl) {
-    loadSessionList(null);
-  } else {
-    // 未登录或无会话 URL，退化到日期 key
-    SESSION_KEY = 'session_' + (cfg.repoSlug || 'default') + '_' + new Date().toISOString().slice(0, 10);
-  }
+    if (cfg.canManageSessions && sessionBar && cfg.listSessionsUrl) {
+      loadSessionList(null);
+    } else {
+      SESSION_KEY = null;
+    }
 
   /* ── Send query ───────────────────────────────────────── */
   form.addEventListener('submit', function (e) {

@@ -19,6 +19,7 @@ class User(UserMixin, db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     username = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    email = db.Column(db.String(255), unique=True, nullable=True, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
     display_name = db.Column(db.String(128), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=_utc_now)
@@ -60,6 +61,7 @@ class Task(db.Model):
     output_data = db.Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
     progress = db.Column(db.Integer, nullable=False, default=0)
     progress_msg = db.Column(db.Text, nullable=True)
+    cancel_requested = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, nullable=False, default=_utc_now)
     started_at = db.Column(db.DateTime, nullable=True)
     finished_at = db.Column(db.DateTime, nullable=True)

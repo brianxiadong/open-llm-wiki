@@ -23,11 +23,14 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required, login_user, logout_user
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from sqlalchemy import or_
 from werkzeug.utils import secure_filename
 
 from config import Config
 from exceptions import MineruClientError, QdrantServiceError
 from llm_client import LLMClient
+from mailer import Mailer
 from mineru_client import MineruClient
 from models import Repo, Task, User, db, login_manager
 from qdrant_service import QdrantService
@@ -55,6 +58,7 @@ ALLOWED_EXTENSIONS = {"md", "txt", "pdf", "doc", "docx", "pptx", "png", "jpg", "
                       "csv", "xlsx", "xls"}
 EXCEL_EXTENSIONS = {"xlsx", "xls"}
 MINERU_EXTENSIONS = {"pdf", "doc", "docx", "pptx", "png", "jpg", "jpeg"}
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 TYPE_LABELS = {
     "concept": "概念",
     "guide": "指南",
@@ -135,6 +139,55 @@ def _is_owner(repo: Repo) -> bool:
     return current_user.is_authenticated and (
         current_user.id == repo.user_id or _is_admin()
     )
+
+
+def _can_access_repo(repo: Repo) -> bool:
+    return repo.is_public or _is_owner(repo)
+
+
+def _ensure_repo_access(repo: Repo) -> None:
+    if _can_access_repo(repo):
+        return
+    if not current_user.is_authenticated:
+        return redirect(url_for("auth.login", next=request.url))
+    abort(403)
+
+
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def _is_valid_email(email: str) -> bool:
+    return bool(EMAIL_RE.match(email))
+
+
+def _reset_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(Config.SECRET_KEY, salt="password-reset")
+
+
+def _build_reset_token(user: User) -> str:
+    return _reset_serializer().dumps({"user_id": user.id, "password_hash": user.password_hash})
+
+
+def _verify_reset_token(token: str) -> User | None:
+    try:
+        payload = _reset_serializer().loads(token, max_age=Config.PASSWORD_RESET_EXPIRES)
+    except (BadSignature, SignatureExpired):
+        return None
+
+    user = db.session.get(User, payload.get("user_id"))
+    if user is None:
+        return None
+    if payload.get("password_hash") != user.password_hash:
+        return None
+    return user
+
+
+def _external_url(endpoint: str, **values) -> str:
+    relative = url_for(endpoint, _external=False, **values)
+    if Config.APP_BASE_URL:
+        return f"{Config.APP_BASE_URL}{relative}"
+    return url_for(endpoint, _external=True, **values)
 
 
 def _audit(
@@ -287,6 +340,14 @@ def create_app() -> Flask:
         Config.LLM_MODEL,
         Config.LLM_MAX_TOKENS,
     )
+    app.mailer = Mailer(
+        Config.MAIL_HOST,
+        Config.MAIL_PORT,
+        Config.MAIL_USERNAME,
+        Config.MAIL_PASSWORD,
+        use_ssl=Config.MAIL_USE_SSL,
+        default_from=Config.MAIL_FROM,
+    )
     app.mineru = MineruClient(Config.MINERU_API_URL, Config.MINERU_TIMEOUT)
     try:
         app.qdrant = QdrantService(
@@ -430,7 +491,10 @@ def _register_routes(app: Flask) -> None:
         if request.method == "POST":
             username = request.form.get("username", "").strip()
             password = request.form.get("password", "")
-            user = User.query.filter_by(username=username).first()
+            email = _normalize_email(username)
+            user = User.query.filter(
+                or_(User.username == username, User.email == email)
+            ).first()
             if user and user.check_password(password):
                 login_user(user)
                 _audit("login")
@@ -450,15 +514,19 @@ def _register_routes(app: Flask) -> None:
             )
         if request.method == "POST":
             username = request.form.get("username", "").strip()
+            email = _normalize_email(request.form.get("email", ""))
             display_name = request.form.get("display_name", "").strip()
             password = request.form.get("password", "")
             confirm = request.form.get("confirm_password", "")
 
-            if not username or not password:
-                flash("用户名和密码不能为空", "error")
+            if not username or not email or not password:
+                flash("用户名、邮箱和密码不能为空", "error")
                 return render_template("auth/register.html")
             if not re.match(r"^[a-zA-Z0-9_]+$", username):
                 flash("用户名只能包含字母、数字和下划线", "error")
+                return render_template("auth/register.html")
+            if not _is_valid_email(email):
+                flash("请输入有效的邮箱地址", "error")
                 return render_template("auth/register.html")
             if len(password) < 8:
                 flash("密码长度不能少于 8 位", "error")
@@ -469,8 +537,11 @@ def _register_routes(app: Flask) -> None:
             if User.query.filter_by(username=username).first():
                 flash("用户名已存在", "error")
                 return render_template("auth/register.html")
+            if User.query.filter_by(email=email).first():
+                flash("邮箱已被使用", "error")
+                return render_template("auth/register.html")
 
-            user = User(username=username, display_name=display_name or None)
+            user = User(username=username, email=email, display_name=display_name or None)
             user.set_password(password)
             db.session.add(user)
             db.session.commit()
@@ -481,6 +552,60 @@ def _register_routes(app: Flask) -> None:
                 url_for("repo.list_repos", username=user.username)
             )
         return render_template("auth/register.html")
+
+    @auth_bp.route("/forgot-password", methods=["GET", "POST"])
+    def forgot_password():
+        if current_user.is_authenticated:
+            return redirect(
+                url_for("repo.list_repos", username=current_user.username)
+            )
+        if request.method == "POST":
+            email = _normalize_email(request.form.get("email", ""))
+            user = User.query.filter_by(email=email).first() if email else None
+            if not current_app.mailer.enabled:
+                flash("邮件服务未配置，暂时无法发送找回密码邮件", "error")
+                return render_template("auth/forgot_password.html")
+            if user and user.email:
+                try:
+                    reset_url = _external_url("auth.reset_password", token=_build_reset_token(user))
+                    current_app.mailer.send_password_reset(
+                        user.email,
+                        user.username,
+                        reset_url,
+                        Config.SITE_NAME,
+                    )
+                except Exception as exc:
+                    logger.exception("send reset mail failed")
+                    flash(f"邮件发送失败: {exc}", "error")
+                    return render_template("auth/forgot_password.html")
+            flash("如果邮箱存在对应账号，重置链接已经发送", "success")
+            return redirect(url_for("auth.login"))
+        return render_template("auth/forgot_password.html")
+
+    @auth_bp.route("/reset-password/<token>", methods=["GET", "POST"])
+    def reset_password(token):
+        if current_user.is_authenticated:
+            return redirect(
+                url_for("repo.list_repos", username=current_user.username)
+            )
+        user = _verify_reset_token(token)
+        if user is None:
+            flash("重置链接无效或已过期", "error")
+            return redirect(url_for("auth.forgot_password"))
+        if request.method == "POST":
+            password = request.form.get("password", "")
+            confirm = request.form.get("confirm_password", "")
+            if len(password) < 8:
+                flash("密码长度不能少于 8 位", "error")
+                return render_template("auth/reset_password.html", token=token)
+            if password != confirm:
+                flash("两次输入的密码不一致", "error")
+                return render_template("auth/reset_password.html", token=token)
+            user.set_password(password)
+            db.session.commit()
+            flash("密码已重置，请重新登录", "success")
+            return redirect(url_for("auth.login"))
+        return render_template("auth/reset_password.html", token=token)
 
     @auth_bp.route("/logout")
     def logout():
@@ -500,6 +625,21 @@ def _register_routes(app: Flask) -> None:
         if request.method == "POST":
             action = request.form.get("action")
             if action == "update_profile":
+                email = _normalize_email(request.form.get("email", ""))
+                if not email:
+                    flash("邮箱不能为空", "error")
+                    return redirect(url_for("user.settings"))
+                if not _is_valid_email(email):
+                    flash("请输入有效的邮箱地址", "error")
+                    return redirect(url_for("user.settings"))
+                existed = User.query.filter(
+                    User.email == email,
+                    User.id != current_user.id,
+                ).first()
+                if existed:
+                    flash("邮箱已被其他账号使用", "error")
+                    return redirect(url_for("user.settings"))
+                current_user.email = email
                 current_user.display_name = (
                     request.form.get("display_name", "").strip() or None
                 )
@@ -665,7 +805,7 @@ def _register_routes(app: Flask) -> None:
     @repo_bp.route("/<username>/<repo_slug>")
     def dashboard(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        if not repo.is_public and not _is_owner(repo):
+        if not _can_access_repo(repo):
             if not current_user.is_authenticated:
                 return redirect(url_for("auth.login", next=request.url))
             abort(403)
@@ -937,7 +1077,7 @@ def _register_routes(app: Flask) -> None:
     @wiki_bp.route("/<username>/<repo_slug>/wiki/<page_slug>")
     def view_page(username, repo_slug, page_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        if not repo.is_public and not _is_owner(repo):
+        if not _can_access_repo(repo):
             if not current_user.is_authenticated:
                 return redirect(url_for("auth.login", next=request.url))
             abort(403)
@@ -992,7 +1132,7 @@ def _register_routes(app: Flask) -> None:
     @wiki_bp.route("/<username>/<repo_slug>/graph")
     def graph(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        if not repo.is_public and not _is_owner(repo):
+        if not _can_access_repo(repo):
             if not current_user.is_authenticated:
                 return redirect(url_for("auth.login", next=request.url))
             abort(403)
@@ -1044,7 +1184,7 @@ def _register_routes(app: Flask) -> None:
     @wiki_bp.route("/<username>/<repo_slug>/wiki/pages")
     def wiki_pages(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        if not repo.is_public and not _is_owner(repo):
+        if not _can_access_repo(repo):
             abort(403)
         wiki_dir = os.path.join(get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki")
         all_pages = list_wiki_pages(wiki_dir) if os.path.isdir(wiki_dir) else []
@@ -1155,7 +1295,7 @@ def _register_routes(app: Flask) -> None:
     @wiki_bp.route("/<username>/<repo_slug>/wiki/search")
     def search(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        if not repo.is_public and not _is_owner(repo):
+        if not _can_access_repo(repo):
             if not current_user.is_authenticated:
                 return redirect(url_for("auth.login", next=request.url))
             abort(403)
@@ -1253,9 +1393,12 @@ def _register_routes(app: Flask) -> None:
     source_bp = Blueprint("source", __name__)
 
     @source_bp.route("/<username>/<repo_slug>/sources")
-    @login_required
     def list_sources(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not _can_access_repo(repo):
+            if not current_user.is_authenticated:
+                return redirect(url_for("auth.login", next=request.url))
+            abort(403)
         raw_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
         )
@@ -1268,9 +1411,12 @@ def _register_routes(app: Flask) -> None:
         )
 
     @source_bp.route("/<username>/<repo_slug>/sources/<source_id>")
-    @login_required
     def view_source(username, repo_slug, source_id):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not _can_access_repo(repo):
+            if not current_user.is_authenticated:
+                return redirect(url_for("auth.login", next=request.url))
+            abort(403)
         raw_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
         )
@@ -1752,6 +1898,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def ingest_progress(username, repo_slug, task_id):
         user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
         task = Task.query.get_or_404(task_id)
         if task.repo_id != repo.id:
             abort(404)
@@ -1799,6 +1946,9 @@ def _register_routes(app: Flask) -> None:
                 elif t.status == "failed":
                     yield _sse("error_event", message=msg or "Task failed")
                     return
+                elif t.status == "cancelled":
+                    yield _sse("error_event", message=msg or "Task cancelled")
+                    return
 
                 time.sleep(1)
 
@@ -1812,6 +1962,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def task_queue(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
         tasks = (
             Task.query.filter_by(repo_id=repo.id)
             .order_by(Task.created_at.desc())
@@ -1839,6 +1990,7 @@ def _register_routes(app: Flask) -> None:
             progress=task.progress,
             progress_msg=task.progress_msg,
             input_data=task.input_data,
+            cancel_requested=task.cancel_requested,
         )
 
     @ops_bp.route("/api/tasks/<int:task_id>/retry", methods=["POST"])
@@ -1850,15 +2002,39 @@ def _register_routes(app: Flask) -> None:
             abort(404)
         if current_user.id != repo.user_id:
             abort(403)
-        if task.status != "failed":
-            return jsonify(error="只能重试失败的任务"), 400
+        if task.status not in ("failed", "cancelled"):
+            return jsonify(error="只能重试失败或已取消的任务"), 400
         task.status = "queued"
         task.progress = 0
         task.progress_msg = ""
+        task.cancel_requested = False
         task.started_at = None
         task.finished_at = None
         db.session.commit()
         return jsonify(ok=True, task_id=task.id)
+
+    @ops_bp.route("/api/tasks/<int:task_id>/cancel", methods=["POST"])
+    @login_required
+    def cancel_task(task_id):
+        task = Task.query.get_or_404(task_id)
+        repo = db.session.get(Repo, task.repo_id)
+        if repo is None:
+            abort(404)
+        if current_user.id != repo.user_id:
+            abort(403)
+        if task.status == "queued":
+            task.status = "cancelled"
+            task.cancel_requested = True
+            task.progress_msg = "Task cancelled before start"
+            task.finished_at = datetime.now(timezone.utc)
+            db.session.commit()
+            return jsonify(ok=True, task_id=task.id, status=task.status)
+        if task.status == "running":
+            task.cancel_requested = True
+            task.progress_msg = "已请求终止，等待当前步骤结束"
+            db.session.commit()
+            return jsonify(ok=True, task_id=task.id, status=task.status, cancel_requested=True)
+        return jsonify(error="当前任务无法取消"), 400
 
     @ops_bp.route(
         "/<username>/<repo_slug>/query", methods=["GET"], endpoint="query"
@@ -2306,7 +2482,7 @@ def _register_routes(app: Flask) -> None:
             return jsonify(messages=[])
         from models import ConversationSession
         cs = ConversationSession.query.filter_by(
-            repo_id=repo.id, user_id=user.id, session_key=key
+            repo_id=repo.id, user_id=current_user.id, session_key=key
         ).first()
         msgs = json.loads(cs.messages_json) if cs else []
         return jsonify(messages=msgs)
@@ -2341,7 +2517,7 @@ def _register_routes(app: Flask) -> None:
         from models import ConversationSession
         sessions = (
             ConversationSession.query
-            .filter_by(repo_id=repo.id, user_id=user.id)
+            .filter_by(repo_id=repo.id, user_id=current_user.id)
             .order_by(ConversationSession.updated_at.desc())
             .limit(50)
             .all()
@@ -2361,7 +2537,7 @@ def _register_routes(app: Flask) -> None:
         from models import ConversationSession
         key = "sess_" + uuid.uuid4().hex[:16]
         cs = ConversationSession(
-            repo_id=repo.id, user_id=user.id,
+            repo_id=repo.id, user_id=current_user.id,
             session_key=key, title="新对话", messages_json="[]"
         )
         db.session.add(cs)
@@ -2374,7 +2550,7 @@ def _register_routes(app: Flask) -> None:
         user, repo = _get_repo_or_404(username, repo_slug)
         from models import ConversationSession
         cs = ConversationSession.query.filter_by(
-            repo_id=repo.id, user_id=user.id, session_key=session_key
+            repo_id=repo.id, user_id=current_user.id, session_key=session_key
         ).first()
         if cs:
             db.session.delete(cs)
@@ -2390,7 +2566,7 @@ def _register_routes(app: Flask) -> None:
             return jsonify(error="标题不能为空"), 400
         from models import ConversationSession
         cs = ConversationSession.query.filter_by(
-            repo_id=repo.id, user_id=user.id, session_key=session_key
+            repo_id=repo.id, user_id=current_user.id, session_key=session_key
         ).first()
         if cs:
             cs.title = title[:100]
@@ -2405,7 +2581,7 @@ def _register_routes(app: Flask) -> None:
         if key:
             from models import ConversationSession
             cs = ConversationSession.query.filter_by(
-                repo_id=repo.id, user_id=user.id, session_key=key
+                repo_id=repo.id, user_id=current_user.id, session_key=key
             ).first()
             if cs:
                 cs.messages_json = "[]"

@@ -15,7 +15,7 @@ def _login(client, app):
     with app.app_context():
         from models import User, db
         if not User.query.filter_by(username="fe_alice").first():
-            u = User(username="fe_alice", display_name="FE Alice")
+            u = User(username="fe_alice", email="fe_alice@example.com", display_name="FE Alice")
             u.set_password("pass1234")
             db.session.add(u)
             db.session.commit()
@@ -46,6 +46,16 @@ def test_login_has_form(client):
 def test_register_has_confirm_password(client):
     html = _html(client.get("/register"))
     assert 'name="confirm_password"' in html
+
+
+def test_register_has_email_field(client):
+    html = _html(client.get("/register"))
+    assert 'name="email"' in html
+
+
+def test_forgot_password_has_email_field(client):
+    html = _html(client.get("/forgot-password"))
+    assert 'name="email"' in html
 
 
 # ── Dashboard ────────────────────────────────────────────────
@@ -91,6 +101,18 @@ def test_dashboard_chat_tools_have_visible_labels(client, app):
     assert "清空对话" in html
 
 
+def test_public_dashboard_hides_session_bar_for_guest(client, app):
+    _login(client, app)
+    _create_repo(client)
+    client.post(
+        "/fe_alice/fe-test/settings",
+        data={"action": "update_info", "name": "FE Test KB", "description": "", "is_public": "on"},
+    )
+    client.get("/logout")
+    html = _html(client.get("/fe_alice/fe-test"))
+    assert "chat-session-bar" not in html
+
+
 # ── Source list: no nested forms ─────────────────────────────
 
 def _count_nested_forms(html: str) -> int:
@@ -118,6 +140,19 @@ def test_source_list_has_upload_zone(client, app):
     html = _html(client.get("/fe_alice/fe-test/sources"))
     assert 'type="file"' in html, "Should have file input"
     assert "upload" in html.lower(), "Should have upload section"
+
+
+def test_public_source_list_accessible_to_guest(client, app):
+    _login(client, app)
+    _create_repo(client)
+    client.post(
+        "/fe_alice/fe-test/settings",
+        data={"action": "update_info", "name": "FE Test KB", "description": "", "is_public": "on"},
+    )
+    client.get("/logout")
+    html = _html(client.get("/fe_alice/fe-test/sources"))
+    assert "文档管理" in html
+    assert 'type="file"' not in html
 
 
 # ── Query page ───────────────────────────────────────────────
@@ -194,6 +229,20 @@ def test_task_queue_page_accessible(client, app):
     _create_repo(client)
     html = _html(client.get("/fe_alice/fe-test/tasks"))
     assert "任务队列" in html
+
+
+def test_task_queue_has_cancel_button_for_active_task(client, app):
+    import io
+
+    _login(client, app)
+    _create_repo(client)
+    client.post(
+        "/fe_alice/fe-test/sources/upload",
+        data={"file": (io.BytesIO(b"# task"), "queue.md")},
+        content_type="multipart/form-data",
+    )
+    html = _html(client.get("/fe_alice/fe-test/tasks"))
+    assert "取消" in html
 
 
 # ── Error pages ──────────────────────────────────────────────
