@@ -138,6 +138,20 @@ def test_dashboard_recovers_missing_overview_link(client, app):
     assert "概览" in html
 
 
+def test_dashboard_resyncs_stale_repo_counts(client, app):
+    _login(client, app)
+    _create_repo(client)
+    from models import Repo, db
+
+    with app.app_context():
+        repo = Repo.query.filter_by(slug="fe-test").first()
+        repo.page_count = 0
+        db.session.commit()
+
+    html = _html(client.get("/fe_alice/fe-test"))
+    assert "Wiki (4)" in html
+
+
 def test_dashboard_chat_config_is_valid_json_script(client, app):
     _login(client, app)
     _create_repo(client)

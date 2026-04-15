@@ -983,10 +983,11 @@ def _register_routes(app: Flask) -> None:
         base = get_repo_path(Config.DATA_DIR, username, repo_slug)
         wiki_dir = os.path.join(base, "wiki")
         _, overview_created = _ensure_core_wiki_page(wiki_dir, repo.name, "overview")
-        if overview_created:
-            _sync_repo_counts(repo, username)
-
         pages = _enrich_pages(wiki_dir)
+        raw_dir = os.path.join(base, "raw")
+        sources = _enrich_sources(raw_dir, repo) if os.path.isdir(raw_dir) else []
+        if overview_created or repo.page_count != len(pages) or repo.source_count != len(sources):
+            _sync_repo_counts(repo, username)
 
         page_content = None
         active_page = None
@@ -999,9 +1000,6 @@ def _register_routes(app: Flask) -> None:
                 if p["slug"] == "overview":
                     active_page = p
                     break
-
-        raw_dir = os.path.join(base, "raw")
-        sources = _enrich_sources(raw_dir, repo) if os.path.isdir(raw_dir) else []
 
         # README
         readme_html = ""
