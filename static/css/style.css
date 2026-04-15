@@ -784,7 +784,6 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
   .upload-selected-file span { max-width: 100%; }
   .upload-selected-actions { justify-content: stretch; }
   .upload-selected-submit { width: 100% !important; }
-  .url-import-row { flex-direction: column; }
   .source-toolbar-right { width: 100%; flex-wrap: wrap; }
 }
 
@@ -801,29 +800,6 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
 .search-result-title a { font-weight: 600; }
 .search-match-count { font-size: 0.8rem; color: var(--pico-muted-color); margin-left: auto; }
 .search-result-snippet { font-size: 0.88rem; color: var(--pico-muted-color); line-height: 1.5; }
-
-/* URL import */
-.url-import-section {
-  margin-bottom: 1rem;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84) 0%, rgba(245, 249, 255, 0.96) 100%);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 0.85rem 1rem;
-}
-.url-import-summary {
-  cursor: pointer;
-  list-style: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--brand);
-}
-.url-import-summary::-webkit-details-marker { display: none; }
-.url-import-form { margin-top: 0.75rem; }
-.url-import-row { display: flex; gap: 0.5rem; }
-.url-import-row input { flex: 1; }
 
 /* Admin */
 .admin-stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 2rem; }

@@ -227,14 +227,6 @@ def test_source_list_batch_ingest_starts_disabled(client, app):
     assert 'id="batch-ingest-btn" class="btn-sm btn-sm-primary" disabled' in html
 
 
-def test_source_list_has_url_import_summary(client, app):
-    _login(client, app)
-    _create_repo(client)
-    html = _html(client.get("/fe_alice/fe-test/sources"))
-    assert "url-import-summary" in html
-    assert 'name="url"' in html
-
-
 def test_public_source_list_accessible_to_guest(client, app):
     _login(client, app)
     _create_repo(client)

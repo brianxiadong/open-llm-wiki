@@ -292,13 +292,6 @@ test_upload_selection_state() {
   [ "$ok" -eq 1 ]
 }
 
-test_url_import_disclosure() {
-  nav "$BASE_URL/$USER/$REPO_SLUG/sources"
-  agent-browser eval "var details=document.querySelector('.url-import-section'); if(details){ details.open = true; true; } else { false; }" >/dev/null 2>&1 || return 1
-  sleep 0.3
-  assert_visible '.url-import-form input[name="url"]' "URL 导入展开后表单可见"
-}
-
 test_upload_file() {
   nav "$BASE_URL/$USER/$REPO_SLUG/sources"
   # 创建临时文件
@@ -460,7 +453,6 @@ echo ""
 echo "── 文档管理 ──"
 run_test "空文档列表"        test_sources_empty
 run_test "上传选择态"        test_upload_selection_state
-run_test "URL 导入展开"      test_url_import_disclosure
 run_test "上传文件"          test_upload_file
 run_test "批量按钮状态"      test_batch_actions_state
 run_test "上传自动排队"      test_upload_auto_queues_task
