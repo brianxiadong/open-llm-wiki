@@ -174,6 +174,13 @@ def test_repo_settings_has_name_field(client, app):
     assert 'name="name"' in html
 
 
+def test_repo_settings_form_includes_update_info_action(client, app):
+    _login(client, app)
+    _create_repo(client)
+    html = _html(client.get("/fe_alice/fe-test/settings"))
+    assert 'name="action" value="update_info"' in html
+
+
 def test_user_settings_has_display_name(client, app):
     _login(client, app)
     html = _html(client.get("/user/settings"))

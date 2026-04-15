@@ -343,17 +343,17 @@ def test_search_with_results():
     with patch("qdrant_service.QdrantClient") as mock_qc, patch("qdrant_service.OpenAI") as mock_oa:
         mock_q = mock_qc.return_value
         mock_q.collection_exists.return_value = True
-        mock_q.search.return_value = [mock_hit]
+        mock_q.query_points.return_value = MagicMock(points=[mock_hit])
         mock_oa.return_value.embeddings.create.return_value = mock_emb_resp
 
         svc = QdrantService("http://q", "http://e", "k", "em", embedding_dimensions=2)
         rows = svc.search(9, "query text", limit=5)
 
-    mock_q.search.assert_called_once()
-    sk = mock_q.search.call_args.kwargs
+    mock_q.query_points.assert_called_once()
+    sk = mock_q.query_points.call_args.kwargs
     assert sk["collection_name"] == "repo_9"
     assert sk["limit"] == 5
-    assert sk["query_vector"] == [0.1, 0.2]
+    assert sk["query"] == [0.1, 0.2]
     assert rows == [{"filename": "f.md", "title": "T", "score": 0.91}]
 
 
@@ -363,7 +363,7 @@ def test_search_no_collection():
         mock_q.collection_exists.return_value = False
         svc = QdrantService("http://q", "http://e", "k", "em", 1024)
         assert svc.search(1, "q") == []
-    mock_q.search.assert_not_called()
+    mock_q.query_points.assert_not_called()
 
 
 def test_delete_collection():

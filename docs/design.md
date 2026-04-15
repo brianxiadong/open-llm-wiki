@@ -517,6 +517,8 @@ GET  /admin/feedbacks                        → 用户反馈列表（关联 que
 
 **全局搜索页**（`templates/user/search.html`）：按知识库分组展示跨仓库关键词搜索结果，含摘要和匹配次数。
 
+**知识库设置页**（`templates/repo/settings.html`）：由「基本信息」「Wiki Schema」「导入 Wiki（ZIP）」「README」「删除知识库」五个独立表单区块组成；每个表单都显式携带 `action` 隐藏字段，避免未启用 CSRF 模板变量时提交丢失操作类型。
+
 **管理后台**（`templates/admin/dashboard.html`）：展示用户总数、知识库总数、任务统计、磁盘占用及最近注册用户列表。仅 ADMIN_USERNAME 可访问。
 
 ## 7. LLM 集成
@@ -739,7 +741,7 @@ open-llm-wiki/
 │   │   ├── list.html      ← 仓库列表
 │   │   ├── new.html       ← 新建仓库
 │   │   ├── dashboard.html ← 仓库面板
-│   │   └── settings.html  ← 仓库设置
+│   │   └── settings.html  ← 仓库设置（基本信息 / Schema / ZIP 导入 / README / 删除）
 │   ├── wiki/
 │   │   ├── page.html      ← Wiki 页面渲染
 │   │   └── graph.html     ← 关系图

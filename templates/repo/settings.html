@@ -19,8 +19,8 @@
   <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="action" value="update_info">
     {% endif %}
+    <input type="hidden" name="action" value="update_info">
 
     <label for="name">知识库名称</label>
     <input type="text" id="name" name="name" value="{{ repo.name }}" required>

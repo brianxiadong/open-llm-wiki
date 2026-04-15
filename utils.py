@@ -6,7 +6,7 @@ import json
 import os
 import re
 import threading
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 
 import markdown as md_lib
 import yaml
@@ -517,7 +517,7 @@ class QueryTraceLogger:
         os.makedirs(log_dir, exist_ok=True)
 
     def _log_path(self) -> str:
-        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
         return os.path.join(self.log_dir, f"query_trace_{today}.jsonl")
 
     def write(
@@ -535,7 +535,7 @@ class QueryTraceLogger:
         answer: str,
     ) -> None:
         record = {
-            "ts": datetime.now(tz=UTC).isoformat(),
+            "ts": datetime.now(tz=timezone.utc).isoformat(),
             "repo": repo,
             "user": user or "anonymous",
             "question": question,

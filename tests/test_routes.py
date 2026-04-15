@@ -1,6 +1,7 @@
 """Flask route tests using conftest fixtures."""
 
 import io
+import json
 import os
 from unittest.mock import patch
 
@@ -131,6 +132,80 @@ def test_repo_settings_get(sample_repo):
     assert resp.status_code == 200
 
 
+def test_user_settings_update_profile(auth_client, app):
+    resp = auth_client.post(
+        "/user/settings",
+        data={"action": "update_profile", "display_name": "Alice Beta"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    with app.app_context():
+        from models import User
+
+        user = User.query.filter_by(username="alice").first()
+        assert user is not None
+        assert user.display_name == "Alice Beta"
+
+
+def test_user_settings_change_password(auth_client, app):
+    resp = auth_client.post(
+        "/user/settings",
+        data={
+            "action": "change_password",
+            "old_password": "password123",
+            "new_password": "newpass123",
+            "confirm_password": "newpass123",
+        },
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    with app.app_context():
+        from models import User
+
+        user = User.query.filter_by(username="alice").first()
+        assert user is not None
+        assert user.check_password("newpass123") is True
+
+
+def test_repo_settings_update_info_and_schema(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    schema_content = "# Custom Schema\n\n- concept\n- guide\n"
+
+    resp = client.post(
+        f"/alice/{slug}/settings",
+        data={
+            "action": "update_info",
+            "name": "Updated KB",
+            "description": "Updated description",
+            "is_public": "on",
+        },
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+
+    resp2 = client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "update_schema", "schema_content": schema_content},
+        follow_redirects=True,
+    )
+    assert resp2.status_code == 200
+
+    with app.app_context():
+        from config import Config
+        from models import Repo
+
+        repo = Repo.query.filter_by(id=repo_info["id"]).first()
+        assert repo is not None
+        assert repo.name == "Updated KB"
+        assert repo.description == "Updated description"
+        assert repo.is_public is True
+
+        schema_path = os.path.join(Config.DATA_DIR, "alice", slug, "wiki", "schema.md")
+        with open(schema_path, "r", encoding="utf-8") as f:
+            assert f.read() == schema_content
+
+
 def test_repo_delete(sample_repo):
     client, repo_info = sample_repo
     slug = repo_info["slug"]
@@ -239,11 +314,17 @@ def test_query_api(sample_repo, app):
     client, repo_info = sample_repo
     slug = repo_info["slug"]
     fake = {
-        "answer": "Test **answer**",
+        "markdown": "Test **answer**",
+        "confidence": {"level": "medium", "score": 0.6, "reasons": ["test"]},
+        "wiki_evidence": [],
+        "chunk_evidence": [],
+        "fact_evidence": [],
+        "evidence_summary": "test summary",
         "referenced_pages": ["overview.md"],
-        "suggested_filename": None,
+        "wiki_sources": ["overview.md"],
+        "qdrant_sources": [],
     }
-    with patch.object(app.wiki_engine, "query", return_value=fake):
+    with patch.object(app.wiki_engine, "query_with_evidence", return_value=fake):
         resp = client.post(f"/alice/{slug}/query", json={"q": "test"})
     assert resp.status_code == 200
     data = resp.get_json()
@@ -347,6 +428,22 @@ def test_wiki_delete_nonexistent_page(sample_repo):
     assert resp.status_code == 200
 
 
+def test_wiki_log_redirects_to_log_page(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.get(f"/alice/{slug}/log", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith(f"/alice/{slug}/wiki/log")
+
+
+def test_wiki_pages_grouped_view(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.get(f"/alice/{slug}/wiki/pages")
+    assert resp.status_code == 200
+    assert "概览" in resp.data.decode("utf-8")
+
+
 def test_query_stream_route_no_q(sample_repo):
     client, repo_info = sample_repo
     slug = repo_info["slug"]
@@ -416,6 +513,232 @@ def test_batch_ingest_empty(sample_repo):
     assert resp.status_code == 200
 
 
+def test_view_source_renders_markdown(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from config import Config
+
+        raw_dir = os.path.join(Config.DATA_DIR, "alice", slug, "raw")
+        os.makedirs(raw_dir, exist_ok=True)
+        with open(os.path.join(raw_dir, "source-view.md"), "w", encoding="utf-8") as f:
+            f.write("# Source View\n\nRendered content.")
+
+    resp = client.get(f"/alice/{slug}/sources/source-view.md")
+    assert resp.status_code == 200
+    assert "Source View" in resp.data.decode("utf-8")
+
+
+def test_upload_xhr_returns_json(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/sources/upload",
+        data={"file": (io.BytesIO(b"# Ajax upload\n"), "xhr-upload.md")},
+        content_type="multipart/form-data",
+        headers={"X-Requested-With": "XMLHttpRequest"},
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data is not None
+    assert data["ok"] is True
+    assert data["filename"] == "xhr-upload.md"
+    assert isinstance(data["task_id"], int)
+
+
+def test_upload_excel_creates_markdown_and_fact_records(sample_repo, app):
+    import openpyxl
+
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "Summary"
+    ws1.append(["地区", "收入"])
+    ws1.append(["华北", 100])
+    ws2 = wb.create_sheet("Detail")
+    ws2.append(["产品", "销量"])
+    ws2.append(["A", 88])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    resp = client.post(
+        f"/alice/{slug}/sources/upload",
+        data={"file": (buf, "report.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+    with app.app_context():
+        from config import Config
+        from utils import read_jsonl
+
+        base = os.path.join(Config.DATA_DIR, "alice", slug)
+        assert os.path.isfile(os.path.join(base, "raw", "report.md"))
+        records = read_jsonl(os.path.join(base, "facts", "records", "report.jsonl"))
+        assert len(records) == 2
+        assert records[0]["sheet"] == "Summary"
+        assert records[1]["sheet"] == "Detail"
+
+
+def test_upload_pdf_via_mineru_saves_original_and_markdown(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with patch.object(app.mineru, "parse_file", return_value={"md_content": "# Parsed PDF\n\nBody"}):
+        resp = client.post(
+            f"/alice/{slug}/sources/upload",
+            data={"file": (io.BytesIO(b"%PDF-1.4 fake"), "paper.pdf")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+
+    with app.app_context():
+        from config import Config
+
+        base = os.path.join(Config.DATA_DIR, "alice", slug, "raw")
+        assert os.path.isfile(os.path.join(base, "paper.md"))
+        assert os.path.isfile(os.path.join(base, "originals", "paper.pdf"))
+
+
+def test_download_source_prefers_original_file(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from config import Config
+
+        raw_dir = os.path.join(Config.DATA_DIR, "alice", slug, "raw")
+        originals_dir = os.path.join(raw_dir, "originals")
+        os.makedirs(originals_dir, exist_ok=True)
+        with open(os.path.join(raw_dir, "manual.md"), "w", encoding="utf-8") as f:
+            f.write("# Manual\n")
+        with open(os.path.join(originals_dir, "manual.pdf"), "wb") as f:
+            f.write(b"original pdf bytes")
+
+    resp = client.get(f"/alice/{slug}/sources/manual.md/download")
+    assert resp.status_code == 200
+    assert resp.data == b"original pdf bytes"
+    assert "manual.pdf" in resp.headers["Content-Disposition"]
+
+
+def test_delete_source_removes_file_and_related_wiki(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from config import Config
+
+        base = os.path.join(Config.DATA_DIR, "alice", slug)
+        raw_dir = os.path.join(base, "raw")
+        wiki_dir = os.path.join(base, "wiki")
+        os.makedirs(raw_dir, exist_ok=True)
+        with open(os.path.join(raw_dir, "sales.md"), "w", encoding="utf-8") as f:
+            f.write("# Sales\n")
+        with open(os.path.join(wiki_dir, "sales.md"), "w", encoding="utf-8") as f:
+            f.write("---\ntitle: Sales\ntype: source\nsource: sales.md\n---\n\n# Sales\n")
+        with open(os.path.join(wiki_dir, "sales-summary.md"), "w", encoding="utf-8") as f:
+            f.write("---\ntitle: Sales Summary\ntype: concept\nsource: sales.md\n---\n\n# Summary\n")
+
+    resp = client.post(f"/alice/{slug}/sources/sales.md/delete", follow_redirects=True)
+    assert resp.status_code == 200
+
+    with app.app_context():
+        from config import Config
+
+        base = os.path.join(Config.DATA_DIR, "alice", slug)
+        assert not os.path.exists(os.path.join(base, "raw", "sales.md"))
+        assert not os.path.exists(os.path.join(base, "wiki", "sales.md"))
+        assert not os.path.exists(os.path.join(base, "wiki", "sales-summary.md"))
+
+
+def test_rename_source_moves_file_and_queues_reingest(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from config import Config
+
+        raw_dir = os.path.join(Config.DATA_DIR, "alice", slug, "raw")
+        os.makedirs(raw_dir, exist_ok=True)
+        with open(os.path.join(raw_dir, "old-name.md"), "w", encoding="utf-8") as f:
+            f.write("# Old\n")
+
+    resp = client.post(
+        f"/alice/{slug}/sources/old-name.md/rename",
+        data={"new_name": "new-name.md"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+
+    with app.app_context():
+        from config import Config
+        from models import Task
+
+        raw_dir = os.path.join(Config.DATA_DIR, "alice", slug, "raw")
+        assert not os.path.exists(os.path.join(raw_dir, "old-name.md"))
+        assert os.path.exists(os.path.join(raw_dir, "new-name.md"))
+        task = Task.query.filter_by(repo_id=repo_info["id"], input_data="new-name.md").order_by(Task.id.desc()).first()
+        assert task is not None
+        assert task.status == "queued"
+
+
+def test_batch_delete_removes_selected_sources(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from config import Config
+
+        raw_dir = os.path.join(Config.DATA_DIR, "alice", slug, "raw")
+        os.makedirs(raw_dir, exist_ok=True)
+        for name in ("a.md", "b.md"):
+            with open(os.path.join(raw_dir, name), "w", encoding="utf-8") as f:
+                f.write(f"# {name}\n")
+
+    resp = client.post(
+        f"/alice/{slug}/sources/batch-delete",
+        data={"files": ["a.md", "b.md"]},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+
+    with app.app_context():
+        from config import Config
+
+        raw_dir = os.path.join(Config.DATA_DIR, "alice", slug, "raw")
+        assert not os.path.exists(os.path.join(raw_dir, "a.md"))
+        assert not os.path.exists(os.path.join(raw_dir, "b.md"))
+
+
+def test_batch_ingest_skips_done_and_queued_files(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from config import Config
+        from models import Task, db
+
+        raw_dir = os.path.join(Config.DATA_DIR, "alice", slug, "raw")
+        os.makedirs(raw_dir, exist_ok=True)
+        for name in ("done.md", "queued.md", "fresh.md"):
+            with open(os.path.join(raw_dir, name), "w", encoding="utf-8") as f:
+                f.write(f"# {name}\n")
+        db.session.add(Task(repo_id=repo_info["id"], type="ingest", status="done", input_data="done.md"))
+        db.session.add(Task(repo_id=repo_info["id"], type="ingest", status="queued", input_data="queued.md"))
+        db.session.commit()
+
+    resp = client.post(
+        f"/alice/{slug}/sources/batch-ingest",
+        data={"files": ["done.md", "queued.md", "fresh.md"]},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+
+    with app.app_context():
+        from models import Task
+
+        queued = Task.query.filter_by(repo_id=repo_info["id"], type="ingest", input_data="fresh.md").all()
+        assert len(queued) == 1
+
+
 # -- Retry task ------------------------------------------------------------
 
 def test_retry_task_not_failed(sample_repo, app):
@@ -452,6 +775,76 @@ def test_retry_task_failed(sample_repo, app):
         t = Task.query.get(tid)
         assert t.status == "queued"
         assert t.progress == 0
+
+
+def test_ingest_progress_page_accessible(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from models import Task, db
+
+        task = Task(repo_id=repo_info["id"], type="ingest", status="queued", input_data="doc.md")
+        db.session.add(task)
+        db.session.commit()
+        tid = task.id
+
+    resp = client.get(f"/alice/{slug}/ingest-progress/{tid}")
+    assert resp.status_code == 200
+    assert "正在处理" in resp.data.decode("utf-8")
+
+
+def test_task_status_api_returns_json(sample_repo, app):
+    client, repo_info = sample_repo
+    with app.app_context():
+        from models import Task, db
+
+        task = Task(
+            repo_id=repo_info["id"],
+            type="ingest",
+            status="running",
+            input_data="doc.md",
+            progress=55,
+            progress_msg="halfway",
+        )
+        db.session.add(task)
+        db.session.commit()
+        tid = task.id
+
+    resp = client.get(f"/api/tasks/{tid}/status")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data == {
+        "id": tid,
+        "status": "running",
+        "progress": 55,
+        "progress_msg": "halfway",
+        "input_data": "doc.md",
+    }
+
+
+def test_task_stream_done_event(sample_repo, app):
+    client, repo_info = sample_repo
+    with app.app_context():
+        from models import Task, db
+
+        task = Task(
+            repo_id=repo_info["id"],
+            type="ingest",
+            status="done",
+            input_data="doc.md",
+            progress=100,
+            progress_msg="finished",
+        )
+        db.session.add(task)
+        db.session.commit()
+        tid = task.id
+
+    resp = client.get(f"/task/{tid}/stream")
+    assert resp.status_code == 200
+    body = resp.data.decode("utf-8")
+    assert "event: progress" in body
+    assert "event: done" in body
+    assert "finished" in body
 
 
 # -- Export ZIP ------------------------------------------------------------
@@ -770,6 +1163,53 @@ def test_admin_feedbacks_accessible(auth_client, app):
     assert "用户反馈" in resp.data.decode("utf-8")
 
 
+def test_admin_query_logs_filter_and_trace_detail(auth_client, app, sample_repo):
+    with app.app_context():
+        from config import Config
+        from models import QueryLog, Repo, User, db
+
+        Config.ADMIN_USERNAME = "alice"
+        user = User.query.filter_by(username="alice").first()
+        repo = Repo.query.filter_by(slug=sample_repo[1]["slug"]).first()
+        ql = QueryLog(
+            trace_id="trace-admin-1",
+            repo_id=repo.id,
+            user_id=user.id,
+            question="Why is revenue rising?",
+            answer_preview="Revenue is rising",
+            full_answer="# Revenue\n\nRising steadily.",
+            confidence="low",
+            retrieval_json=json.dumps({"wiki": [], "chunks": [], "facts": []}, ensure_ascii=False),
+        )
+        db.session.add(ql)
+        db.session.commit()
+
+        raw_dir = os.path.join(Config.DATA_DIR, "alice", repo.slug, "raw")
+        os.makedirs(raw_dir, exist_ok=True)
+        with open(os.path.join(raw_dir, "source-a.md"), "w", encoding="utf-8") as f:
+            f.write("# Source A\n")
+
+    logs_resp = auth_client.get("/admin/query-logs?q=revenue&conf=low&user=alice")
+    assert logs_resp.status_code == 200
+    assert "Why is revenue rising?" in logs_resp.data.decode("utf-8")
+
+    trace_resp = auth_client.get("/admin/trace/trace-admin-1")
+    assert trace_resp.status_code == 200
+    body = trace_resp.data.decode("utf-8")
+    assert "Revenue" in body
+    assert "source-a.md" in body
+
+
+def test_admin_repos_page_accessible(auth_client, app, sample_repo):
+    with app.app_context():
+        from config import Config
+
+        Config.ADMIN_USERNAME = "alice"
+    resp = auth_client.get("/admin/repos?q=test-kb")
+    assert resp.status_code == 200
+    assert "alice/test-kb" in resp.data.decode("utf-8")
+
+
 # -- Public repo guest access --------------------------------------------------
 
 
@@ -875,6 +1315,134 @@ def test_clear_session(sample_repo, app):
         assert cs2.messages_json == "[]"
 
 
+def test_save_query_page_creates_wiki_file(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/query/save",
+        data={"query": "Revenue Summary", "content": "# Revenue\n\nSummary."},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert "/wiki/revenue-summary" in resp.headers["Location"]
+
+    with app.app_context():
+        from config import Config
+
+        path = os.path.join(Config.DATA_DIR, "alice", slug, "wiki", "revenue-summary.md")
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "title: Revenue Summary" in content
+        assert "# Revenue" in content
+
+
+def test_get_session_returns_messages(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from models import ConversationSession, User, db
+
+        user = User.query.filter_by(username="alice").first()
+        db.session.add(
+            ConversationSession(
+                repo_id=repo_info["id"],
+                user_id=user.id,
+                session_key="sess-view",
+                messages_json=json.dumps([{"role": "user", "content": "hello"}], ensure_ascii=False),
+            )
+        )
+        db.session.commit()
+
+    resp = client.get(f"/alice/{slug}/session?key=sess-view")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"messages": [{"role": "user", "content": "hello"}]}
+
+
+def test_render_markdown_api_batch(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    resp = client.post(
+        f"/alice/{slug}/render-markdown",
+        json={"messages": ["# Title", "**bold**"]},
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert len(data["html_list"]) == 2
+    assert "<h1" in data["html_list"][0]
+    assert "<strong>" in data["html_list"][1]
+
+
+def test_session_lifecycle_endpoints(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    create_resp = client.post(f"/alice/{slug}/sessions/new")
+    assert create_resp.status_code == 200
+    create_data = create_resp.get_json()
+    key = create_data["key"]
+
+    rename_resp = client.post(
+        f"/alice/{slug}/sessions/{key}/rename",
+        json={"title": "Renamed Session"},
+    )
+    assert rename_resp.status_code == 200
+
+    list_resp = client.get(f"/alice/{slug}/sessions")
+    assert list_resp.status_code == 200
+    sessions = list_resp.get_json()["sessions"]
+    assert any(s["key"] == key and s["title"] == "Renamed Session" for s in sessions)
+
+    delete_resp = client.post(f"/alice/{slug}/sessions/{key}/delete")
+    assert delete_resp.status_code == 200
+
+    list_resp2 = client.get(f"/alice/{slug}/sessions")
+    keys = [s["key"] for s in list_resp2.get_json()["sessions"]]
+    assert key not in keys
+
+
+def test_feedback_submit_success_and_invalid(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    bad_resp = client.post(f"/alice/{slug}/feedback", json={"trace_id": "", "rating": "meh"})
+    assert bad_resp.status_code == 400
+
+    resp = client.post(
+        f"/alice/{slug}/feedback",
+        json={"trace_id": "trace-123", "rating": "good", "comment": "helpful"},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True}
+
+    with app.app_context():
+        from models import QueryFeedback
+
+        feedback = QueryFeedback.query.filter_by(trace_id="trace-123").first()
+        assert feedback is not None
+        assert feedback.rating == "good"
+        assert feedback.comment == "helpful"
+
+
+def test_insights_analyze_invokes_engine(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    fake_gaps = [{"gap": "missing timeline", "questions": ["When?"]}]
+    with patch.object(app.wiki_engine, "find_gaps", return_value=fake_gaps) as mock_find_gaps:
+        resp = client.get(f"/alice/{slug}/insights?analyze=1")
+    assert resp.status_code == 200
+    mock_find_gaps.assert_called_once()
+
+
+def test_entity_check_analyze_invokes_engine(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    fake_result = [{"canonical": "Transformer", "aliases": ["transformers"]}]
+    with patch.object(app.wiki_engine, "find_entity_duplicates", return_value=fake_result) as mock_find_dupes:
+        resp = client.get(f"/alice/{slug}/entity-check?analyze=1")
+    assert resp.status_code == 200
+    mock_find_dupes.assert_called_once()
+
+
 # -- README, insights, entity check, semantic search ---------------------------
 
 
@@ -934,3 +1502,57 @@ def test_duplicate_upload_warns(sample_repo):
     )
     assert resp2.status_code == 200
     assert "重复" in resp2.data.decode("utf-8")
+
+
+def test_task_worker_recovers_running_tasks(app, sample_repo):
+    from task_worker import TaskWorker
+
+    with app.app_context():
+        from models import Task, db
+
+        task = Task(repo_id=sample_repo[1]["id"], type="ingest", status="running", progress=35, progress_msg="busy")
+        db.session.add(task)
+        db.session.commit()
+        tid = task.id
+
+    worker = TaskWorker(app)
+    worker._recover_stale_tasks()
+
+    with app.app_context():
+        from models import Task, db
+
+        task = db.session.get(Task, tid)
+        assert task.status == "queued"
+        assert task.progress == 0
+        assert task.progress_msg == "Recovered after service restart"
+
+
+def test_task_worker_runs_rebuild_index_task(app, sample_repo):
+    from task_worker import TaskWorker
+
+    with app.app_context():
+        from config import Config
+        from models import Task, db
+
+        slug = sample_repo[1]["slug"]
+        wiki_dir = os.path.join(Config.DATA_DIR, "alice", slug, "wiki")
+        with open(os.path.join(wiki_dir, "index-test.md"), "w", encoding="utf-8") as f:
+            f.write("---\ntitle: Index Test\ntype: concept\n---\n\n# Index Test\n")
+
+        task = Task(repo_id=sample_repo[1]["id"], type="rebuild_index", status="queued", input_data="import_zip")
+        db.session.add(task)
+        db.session.commit()
+        tid = task.id
+
+    with patch.object(app.qdrant, "upsert_page") as mock_upsert_page, \
+         patch.object(app.qdrant, "upsert_page_chunks") as mock_upsert_chunks:
+        TaskWorker(app)._poll_once()
+
+    with app.app_context():
+        from models import Task, db
+
+        task = db.session.get(Task, tid)
+        assert task.status == "done"
+        assert "Rebuilt index" in (task.progress_msg or "")
+    assert mock_upsert_page.called
+    assert mock_upsert_chunks.called
