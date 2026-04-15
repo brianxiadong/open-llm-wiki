@@ -536,7 +536,7 @@ GET  /admin/feedbacks                        → 用户反馈列表（关联 que
 
 **知识库设置页**（`templates/repo/settings.html`）：由「基本信息」「Wiki Schema」「导入 Wiki（ZIP）」「README」「删除知识库」五个独立表单区块组成；每个表单都显式携带 `action` 隐藏字段，避免未启用 CSRF 模板变量时提交丢失操作类型。
 
-**基础壳层**（`templates/base.html` + `static/css/style.css`）：站点统一头部、页脚与全局设计令牌都在这里定义。为了适配内网和离线环境，正文不再依赖 Google Fonts，而是使用系统自带中文优先字体栈；Pico CSS、Lucide、EasyMDE、D3 也全部 vendoring 到 `static/vendor/` 由应用自身提供，避免 CDN 或外网不可达时页面样式、图标、编辑器和图谱功能失效。
+**基础壳层**（`templates/base.html` + `static/css/style.css`）：站点统一头部、页脚与全局设计令牌都在这里定义。为了适配内网和离线环境，正文不再依赖 Google Fonts，而是使用系统自带中文优先字体栈；Pico CSS、Lucide、EasyMDE、D3 也全部 vendoring 到 `static/vendor/` 由应用自身提供，避免 CDN 或外网不可达时页面样式、图标、编辑器和图谱功能失效。知识库聊天页注入给 `chat.js` 的配置对象必须使用 `tojson` 输出，避免 Jinja 自动转义把 URL 变成 `&#34;...&#34;` 从而导致会话栏和“新对话”初始化失效。
 
 **管理后台**（`templates/admin/dashboard.html`）：展示用户总数、知识库总数、任务统计、磁盘占用及最近注册用户列表。仅 ADMIN_USERNAME 可访问。
 

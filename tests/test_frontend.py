@@ -119,6 +119,16 @@ def test_dashboard_chat_tools_have_visible_labels(client, app):
     assert "清空对话" in html
 
 
+def test_dashboard_chat_config_is_valid_json_script(client, app):
+    _login(client, app)
+    _create_repo(client)
+    html = _html(client.get("/fe_alice/fe-test"))
+    assert "window.__chatConfig = {" in html
+    script = html.split("window.__chatConfig =", 1)[1].split("</script>", 1)[0]
+    assert '"listSessionsUrl": "/fe_alice/fe-test/sessions"' in script
+    assert "&#34;" not in script
+
+
 def test_public_dashboard_hides_session_bar_for_guest(client, app):
     _login(client, app)
     _create_repo(client)
