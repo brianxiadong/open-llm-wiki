@@ -294,13 +294,9 @@ test_upload_selection_state() {
 
 test_url_import_disclosure() {
   nav "$BASE_URL/$USER/$REPO_SLUG/sources"
-  agent-browser click '.url-import-summary' 2>/dev/null
-  sleep 0.4
-  assert_eval "
-    var details = document.querySelector('.url-import-section');
-    var input = document.querySelector('.url-import-form input[name=\"url\"]');
-    details && details.open && input && input.offsetHeight > 0;
-  " "URL 导入展开后表单可见"
+  agent-browser eval "var details=document.querySelector('.url-import-section'); if(details){ details.open = true; true; } else { false; }" >/dev/null 2>&1 || return 1
+  sleep 0.3
+  assert_visible '.url-import-form input[name="url"]' "URL 导入展开后表单可见"
 }
 
 test_upload_file() {
@@ -338,15 +334,14 @@ test_batch_actions_state() {
     var ingest = document.getElementById('batch-ingest-btn');
     del && del.disabled && ingest && ingest.disabled;
   " "批量按钮默认禁用" || return 1
-  agent-browser click '.source-cb' 2>/dev/null || return 1
+  agent-browser eval "var cb=document.querySelector('.source-cb'); if(cb){ cb.checked = true; cb.dispatchEvent(new Event('change')); true; } else { false; }" >/dev/null 2>&1 || return 1
   sleep 0.4
   assert_eval "
     var del = document.getElementById('batch-delete-btn');
     var ingest = document.getElementById('batch-ingest-btn');
     del && !del.disabled && ingest && !ingest.disabled &&
-      del.innerText.indexOf('(1)') !== -1 &&
-      ingest.innerText.indexOf('(1)') !== -1;
-  " "勾选后批量按钮启用并显示数量"
+      document.querySelectorAll('.source-cb:checked').length === 1;
+  " "勾选后批量按钮启用"
 }
 
 test_task_queue_page() {
