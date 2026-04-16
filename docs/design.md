@@ -757,6 +757,14 @@ open-llm-wiki/
 ├── wiki_engine.py         ← 核心 Wiki 操作（ingest / query / lint）
 ├── qdrant_service.py      ← Qdrant 向量检索服务（embedding + 读写）
 ├── mineru_client.py       ← MinerU 文档解析客户端（HTTP 调用）
+├── llmwiki_core/          ← 服务端 / 机密客户端共享 contract
+│   └── contracts.py       ← RepoRef / LocalRepoPaths / QueryRunResult
+├── confidential_client/   ← 本地机密知识库运行层
+│   ├── cli.py             ← 纯客户端 CLI 入口
+│   ├── crypto.py          ← 本地 vault 加解密（scrypt + AES-GCM）
+│   ├── repository.py      ← 机密 repo manifest + 加密仓库封装
+│   ├── qdrant.py          ← 机密模式 Qdrant adapter（payload 最小化 + 本地映射）
+│   └── runtime.py         ← 客户端 ingest / query 运行时
 ├── utils.py               ← 工具函数（markdown 渲染、文件处理、slug 生成）
 ├── task_worker.py         ← 后台任务队列 Worker（threading daemon）
 ├── requirements.txt       ← Python 依赖
@@ -806,10 +814,12 @@ python-dotenv>=1.0
 markdown>=3.5
 pygments>=2.17
 httpx>=0.27
+cryptography>=42.0
 pyyaml>=6.0
 trafilatura>=2.0
 lxml_html_clean>=0.4
 xai-sdk>=1.11
+openpyxl>=3.1
 ```
 
 **为什么选择这些**：
@@ -819,7 +829,9 @@ xai-sdk>=1.11
 - `qdrant-client`：Qdrant 向量数据库的官方 Python SDK
 - `markdown` + `pygments`：Markdown 渲染 + 语法高亮
 - `httpx`：HTTP 客户端，用于调用 MinerU API
+- `cryptography`：机密客户端本地 vault 加密（AES-GCM）
 - `pyyaml`：解析 Wiki 页面的 YAML frontmatter
+- `openpyxl`：Excel 表格转 Markdown + Fact records
 
 ### 8.3 异步处理
 
@@ -1011,6 +1023,8 @@ QDRANT_URL=http://localhost:6333    # Qdrant 服务地址
 | Lint — 修复页面 | upsert point（同步更新） |
 | 保存回答为 wiki 页面 | upsert point |
 | 删除仓库 | 删除 collection |
+
+**机密客户端补充**：`confidential_client/qdrant.py` 在客户端模式下复用同一套检索接口，但 Qdrant payload 仅保存 `repo_id + point_ref + kind` 这类 opaque 字段；`filename/title/chunk_text/fact_text` 等可读元数据落到客户端本地 `qdrant-map.sqlite`，由本地 runtime 恢复，平台服务端不参与。
 
 ## 9. 默认 Schema 模板
 
@@ -1418,6 +1432,16 @@ open-llm-wiki/
 ├── wiki_engine.py         ← 核心 Wiki 操作（含 Fact Layer 查询融合）
 ├── qdrant_service.py      ← Qdrant 向量检索（page/chunk/fact）
 ├── mineru_client.py       ← MinerU 文档解析
+├── llmwiki_core/
+│   ├── __init__.py
+│   └── contracts.py       ← 服务端 / 客户端共享 contract
+├── confidential_client/
+│   ├── __init__.py
+│   ├── cli.py             ← 机密知识库 CLI
+│   ├── crypto.py          ← 本地加密实现（scrypt + AES-GCM）
+│   ├── repository.py      ← 加密仓库 manifest + vault 封装
+│   ├── qdrant.py          ← 机密模式 Qdrant payload 最小化适配器
+│   └── runtime.py         ← 本地 ingest / query 运行时
 ├── utils.py               ← 工具函数（Markdown/JSONL/表格 records）
 ├── task_worker.py         ← 后台任务 Worker
 ├── exceptions.py          ← 自定义异常
@@ -1463,6 +1487,8 @@ open-llm-wiki/
 │       ├── easymde/
 │       └── d3/
 ├── tests/                 ← 测试
+│   ├── test_confidential_client.py
+│   └── ...
 ├── logs/                  ← 日志文件（不提交）
 ├── data/                  ← 用户数据（不提交）
 └── docs/
@@ -1703,6 +1729,7 @@ eval/
 
 ## 14. 未来可扩展方向（不在初始范围内）
 
+- **机密知识库客户端**：新增独立桌面客户端承载高敏知识库运行链路，复用共享 Python core，但不与平台服务端通信，也不在平台服务端数据库中留存机密库数据；客户端仅与用户配置的 MinerU / LLM / Embedding / Qdrant 交互
 - **Obsidian 兼容**：用户可以用 Obsidian 直接打开 data/{user}/{repo}/ 目录浏览 Wiki
 - **批量摄入**：一次上传多个文档，排队自动处理
 - **仓库协作**：多人共同维护一个仓库
