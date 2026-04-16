@@ -493,6 +493,19 @@ GET  /api/tasks/{task_id}/status           → 任务状态 JSON API
 GET  /{username}/{repo}/insights           → 知识缺口分析（基于 query_logs）
 GET  /{username}/{repo}/entity-check       → 实体去重检查
 
+机密客户端本地 API：
+GET  /api/bootstrap                               → 首屏仓库 / 活跃任务 bootstrap
+POST /api/repositories                            → 创建本地机密知识库
+POST /api/repositories/{repo_uuid}/documents      → 载入文档列表 + 活跃任务
+POST /api/repositories/{repo_uuid}/documents/upload → 上传并加入本地处理队列
+POST /api/repositories/{repo_uuid}/documents/delete → 删除文档，并同步清理本地文件与 Qdrant 索引
+POST /api/repositories/{repo_uuid}/query          → 本地问答
+GET  /api/tasks/{task_id}                         → 查询本地上传任务状态
+
+说明：
+- `POST /api/repositories` 支持 `storage_mode=encrypted|plain`
+- `encrypted` 需要访问口令，`plain` 不加密本地 vault，也不要求口令
+
 操作历史：
 GET  /{username}/{repo}/log              → 查看操作日志（log.md）
 
@@ -837,8 +850,18 @@ openpyxl>=3.1
 - `cryptography`：机密客户端本地 vault 加密（AES-GCM）
 - `pyyaml`：解析 Wiki 页面的 YAML frontmatter
 - `openpyxl`：Excel 表格转 Markdown + Fact records
+- `pywebview`：客户端本地 HTML/WebView 容器，复用服务端页面视觉风格
 
-**机密客户端 GUI**：当前实现使用 Python 标准库 `tkinter`，不新增服务端依赖，也避免在生产部署机上安装额外桌面框架；后续如需要更复杂的桌面体验，可再迁移到独立的 GUI 技术栈。
+**机密客户端 GUI**：当前实现改为 `本地 Flask 页面 + pywebview 容器`。客户端页面不再做“近似风格”复制，而是直接复用服务端 `base / source/list / ops/query` 的页面结构、class 命名和静态资源，只把交互切到本地机密知识库链路；桌面端默认中文界面，主区采用两个标签页：`文档管理` 与 `智能问答`，首页直接进入工作区，不再额外渲染独立 hero 横幅。文档上传入口位于文档管理页按钮，点击后弹出与服务端相同风格的上传弹窗；知识库创建入口也改为按钮 + 弹窗，而不是在侧栏常驻大表单。文档列表展示面向用户的原始文件名（自动隐藏本地存储前缀），时间列使用紧凑的“最近更新”格式；问答结果中的“证据摘要”改为分组渲染置信度、Wiki 证据、片段证据与事实证据，不再直接暴露原始 frontmatter / JSON 拼接文本。客户端附加样式会把整体字号略微下调，尽量贴近服务端页面的阅读密度，外部服务参数不直接暴露给终端用户。
+
+**客户端默认服务配置**：机密客户端启动时优先从以下路径读取未提交到 Git 的默认服务配置，并自动注入到新建知识库中：
+
+- 开发 / 打包机：`packaging/client/default-services.local.json`
+- 桌面包旁路分发：应用可执行文件同目录下的 `default-services.json`
+- 用户本地覆盖：`<client_home>/private/default-services.json`
+- 若以上文件均不存在：回退到当前项目 `config.Config` 的外部服务配置
+
+仓库内仅保留示例文件 `packaging/client/default-services.example.json`；真实配置文件必须加入 `.gitignore`。轻量打包脚本与 PyInstaller 二进制打包会优先携带 `packaging/client/default-services.local.json`，若缺失则自动根据当前构建环境的 `config.Config` 生成并内嵌 `default-services.json`，保证客户端开箱即用且与服务端外部设施配置保持一致。
 
 **客户端启动与打包**：
 
@@ -848,7 +871,7 @@ openpyxl>=3.1
 - macOS `.app` 包骨架：`make client-macos-app`
 - Windows 安装包：`make client-windows-installer`
 - `scripts/build-confidential-client.sh` 生成的是跨平台 launcher 包
-- `scripts/build-confidential-client-binary.sh` 读取 `packaging/confidential-client.spec`，在具备 `pyinstaller` 的构建机上生成独立桌面包
+- `scripts/build-confidential-client-binary.sh` 读取 `packaging/confidential-client.spec`，在具备 `pyinstaller` 的构建机上生成独立桌面包；spec 同时打入 `static/` 前端资源供 WebView 使用
 - `scripts/build-macos-app.sh` 生成 `.app` 包结构
 - `scripts/build-windows-installer.ps1` 调用 Inno Setup 生成 Windows 安装包
 - `scripts/sign-macos-client.sh` / `scripts/sign-windows-client.ps1` 分别承载 macOS / Windows 签名步骤
@@ -1045,17 +1068,32 @@ QDRANT_URL=http://localhost:6333    # Qdrant 服务地址
 | 保存回答为 wiki 页面 | upsert point |
 | 删除仓库 | 删除 collection |
 
+**大批量 record 写入保护**：Fact Layer 以及机密客户端模式下的 chunk / fact 向量写入，统一按固定小批次分段 `upsert`，避免 Excel/CSV 大表格在单次请求中携带过多向量与 payload，触发 Qdrant 默认 32MB JSON 请求体限制。Fact records 的 embedding 进一步改为“批量请求 + 受控并发”的模式，减少 1 行 1 请求带来的长尾耗时；客户端运行时会在 fact 阶段透传更细粒度的进度事件，避免长时间停留在固定 `84%`。
+
 **机密客户端补充**：`confidential_client/qdrant.py` 在客户端模式下复用同一套检索接口，但 Qdrant payload 仅保存 `repo_id + point_ref + kind` 这类 opaque 字段；`filename/title/chunk_text/fact_text` 等可读元数据落到客户端本地 `qdrant-map.sqlite`，由本地 runtime 恢复，平台服务端不参与。
 
 **客户端完整链路**：`confidential_client/manager.py + controller.py + runtime.py + gui.py` 组合出完整客户端流程：
 
 - 本地创建 / 列出 / 删除机密知识库
 - 从导出 bundle 恢复本地知识库
-- 本地维护外部服务配置
+- 导入 / 恢复 bundle 时使用客户端内置安全解包逻辑，兼容 Python 3.11/3.12，且阻止 tar 路径穿越 / link entry
+- 新建知识库时自动读取本地私有默认服务配置，不在 GUI 中暴露 LLM / Embedding / Qdrant / MinerU 参数
+- 新建知识库时支持两种本地存储模式：`加密模式` 与 `明文模式`；两者都走同一套客户端 runtime / Qdrant opaque payload，只是本地仓库存储方式不同
 - 本地执行 ingest / query / history / export
-- 本地对 `LLM / Embedding / Qdrant / MinerU` 做健康检查
-- 桌面端通过后台线程执行 ingest / query / health check，避免 UI 阻塞
-- 客户端保存更新清单地址和 channel，并支持更新检查
+- 摄入过程中把文档状态、最近进度、最近完成时间持久化到客户端 vault 内，桌面端可直接展示文档管理视图
+- 桌面端通过本地 Flask API + WebView 页面承载交互；客户端页面沿用服务端文档管理 / 问答的视觉样式，并通过后台线程执行 ingest，文档页展示实时进度
+- 对于明文模式，GUI 会自动禁用“访问口令”输入框；文档载入、上传、删除、问答等本地 API 不再要求传入口令，便于单机便捷使用
+- 文档列表默认隐藏本地存储生成的十六进制前缀，统一展示用户可读文件名，并将“上传时间”收敛为紧凑的“最近更新”日期时间
+- 问答页证据区使用分组卡片展示置信度、摘要、Wiki / 片段 / 事实证据，片段摘要会清洗 YAML frontmatter 后再展示
+- “已存在知识库”下拉框由服务端首屏 HTML 直接渲染当前仓库选项，前端脚本再接管刷新与切换，避免 WebView 初始化异常时列表空白
+- `载入内容` / 切换当前知识库时只更新仓库摘要，不重新整体重绘知识库下拉区域，降低 WebView 下交互失效风险
+- 上传弹窗支持多文件选择；提交后立即关闭弹窗并把文件插入文档列表，后台按本地任务队列依次处理
+- 客户端上传队列的暂存文件保留原始文件名，使用独立临时目录避免冲突，确保中文文件名的 `.csv/.xlsx` 等扩展名不会在暂存阶段丢失
+- `/api/bootstrap` 与文档列表接口会返回未完成上传任务，页面刷新后可恢复“处理中 / 排队中”文档显示与轮询
+- 任务进度事件中的 `ready` 仅用于表达“进度已到 100%”，任务注册器仍保持 `running`，直到后台线程完成文档列表回填并显式写成 `done`；前端轮询只在最终 `done/failed` 后停止，避免列表状态停留在“处理中”
+- 文档管理页提供删除动作；删除时会清理客户端 vault 中的文档状态、`raw/` 原始/转换文件、`facts/records/*.jsonl`、受该文档摄入影响的本地 Wiki 页面，以及 Qdrant 中对应的 page / chunk / fact 向量，并在删除后重建 `index.md` 与 `overview.md` 以避免继续引用已删除内容
+- 客户端测试除路由/状态流外，还需校验“渲染后的最终内联脚本”可被浏览器解析，避免 Python 模板字符串转义导致前端整段脚本失效
+- 机密客户端遇到老式 `.doc` 文件时，会优先尝试本地自动转换为 `.docx`（macOS `textutil` / LibreOffice），再交给 MinerU；若当前环境无可用转换器，则提示用户先转为 `.docx` 或 PDF
 
 ## 9. 默认 Schema 模板
 
@@ -1471,13 +1509,13 @@ open-llm-wiki/
 │   ├── cli.py             ← 机密知识库 CLI
 │   ├── controller.py      ← 桌面端与 CLI 复用的控制层
 │   ├── crypto.py          ← 本地加密实现（scrypt + AES-GCM）
-│   ├── desktop.py         ← Tkinter 桌面客户端入口
-│   ├── gui.py             ← Tkinter 界面
+│   ├── desktop.py         ← WebView 桌面客户端入口
+│   ├── gui.py             ← 本地 Flask + WebView GUI（复用服务端页面设计）
 │   ├── health.py          ← 外部服务健康检查
-│   ├── manager.py         ← 本地 repo 管理 / 导入 / 导出
-│   ├── repository.py      ← 加密仓库 manifest + vault 封装
+│   ├── manager.py         ← 本地 repo 管理 / 导入导出 / 默认服务配置加载
+│   ├── repository.py      ← 加密仓库 manifest + vault 封装 / 文档状态持久化
 │   ├── qdrant.py          ← 机密模式 Qdrant payload 最小化适配器
-│   ├── runtime.py         ← 本地 ingest / query 运行时
+│   ├── runtime.py         ← 本地 ingest / query 运行时（含文档进度回调）
 │   ├── update.py          ← 自动更新检查
 │   └── version.py         ← 客户端版本元数据
 ├── utils.py               ← 工具函数（Markdown/JSONL/表格 records）
@@ -1504,6 +1542,8 @@ open-llm-wiki/
 │   └── deploy.sh          ← 部署脚本
 ├── packaging/
 │   ├── appcast.sample.json ← 自动更新清单样例
+│   ├── client/
+│   │   └── default-services.example.json ← 客户端默认服务配置示例
 │   ├── confidential-client.spec ← PyInstaller 打包配置
 │   ├── macos/
 │   │   └── Info.plist.template

@@ -293,6 +293,7 @@ class WikiEngine:
         repo: Any,
         username: str,
         source_filename: str,
+        progress_callback=None,
     ) -> Generator[dict, None, None]:
         """Ingest a raw source file into the wiki.
 
@@ -492,10 +493,19 @@ class WikiEngine:
         if fact_records and self._qdrant:
             yield _progress("index", 84, f"Indexing {len(fact_records)} fact records …")
             try:
+                def _on_fact_progress(done: int, total: int) -> None:
+                    if not progress_callback or total <= 0:
+                        return
+                    pct = min(87, 84 + int(3 * done / total))
+                    progress_callback(
+                        _progress("index", pct, f"Indexing {done}/{total} fact records …")
+                    )
+
                 self._qdrant.upsert_fact_records(
                     repo_id=repo_id,
                     source_filename=source_filename,
                     records=fact_records,
+                    progress_callback=_on_fact_progress,
                 )
             except QdrantServiceError as exc:
                 logger.error("Fact upsert failed for %s: %s", source_filename, exc)

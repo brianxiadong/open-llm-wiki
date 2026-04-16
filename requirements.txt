@@ -16,3 +16,4 @@ trafilatura>=2.0
 lxml_html_clean>=0.4
 xai-sdk>=1.11
 openpyxl>=3.1
+pywebview>=5.1

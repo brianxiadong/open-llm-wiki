@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import platform
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from confidential_client.repository import ConfidentialRepository
 from confidential_client.version import DEFAULT_UPDATE_CHANNEL, DEFAULT_UPDATE_MANIFEST_URL
+from config import Config
 from llmwiki_core.contracts import ConfidentialServices
 
 
@@ -24,6 +26,21 @@ def default_client_home() -> Path:
     return home / ".open-llm-wiki-client"
 
 
+def default_services_from_server_config() -> ConfidentialServices:
+    return ConfidentialServices(
+        llm_api_base=Config.LLM_API_BASE,
+        llm_api_key=Config.LLM_API_KEY,
+        llm_model=Config.LLM_MODEL,
+        llm_max_tokens=Config.LLM_MAX_TOKENS,
+        embedding_api_base=Config.EMBEDDING_API_BASE,
+        embedding_api_key=Config.EMBEDDING_API_KEY,
+        embedding_model=Config.EMBEDDING_MODEL,
+        embedding_dimensions=Config.EMBEDDING_DIMENSIONS,
+        qdrant_url=Config.QDRANT_URL,
+        mineru_api_url=Config.MINERU_API_URL,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ClientRepoSummary:
     repo_uuid: str
@@ -31,6 +48,7 @@ class ClientRepoSummary:
     name: str
     slug: str
     mode: str
+    storage_mode: str
     repo_dir: Path
     updated_at: str
 
@@ -60,6 +78,7 @@ class ClientWorkspaceManager:
                     name=manifest.name,
                     slug=manifest.slug,
                     mode=manifest.mode,
+                    storage_mode=manifest.storage_mode,
                     repo_dir=manifest_path.parent,
                     updated_at=manifest.updated_at,
                 )
@@ -74,6 +93,7 @@ class ClientWorkspaceManager:
         slug: str,
         passphrase: str,
         services: ConfidentialServices,
+        storage_mode: str = "encrypted",
         schema_markdown: str | None = None,
     ) -> ClientRepoSummary:
         import uuid
@@ -86,6 +106,7 @@ class ClientWorkspaceManager:
             slug=slug,
             passphrase=passphrase,
             services=services,
+            storage_mode=storage_mode,
             schema_markdown=schema_markdown,
             repo_uuid=repo_uuid,
         )
@@ -153,6 +174,27 @@ class ClientWorkspaceManager:
         self.config_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
         return merged
 
+    def load_default_services(self) -> ConfidentialServices:
+        for path in self._default_services_candidates():
+            if path.exists():
+                return ConfidentialServices.from_dict(
+                    json.loads(path.read_text(encoding="utf-8"))
+                )
+        return default_services_from_server_config()
+
+    def list_documents(self, repo_uuid: str, passphrase: str) -> list[dict]:
+        repo = self.get_repository(repo_uuid)
+        with repo.unlocked(passphrase) as workspace:
+            documents = workspace.load_documents()
+        documents.sort(
+            key=lambda item: (
+                str(item.get("updated_at") or item.get("last_ingested_at") or ""),
+                str(item.get("filename") or ""),
+            ),
+            reverse=True,
+        )
+        return documents
+
     def _summary_for(self, repo: ConfidentialRepository) -> ClientRepoSummary:
         manifest = repo.manifest
         return ClientRepoSummary(
@@ -161,6 +203,7 @@ class ClientWorkspaceManager:
             name=manifest.name,
             slug=manifest.slug,
             mode=manifest.mode,
+            storage_mode=manifest.storage_mode,
             repo_dir=repo.repo_dir,
             updated_at=manifest.updated_at,
         )
@@ -173,3 +216,14 @@ class ClientWorkspaceManager:
             if item.repo_uuid == repo_uuid:
                 return item.repo_dir
         raise FileNotFoundError(f"Repository not found: {repo_uuid}")
+
+    def _default_services_candidates(self) -> list[Path]:
+        project_root = Path(__file__).resolve().parent.parent
+        module_dir = Path(__file__).resolve().parent
+        executable_dir = Path(sys.executable).resolve().parent
+        return [
+            project_root / "packaging" / "client" / "default-services.local.json",
+            module_dir / "default-services.local.json",
+            executable_dir / "default-services.json",
+            self.client_home / "private" / "default-services.json",
+        ]

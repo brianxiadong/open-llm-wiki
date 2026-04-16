@@ -285,16 +285,25 @@ def test_ingest_indexes_fact_records_if_present(tmp_data_dir):
         "---\ntitle: 首页\ntype: index\nupdated: 2026-01-01\n---\n\n# 首页\n",
     ]
     mock_qdrant = MagicMock()
+    progress_events = []
+
+    def fake_upsert_fact_records(**kwargs):
+        kwargs["progress_callback"](10, 100)
+        kwargs["progress_callback"](80, 100)
+
+    mock_qdrant.upsert_fact_records.side_effect = fake_upsert_fact_records
 
     engine = WikiEngine(mock_llm, mock_qdrant, tmp_data_dir)
     repo = MagicMock()
     repo.slug = "facts-kb"
     repo.id = 7
 
-    events = list(engine.ingest(repo, "alice", "sales.md"))
+    events = list(engine.ingest(repo, "alice", "sales.md", progress_callback=progress_events.append))
 
     assert any(e.get("phase") == "done" for e in events)
     mock_qdrant.upsert_fact_records.assert_called_once()
+    assert any(event.get("message") == "Indexing 10/100 fact records …" for event in progress_events)
+    assert any(event.get("message") == "Indexing 80/100 fact records …" for event in progress_events)
 
 
 def test_query_with_evidence_returns_fact_evidence(tmp_data_dir):

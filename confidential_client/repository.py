@@ -1,4 +1,4 @@
-"""Encrypted local repository for confidential knowledge bases."""
+"""Local repository bundle for confidential knowledge bases."""
 
 from __future__ import annotations
 
@@ -18,8 +18,11 @@ from confidential_client.crypto import decrypt_bytes, derive_key, encrypt_bytes,
 from llmwiki_core.contracts import ConfidentialServices, LocalRepoPaths, RepoRef
 from utils import DEFAULT_SCHEMA_MD, ensure_repo_dirs
 
-_MANIFEST_VERSION = 1
+_MANIFEST_VERSION = 2
 _LOCAL_USERNAME = "_confidential"
+STORAGE_MODE_ENCRYPTED = "encrypted"
+STORAGE_MODE_PLAIN = "plain"
+SUPPORTED_STORAGE_MODES = {STORAGE_MODE_ENCRYPTED, STORAGE_MODE_PLAIN}
 
 
 def _utc_now() -> str:
@@ -31,6 +34,24 @@ def _stable_repo_numeric_id(repo_uuid: str) -> int:
     return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
 
 
+def _safe_extract_tar(tar: tarfile.TarFile, target_dir: Path) -> None:
+    target_root = target_dir.resolve()
+    for member in tar.getmembers():
+        destination = (target_root / member.name).resolve()
+        try:
+            destination.relative_to(target_root)
+        except ValueError as exc:
+            raise ValueError(f"tar archive contains unsafe path: {member.name}") from exc
+        if member.islnk() or member.issym():
+            raise ValueError(f"tar archive contains unsupported link entry: {member.name}")
+        if not member.isdir() and not member.isfile():
+            raise ValueError(f"tar archive contains unsupported entry: {member.name}")
+        try:
+            tar.extract(member, target_root, filter="data")
+        except TypeError:
+            tar.extract(member, target_root)
+
+
 @dataclass(slots=True)
 class RepositoryManifest:
     version: int
@@ -39,6 +60,7 @@ class RepositoryManifest:
     name: str
     slug: str
     mode: str
+    storage_mode: str
     created_at: str
     updated_at: str
     kdf_salt: str
@@ -55,9 +77,10 @@ class RepositoryManifest:
             name=str(data["name"]),
             slug=str(data["slug"]),
             mode=str(data.get("mode", "confidential")),
+            storage_mode=str(data.get("storage_mode", STORAGE_MODE_ENCRYPTED)),
             created_at=str(data["created_at"]),
             updated_at=str(data["updated_at"]),
-            kdf_salt=str(data["kdf_salt"]),
+            kdf_salt=str(data.get("kdf_salt", "")),
         )
 
 
@@ -77,6 +100,10 @@ class UnlockedWorkspace:
     @property
     def history_path(self) -> Path:
         return self.workspace_dir / "state" / "history.json"
+
+    @property
+    def documents_path(self) -> Path:
+        return self.workspace_dir / "state" / "documents.json"
 
     @property
     def repo_paths(self) -> LocalRepoPaths:
@@ -122,9 +149,21 @@ class UnlockedWorkspace:
             return []
         return json.loads(self.history_path.read_text(encoding="utf-8"))
 
+    def load_documents(self) -> list[dict[str, Any]]:
+        if not self.documents_path.exists():
+            return []
+        return json.loads(self.documents_path.read_text(encoding="utf-8"))
+
+    def save_documents(self, documents: list[dict[str, Any]]) -> None:
+        self.documents_path.parent.mkdir(parents=True, exist_ok=True)
+        self.documents_path.write_text(
+            json.dumps(documents, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
 
 class ConfidentialRepository:
-    """Encrypted local repository bundle."""
+    """Local repository bundle supporting encrypted and plain storage."""
 
     def __init__(self, repo_dir: str | Path) -> None:
         self.repo_dir = Path(repo_dir)
@@ -138,6 +177,10 @@ class ConfidentialRepository:
     def manifest(self) -> RepositoryManifest:
         return self._manifest
 
+    @property
+    def requires_passphrase(self) -> bool:
+        return self._manifest.storage_mode == STORAGE_MODE_ENCRYPTED
+
     @classmethod
     def create(
         cls,
@@ -147,6 +190,7 @@ class ConfidentialRepository:
         slug: str,
         passphrase: str,
         services: ConfidentialServices,
+        storage_mode: str = STORAGE_MODE_ENCRYPTED,
         schema_markdown: str | None = None,
         repo_uuid: str | None = None,
     ) -> "ConfidentialRepository":
@@ -155,6 +199,11 @@ class ConfidentialRepository:
         target = Path(repo_dir)
         target.mkdir(parents=True, exist_ok=True)
         repo_uuid = repo_uuid or str(uuid.uuid4())
+        normalized_storage_mode = str(storage_mode or STORAGE_MODE_ENCRYPTED).strip().lower()
+        if normalized_storage_mode not in SUPPORTED_STORAGE_MODES:
+            raise ValueError(f"Unsupported storage mode: {storage_mode}")
+        if normalized_storage_mode == STORAGE_MODE_ENCRYPTED and not str(passphrase or "").strip():
+            raise ValueError("加密模式必须设置访问口令")
         manifest = RepositoryManifest(
             version=_MANIFEST_VERSION,
             repo_uuid=repo_uuid,
@@ -162,9 +211,10 @@ class ConfidentialRepository:
             name=name,
             slug=slug,
             mode="confidential",
+            storage_mode=normalized_storage_mode,
             created_at=_utc_now(),
             updated_at=_utc_now(),
-            kdf_salt=generate_salt(),
+            kdf_salt=generate_salt() if normalized_storage_mode == STORAGE_MODE_ENCRYPTED else "",
         )
         repo = cls.__new__(cls)
         repo.repo_dir = target
@@ -182,6 +232,7 @@ class ConfidentialRepository:
             workspace.save_services(services)
             workspace.history_path.parent.mkdir(parents=True, exist_ok=True)
             workspace.history_path.write_text("[]", encoding="utf-8")
+            workspace.documents_path.write_text("[]", encoding="utf-8")
             (workspace_root / "wiki" / "schema.md").write_text(
                 schema_markdown or DEFAULT_SCHEMA_MD,
                 encoding="utf-8",
@@ -217,7 +268,7 @@ class ConfidentialRepository:
 
     def _extract_workspace(self, payload: bytes, target_dir: Path) -> None:
         with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
-            tar.extractall(target_dir, filter="data")
+            _safe_extract_tar(tar, target_dir)
 
     @contextmanager
     def unlocked(self, passphrase: str) -> Iterator[UnlockedWorkspace]:
@@ -226,22 +277,28 @@ class ConfidentialRepository:
         workspace_dir.mkdir(parents=True, exist_ok=True)
         try:
             if self.vault_path.exists() and self.vault_path.stat().st_size > 0:
+                if self.requires_passphrase:
+                    key = derive_key(passphrase, self._manifest.kdf_salt)
+                    plain = decrypt_bytes(
+                        self.vault_path.read_bytes(),
+                        key=key,
+                        aad=self._manifest.repo_uuid.encode("utf-8"),
+                    )
+                else:
+                    plain = self.vault_path.read_bytes()
+                self._extract_workspace(plain, root_dir)
+            yield UnlockedWorkspace(manifest=self._manifest, root_dir=root_dir)
+            archive = self._archive_workspace(workspace_dir)
+            if self.requires_passphrase:
                 key = derive_key(passphrase, self._manifest.kdf_salt)
-                plain = decrypt_bytes(
-                    self.vault_path.read_bytes(),
+                payload = encrypt_bytes(
+                    archive,
                     key=key,
                     aad=self._manifest.repo_uuid.encode("utf-8"),
                 )
-                self._extract_workspace(plain, root_dir)
-            yield UnlockedWorkspace(manifest=self._manifest, root_dir=root_dir)
-            key = derive_key(passphrase, self._manifest.kdf_salt)
-            archive = self._archive_workspace(workspace_dir)
-            encrypted = encrypt_bytes(
-                archive,
-                key=key,
-                aad=self._manifest.repo_uuid.encode("utf-8"),
-            )
-            self.vault_path.write_bytes(encrypted)
+            else:
+                payload = archive
+            self.vault_path.write_bytes(payload)
             self._manifest.updated_at = _utc_now()
             self._write_manifest()
         finally:
@@ -259,5 +316,5 @@ class ConfidentialRepository:
         target = Path(repo_dir)
         target.mkdir(parents=True, exist_ok=True)
         with tarfile.open(bundle_path, mode="r:gz") as tar:
-            tar.extractall(target, filter="data")
+            _safe_extract_tar(tar, target)
         return cls(target)

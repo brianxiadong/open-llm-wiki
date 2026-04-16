@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from openai import OpenAI, OpenAIError
@@ -20,6 +22,10 @@ _CONTENT_MAX = 5000
 
 
 class QdrantService:
+    UPSERT_BATCH_SIZE = 256
+    EMBEDDING_BATCH_SIZE = 32
+    EMBEDDING_MAX_WORKERS = 4
+
     def __init__(
         self,
         qdrant_url: str,
@@ -29,27 +35,76 @@ class QdrantService:
         embedding_dimensions: int = 1024,
     ) -> None:
         self._qdrant = QdrantClient(url=qdrant_url)
-        self._embedding = OpenAI(
-            base_url=embedding_api_base,
-            api_key=embedding_api_key or "dummy",
-        )
+        self._embedding_api_base = embedding_api_base
+        self._embedding_api_key = embedding_api_key or "dummy"
+        self._embedding = self._create_embedding_client()
         self._embedding_model = embedding_model
         self._embedding_dimensions = embedding_dimensions
 
     def _collection_name(self, repo_id: int) -> str:
         return f"repo_{repo_id}"
 
+    def _create_embedding_client(self) -> OpenAI:
+        return OpenAI(
+            base_url=self._embedding_api_base,
+            api_key=self._embedding_api_key,
+        )
+
+    def _upsert_points_in_batches(
+        self,
+        *,
+        collection_name: str,
+        points: list[PointStruct],
+    ) -> None:
+        if not points:
+            return
+        try:
+            for start in range(0, len(points), self.UPSERT_BATCH_SIZE):
+                batch = points[start:start + self.UPSERT_BATCH_SIZE]
+                self._qdrant.upsert(collection_name=collection_name, points=batch)
+        except UnexpectedResponse as e:
+            logger.exception("Qdrant batch upsert failed collection=%s", collection_name)
+            raise QdrantServiceError(str(e)) from e
+        except Exception as e:
+            logger.exception("Qdrant batch upsert failed collection=%s", collection_name)
+            raise QdrantServiceError(str(e)) from e
+
     @staticmethod
     def _stable_point_id(repo_id: int, filename: str) -> int:
         digest = hashlib.md5(f"{repo_id}:{filename}".encode()).hexdigest()
         return int(digest[:16], 16)
 
-    def _embed(self, text: str) -> list[float]:
+    def _log_embedding_result(self, *, batch_size: int, response: Any, elapsed_ms: float) -> None:
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            logger.debug(
+                "Embedding ok model=%s batch_size=%s total_tokens=%s latency_ms=%.2f",
+                self._embedding_model,
+                batch_size,
+                getattr(usage, "total_tokens", None),
+                elapsed_ms,
+            )
+        else:
+            logger.debug(
+                "Embedding ok model=%s batch_size=%s latency_ms=%.2f",
+                self._embedding_model,
+                batch_size,
+                elapsed_ms,
+            )
+
+    def _embed_batch(
+        self,
+        texts: list[str],
+        *,
+        client: OpenAI | None = None,
+    ) -> list[list[float]]:
+        if not texts:
+            return []
         start = time.perf_counter()
         try:
-            response = self._embedding.embeddings.create(
+            response = (client or self._embedding).embeddings.create(
                 model=self._embedding_model,
-                input=text,
+                input=texts[0] if len(texts) == 1 else texts,
             )
         except OpenAIError as e:
             logger.exception("Embedding API error model=%s", self._embedding_model)
@@ -58,21 +113,109 @@ class QdrantService:
         if not response.data:
             raise QdrantServiceError("Embedding response contained no data")
         elapsed_ms = (time.perf_counter() - start) * 1000.0
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            logger.debug(
-                "Embedding ok model=%s total_tokens=%s latency_ms=%.2f",
-                self._embedding_model,
-                getattr(usage, "total_tokens", None),
-                elapsed_ms,
+        self._log_embedding_result(batch_size=len(texts), response=response, elapsed_ms=elapsed_ms)
+        ordered = sorted(response.data, key=lambda item: int(getattr(item, "index", 0)))
+        vectors = [list(item.embedding) for item in ordered]
+        if len(vectors) != len(texts):
+            raise QdrantServiceError(
+                f"Embedding response size mismatch: expected {len(texts)}, got {len(vectors)}"
             )
-        else:
-            logger.debug(
-                "Embedding ok model=%s latency_ms=%.2f",
-                self._embedding_model,
-                elapsed_ms,
+        return vectors
+
+    def _embed(self, text: str) -> list[float]:
+        return self._embed_batch([text])[0]
+
+    def _prepare_fact_entries(
+        self,
+        records: list[dict],
+        *,
+        source_filename: str,
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        for record in records:
+            fact_text = str(record.get("fact_text") or "").strip()
+            if not fact_text:
+                continue
+            entries.append(
+                {
+                    "record": record,
+                    "fact_text": fact_text,
+                }
             )
-        return list(response.data[0].embedding)
+        return entries
+
+    def _embed_fact_batch_with_fallback(
+        self,
+        *,
+        source_filename: str,
+        batch_entries: list[dict[str, Any]],
+        use_isolated_client: bool,
+    ) -> list[tuple[dict[str, Any], list[float]]]:
+        if not batch_entries:
+            return []
+        client = self._create_embedding_client() if use_isolated_client else self._embedding
+        try:
+            vectors = self._embed_batch(
+                [entry["fact_text"] for entry in batch_entries],
+                client=client,
+            )
+            return list(zip(batch_entries, vectors))
+        except QdrantServiceError:
+            logger.warning(
+                "Fact batch embed failed source=%s batch_size=%s; retrying individually",
+                source_filename,
+                len(batch_entries),
+            )
+            embedded_entries: list[tuple[dict[str, Any], list[float]]] = []
+            for entry in batch_entries:
+                record = entry["record"]
+                try:
+                    vector = self._embed_batch([entry["fact_text"]], client=client)[0]
+                except QdrantServiceError:
+                    logger.warning(
+                        "Fact embed failed source=%s record_id=%s",
+                        source_filename,
+                        record.get("record_id"),
+                    )
+                    continue
+                embedded_entries.append((entry, vector))
+            return embedded_entries
+
+    def _iter_embedded_fact_batches(
+        self,
+        *,
+        source_filename: str,
+        entries: list[dict[str, Any]],
+    ):
+        batch_specs = [
+            entries[start:start + self.EMBEDDING_BATCH_SIZE]
+            for start in range(0, len(entries), self.EMBEDDING_BATCH_SIZE)
+        ]
+        if not batch_specs:
+            return
+        if len(batch_specs) == 1 or self.EMBEDDING_MAX_WORKERS <= 1:
+            for batch_entries in batch_specs:
+                yield self._embed_fact_batch_with_fallback(
+                    source_filename=source_filename,
+                    batch_entries=batch_entries,
+                    use_isolated_client=False,
+                )
+            return
+        with ThreadPoolExecutor(
+            max_workers=min(self.EMBEDDING_MAX_WORKERS, len(batch_specs)),
+            thread_name_prefix="fact-embed",
+        ) as executor:
+            futures = [
+                executor.submit(
+                    self._embed_fact_batch_with_fallback,
+                    source_filename=source_filename,
+                    batch_entries=batch_entries,
+                    use_isolated_client=True,
+                )
+                for batch_entries in batch_specs
+            ]
+            for future in as_completed(futures):
+                yield future.result()
 
     def ensure_collection(self, repo_id: int) -> None:
         name = self._collection_name(repo_id)
@@ -138,14 +281,7 @@ class QdrantService:
             },
         )
 
-        try:
-            self._qdrant.upsert(collection_name=collection, points=[point])
-        except UnexpectedResponse as e:
-            logger.exception("Qdrant upsert failed collection=%s", collection)
-            raise QdrantServiceError(str(e)) from e
-        except Exception as e:
-            logger.exception("Qdrant upsert failed collection=%s", collection)
-            raise QdrantServiceError(str(e)) from e
+        self._upsert_points_in_batches(collection_name=collection, points=[point])
 
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         logger.info(
@@ -255,48 +391,49 @@ class QdrantService:
         repo_id: int,
         source_filename: str,
         records: list[dict],
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> None:
         if not records:
             return
         self.ensure_fact_collection(repo_id)
         collection = self._fact_collection_name(repo_id)
-        points = []
-        for record in records:
-            fact_text = str(record.get("fact_text") or "").strip()
-            if not fact_text:
-                continue
-            try:
-                vector = self._embed(fact_text)
-            except QdrantServiceError:
-                logger.warning(
-                    "Fact embed failed source=%s record_id=%s",
+        entries = self._prepare_fact_entries(records, source_filename=source_filename)
+        if not entries:
+            return
+        processed = 0
+        total = len(entries)
+        for embedded_batch in self._iter_embedded_fact_batches(
+            source_filename=source_filename,
+            entries=entries,
+        ):
+            points: list[PointStruct] = []
+            for entry, vector in embedded_batch:
+                record = entry["record"]
+                point_id = self._stable_fact_point_id(
+                    repo_id,
                     source_filename,
-                    record.get("record_id"),
+                    str(record.get("record_id") or ""),
                 )
+                payload = {
+                    "repo_id": repo_id,
+                    "record_id": record.get("record_id", ""),
+                    "source_file": record.get("source_file", source_filename),
+                    "source_markdown_filename": record.get(
+                        "source_markdown_filename", source_filename
+                    ),
+                    "sheet": record.get("sheet", ""),
+                    "row_index": record.get("row_index", 0),
+                    "fields": record.get("fields", {}),
+                    "fact_text": entry["fact_text"][:800],
+                }
+                points.append(PointStruct(id=point_id, vector=vector, payload=payload))
+            if not points:
                 continue
-            point_id = self._stable_fact_point_id(
-                repo_id,
-                source_filename,
-                str(record.get("record_id") or ""),
-            )
-            payload = {
-                "repo_id": repo_id,
-                "record_id": record.get("record_id", ""),
-                "source_file": record.get("source_file", source_filename),
-                "source_markdown_filename": record.get(
-                    "source_markdown_filename", source_filename
-                ),
-                "sheet": record.get("sheet", ""),
-                "row_index": record.get("row_index", 0),
-                "fields": record.get("fields", {}),
-                "fact_text": fact_text[:800],
-            }
-            points.append(PointStruct(id=point_id, vector=vector, payload=payload))
-        if points:
-            try:
-                self._qdrant.upsert(collection_name=collection, points=points)
-            except Exception as e:
-                raise QdrantServiceError(str(e)) from e
+            self._upsert_points_in_batches(collection_name=collection, points=points)
+            processed += len(points)
+            if progress_callback:
+                progress_callback(processed, total)
 
     def search_facts(
         self, repo_id: int, query: str, limit: int = 8
@@ -483,10 +620,7 @@ class QdrantService:
                 },
             ))
         if points:
-            try:
-                self._qdrant.upsert(collection_name=collection, points=points)
-            except Exception as e:
-                raise QdrantServiceError(str(e)) from e
+            self._upsert_points_in_batches(collection_name=collection, points=points)
 
     def search_chunks(
         self, repo_id: int, query: str, limit: int = 8

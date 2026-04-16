@@ -332,6 +332,52 @@ def test_upsert_page():
     }
 
 
+def test_upsert_fact_records_batches_large_payloads():
+    with patch("qdrant_service.QdrantClient") as mock_qc, patch("qdrant_service.OpenAI") as mock_oa:
+        mock_q = mock_qc.return_value
+        mock_q.collection_exists.return_value = True
+
+        def fake_embed(*, model, input):
+            texts = input if isinstance(input, list) else [input]
+            response = MagicMock()
+            response.data = [
+                MagicMock(index=idx, embedding=[float(idx + 1)] * 8)
+                for idx, _ in enumerate(texts)
+            ]
+            response.usage = MagicMock(total_tokens=len(texts))
+            return response
+
+        mock_oa.return_value.embeddings.create.side_effect = fake_embed
+
+        svc = QdrantService("http://q", "http://e", "k", "em", embedding_dimensions=8)
+        records = [
+            {
+                "record_id": f"row-{idx}",
+                "source_file": "250411.xlsx",
+                "source_markdown_filename": "250411.md",
+                "sheet": "Sheet1",
+                "row_index": idx,
+                "fields": {"id": idx},
+                "fact_text": f"row {idx}",
+            }
+            for idx in range(QdrantService.UPSERT_BATCH_SIZE * 2 + 17)
+        ]
+
+        svc.upsert_fact_records(repo_id=3, source_filename="250411.md", records=records)
+
+    expected_upserts = (
+        len(records) + QdrantService.EMBEDDING_BATCH_SIZE - 1
+    ) // QdrantService.EMBEDDING_BATCH_SIZE
+    assert mock_q.upsert.call_count == expected_upserts
+    total_points = sum(len(call.kwargs["points"]) for call in mock_q.upsert.call_args_list)
+    assert total_points == len(records)
+    assert all(
+        len(call.kwargs["points"]) <= QdrantService.UPSERT_BATCH_SIZE
+        for call in mock_q.upsert.call_args_list
+    )
+    assert mock_oa.return_value.embeddings.create.call_count < len(records)
+
+
 def test_search_with_results():
     mock_hit = MagicMock()
     mock_hit.payload = {"filename": "f.md", "title": "T"}

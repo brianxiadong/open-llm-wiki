@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -28,12 +29,15 @@ def test_build_confidential_client_script_creates_launcher(tmp_path):
     launcher = build_dir / "run-client.sh"
     readme = build_dir / "README.txt"
     requirements = build_dir / "requirements.txt"
+    default_services = build_dir / "default-services.json"
 
     assert launcher.exists()
     assert readme.exists()
     assert requirements.exists()
+    assert default_services.exists()
     assert launcher.stat().st_mode & stat.S_IXUSR
     assert "confidential_client.desktop" in launcher.read_text(encoding="utf-8")
+    assert "qdrant_url" in json.loads(default_services.read_text(encoding="utf-8"))
 
 
 def test_binary_packaging_assets_exist():
@@ -58,6 +62,7 @@ def test_binary_packaging_assets_exist():
     assert windows_iss.exists()
     assert appcast.exists()
     assert "confidential_client/desktop.py" in spec_file.read_text(encoding="utf-8")
+    assert "default-services.json" in spec_file.read_text(encoding="utf-8")
     assert "pyinstaller" in build_script.read_text(encoding="utf-8").lower()
     assert "codesign" in sign_macos.read_text(encoding="utf-8")
     assert "signtool sign" in sign_windows.read_text(encoding="utf-8").lower()

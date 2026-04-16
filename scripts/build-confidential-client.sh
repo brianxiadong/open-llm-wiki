@@ -28,13 +28,36 @@ Run:
 
 Requirements:
   - Python 3.11+
-  - tkinter available in the Python runtime
+  - pywebview available in the Python runtime
+  - system WebView runtime available (macOS WebKit / Windows WebView2)
   - dependencies installed from requirements.txt
 
 This package is a thin local launcher for the confidential client.
+It includes a bundled default-services.json derived from the build machine config.
 For a fully self-contained binary, add a PyInstaller/Nuitka stage later.
 EOF
 
 cp "${ROOT_DIR}/requirements.txt" "${BUILD_DIR}/requirements.txt"
+
+ROOT_DIR_ENV="${ROOT_DIR}" BUILD_DIR_ENV="${BUILD_DIR}" "${PYTHON_BIN}" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+from confidential_client.manager import default_services_from_server_config
+
+root_dir = Path(os.environ["ROOT_DIR_ENV"])
+build_dir = Path(os.environ["BUILD_DIR_ENV"])
+local_defaults_path = root_dir / "packaging" / "client" / "default-services.local.json"
+bundle_defaults_path = build_dir / "default-services.json"
+
+if local_defaults_path.exists():
+    bundle_defaults_path.write_text(local_defaults_path.read_text(encoding="utf-8"), encoding="utf-8")
+else:
+    bundle_defaults_path.write_text(
+        json.dumps(default_services_from_server_config().to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+PY
 
 echo "Built client launcher at ${BUILD_DIR}"

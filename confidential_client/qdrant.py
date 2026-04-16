@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -211,7 +212,7 @@ class ConfidentialQdrantService(QdrantService):
                     )
                 )
         if points:
-            self._qdrant.upsert(
+            self._upsert_points_in_batches(
                 collection_name=self._chunk_collection_name(repo_id),
                 points=points,
             )
@@ -280,63 +281,75 @@ class ConfidentialQdrantService(QdrantService):
         repo_id: int,
         source_filename: str,
         records: list[dict],
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> None:
         if not records:
             return
         self.ensure_fact_collection(repo_id)
-        points = []
+        entries = self._prepare_fact_entries(records, source_filename=source_filename)
+        if not entries:
+            return
+        processed = 0
         with self._connect() as conn:
             conn.execute(
                 "DELETE FROM fact_map WHERE repo_id = ? AND source_markdown_filename = ?",
                 (repo_id, source_filename),
             )
-            for record in records:
-                fact_text = str(record.get("fact_text") or "").strip()
-                if not fact_text:
+            total = len(entries)
+            for embedded_batch in self._iter_embedded_fact_batches(
+                source_filename=source_filename,
+                entries=entries,
+            ):
+                points: list[PointStruct] = []
+                for entry, vector in embedded_batch:
+                    record = entry["record"]
+                    point_id = self._safe_point_id(
+                        self._stable_fact_point_id(
+                            repo_id,
+                            source_filename,
+                            str(record.get("record_id") or ""),
+                        )
+                    )
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO fact_map(
+                            repo_id, point_id, record_id, source_file, source_markdown_filename,
+                            sheet, row_index, fields_json, fact_text
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            repo_id,
+                            point_id,
+                            str(record.get("record_id") or ""),
+                            str(record.get("source_file", source_filename)),
+                            str(record.get("source_markdown_filename", source_filename)),
+                            str(record.get("sheet", "")),
+                            int(record.get("row_index", 0)),
+                            json.dumps(record.get("fields", {}), ensure_ascii=False),
+                            entry["fact_text"][:800],
+                        ),
+                    )
+                    points.append(
+                        PointStruct(
+                            id=point_id,
+                            vector=vector,
+                            payload={
+                                "repo_id": repo_id,
+                                "point_ref": f"fact:{point_id}",
+                                "kind": "fact",
+                            },
+                        )
+                    )
+                if not points:
                     continue
-                vector = self._embed(fact_text)
-                point_id = self._safe_point_id(
-                    self._stable_fact_point_id(
-                        repo_id,
-                        source_filename,
-                        str(record.get("record_id") or ""),
-                    )
+                self._upsert_points_in_batches(
+                    collection_name=self._fact_collection_name(repo_id),
+                    points=points,
                 )
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO fact_map(
-                        repo_id, point_id, record_id, source_file, source_markdown_filename,
-                        sheet, row_index, fields_json, fact_text
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        repo_id,
-                        point_id,
-                        str(record.get("record_id") or ""),
-                        str(record.get("source_file", source_filename)),
-                        str(record.get("source_markdown_filename", source_filename)),
-                        str(record.get("sheet", "")),
-                        int(record.get("row_index", 0)),
-                        json.dumps(record.get("fields", {}), ensure_ascii=False),
-                        fact_text[:800],
-                    ),
-                )
-                points.append(
-                    PointStruct(
-                        id=point_id,
-                        vector=vector,
-                        payload={
-                            "repo_id": repo_id,
-                            "point_ref": f"fact:{point_id}",
-                            "kind": "fact",
-                        },
-                    )
-                )
-        if points:
-            self._qdrant.upsert(
-                collection_name=self._fact_collection_name(repo_id),
-                points=points,
-            )
+                processed += len(points)
+                if progress_callback:
+                    progress_callback(processed, total)
 
     def search_facts(
         self,

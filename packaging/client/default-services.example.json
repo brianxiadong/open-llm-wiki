@@ -1,0 +1,12 @@
+{
+  "llm_api_base": "http://172.36.237.245:30000/v1",
+  "llm_api_key": "dummy",
+  "llm_model": "qwen35-27b",
+  "llm_max_tokens": 4000,
+  "embedding_api_base": "http://172.36.237.245:11434/v1",
+  "embedding_api_key": "dummy",
+  "embedding_model": "bge-m3",
+  "embedding_dimensions": 1024,
+  "qdrant_url": "http://172.36.164.85:6333",
+  "mineru_api_url": "http://172.36.237.175:8000"
+}

@@ -12,3 +12,6 @@ build/
 tests/screenshots/
 .cursor/
 .superpowers/
+packaging/client/default-services.local.json
+confidential_client/default-services.local.json
+default-services.json

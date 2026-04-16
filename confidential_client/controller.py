@@ -29,6 +29,7 @@ class ConfidentialClientController:
         slug: str,
         passphrase: str,
         services: ConfidentialServices,
+        storage_mode: str = "encrypted",
         schema_markdown: str | None = None,
     ) -> ClientRepoSummary:
         return self.manager.create_repository(
@@ -36,6 +37,7 @@ class ConfidentialClientController:
             slug=slug,
             passphrase=passphrase,
             services=services,
+            storage_mode=storage_mode,
             schema_markdown=schema_markdown,
         )
 
@@ -69,6 +71,9 @@ class ConfidentialClientController:
     def save_client_settings(self, settings: dict[str, str]) -> dict[str, str]:
         return self.manager.save_client_settings(settings)
 
+    def load_default_services(self) -> ConfidentialServices:
+        return self.manager.load_default_services()
+
     def check_for_updates(
         self,
         *,
@@ -83,9 +88,15 @@ class ConfidentialClientController:
             platform_name=platform.system().lower(),
         )
 
-    def ingest_file(self, repo_uuid: str, passphrase: str, source_path: str | Path) -> list[dict]:
+    def ingest_file(
+        self,
+        repo_uuid: str,
+        passphrase: str,
+        source_path: str | Path,
+        on_event=None,
+    ) -> list[dict]:
         runtime = ConfidentialRuntime(self.manager.get_repository(repo_uuid), passphrase)
-        return runtime.ingest_file(source_path)
+        return runtime.ingest_file(source_path, on_event=on_event)
 
     def query(self, repo_uuid: str, passphrase: str, question: str) -> QueryRunResult:
         runtime = ConfidentialRuntime(self.manager.get_repository(repo_uuid), passphrase)
@@ -99,3 +110,10 @@ class ConfidentialClientController:
     def history(self, repo_uuid: str, passphrase: str) -> list[dict]:
         runtime = ConfidentialRuntime(self.manager.get_repository(repo_uuid), passphrase)
         return runtime.load_history()
+
+    def list_documents(self, repo_uuid: str, passphrase: str) -> list[dict]:
+        return self.manager.list_documents(repo_uuid, passphrase)
+
+    def delete_document(self, repo_uuid: str, passphrase: str, filename: str) -> list[dict]:
+        runtime = ConfidentialRuntime(self.manager.get_repository(repo_uuid), passphrase)
+        return runtime.delete_document(filename)
