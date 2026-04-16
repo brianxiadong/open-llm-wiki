@@ -24,6 +24,26 @@
   - 机密模式 ingest / query 本地运行时
 - `confidential_client/cli.py`
   - `create / ingest / query / history / export` CLI
+- `confidential_client/manager.py`
+  - 本地 repo 目录管理、bundle 导入导出、服务配置更新
+- `confidential_client/controller.py`
+  - GUI / CLI 共用控制层
+- `confidential_client/health.py`
+  - LLM / Embedding / Qdrant / MinerU 健康检查
+- `confidential_client/gui.py` / `desktop.py`
+  - Tkinter 桌面客户端壳层
+- `scripts/build-confidential-client.sh`
+  - 客户端 launcher 打包脚本
+- `scripts/build-confidential-client-binary.sh` + `packaging/confidential-client.spec`
+  - PyInstaller 独立二进制打包配置
+- `scripts/build-macos-app.sh` + `packaging/macos/Info.plist.template`
+  - macOS app bundle 构建骨架
+- `scripts/build-windows-installer.ps1` + `packaging/windows/open-llm-wiki-client.iss`
+  - Windows 安装包构建骨架
+- `scripts/sign-macos-client.sh` / `scripts/sign-windows-client.ps1`
+  - macOS / Windows 签名脚本
+- `confidential_client/update.py` + `packaging/appcast.sample.json`
+  - 自动更新检查与更新清单样例
 
 ## 测试范围
 
@@ -31,10 +51,31 @@
 - Qdrant payload 不含明文文本与标题
 - 本地 runtime 跑通创建 -> 摄入 -> 查询 -> 历史写入
 - CLI 创建与导出链路
+- 本地 manager 的创建 / 列表 / 删除 / 导入导出
+- controller 历史上下文拼装
+- 外部服务健康检查
+- launcher 打包脚本 smoke test
+- 二进制打包配置存在性校验
+- 自动更新版本比较与本地更新配置持久化
+
+## 当前状态
+
+当前已具备：
+
+- 本地加密 repo 管理
+- 桌面客户端壳层
+- 桌面端异步执行，避免 ingest / query 阻塞界面
+- 导入 / 导出恢复
+- 服务配置编辑
+- 健康检查
+- ingest / query / history 整体链路
+- launcher 打包
+- PyInstaller 二进制打包配置
+- macOS / Windows 安装包脚本骨架
+- 签名脚本骨架
+- 自动更新检查
 
 ## 下一阶段
 
-- 增加 PySide6 桌面壳层
-- 支持导入备份包恢复
-- 增加本地会话管理与多知识库切换
-- 增加客户端侧健康检查与服务配置页
+- 安装包签名实机接入
+- 自动更新下载与应用

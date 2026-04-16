@@ -253,3 +253,11 @@ class ConfidentialRepository:
             tar.add(self.manifest_path, arcname="manifest.json")
             tar.add(self.vault_path, arcname="vault.bin")
         return output
+
+    @classmethod
+    def restore(cls, repo_dir: str | Path, bundle_path: str | Path) -> "ConfidentialRepository":
+        target = Path(repo_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(bundle_path, mode="r:gz") as tar:
+            tar.extractall(target, filter="data")
+        return cls(target)

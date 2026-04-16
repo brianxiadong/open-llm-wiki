@@ -761,7 +761,12 @@ open-llm-wiki/
 │   └── contracts.py       ← RepoRef / LocalRepoPaths / QueryRunResult
 ├── confidential_client/   ← 本地机密知识库运行层
 │   ├── cli.py             ← 纯客户端 CLI 入口
+│   ├── controller.py      ← 客户端 workflow controller
 │   ├── crypto.py          ← 本地 vault 加解密（scrypt + AES-GCM）
+│   ├── desktop.py         ← 桌面客户端入口
+│   ├── gui.py             ← Tkinter 桌面界面
+│   ├── health.py          ← 外部服务健康检查
+│   ├── manager.py         ← 本地 repo 目录与导入导出管理
 │   ├── repository.py      ← 机密 repo manifest + 加密仓库封装
 │   ├── qdrant.py          ← 机密模式 Qdrant adapter（payload 最小化 + 本地映射）
 │   └── runtime.py         ← 客户端 ingest / query 运行时
@@ -832,6 +837,22 @@ openpyxl>=3.1
 - `cryptography`：机密客户端本地 vault 加密（AES-GCM）
 - `pyyaml`：解析 Wiki 页面的 YAML frontmatter
 - `openpyxl`：Excel 表格转 Markdown + Fact records
+
+**机密客户端 GUI**：当前实现使用 Python 标准库 `tkinter`，不新增服务端依赖，也避免在生产部署机上安装额外桌面框架；后续如需要更复杂的桌面体验，可再迁移到独立的 GUI 技术栈。
+
+**客户端启动与打包**：
+
+- 开发态启动：`python -m confidential_client.desktop` 或 `make client-desktop`
+- 轻量打包：`make client-package`
+- 独立二进制打包：`make client-binary`
+- macOS `.app` 包骨架：`make client-macos-app`
+- Windows 安装包：`make client-windows-installer`
+- `scripts/build-confidential-client.sh` 生成的是跨平台 launcher 包
+- `scripts/build-confidential-client-binary.sh` 读取 `packaging/confidential-client.spec`，在具备 `pyinstaller` 的构建机上生成独立桌面包
+- `scripts/build-macos-app.sh` 生成 `.app` 包结构
+- `scripts/build-windows-installer.ps1` 调用 Inno Setup 生成 Windows 安装包
+- `scripts/sign-macos-client.sh` / `scripts/sign-windows-client.ps1` 分别承载 macOS / Windows 签名步骤
+- `packaging/appcast.sample.json` 是自动更新清单样例
 
 ### 8.3 异步处理
 
@@ -1025,6 +1046,16 @@ QDRANT_URL=http://localhost:6333    # Qdrant 服务地址
 | 删除仓库 | 删除 collection |
 
 **机密客户端补充**：`confidential_client/qdrant.py` 在客户端模式下复用同一套检索接口，但 Qdrant payload 仅保存 `repo_id + point_ref + kind` 这类 opaque 字段；`filename/title/chunk_text/fact_text` 等可读元数据落到客户端本地 `qdrant-map.sqlite`，由本地 runtime 恢复，平台服务端不参与。
+
+**客户端完整链路**：`confidential_client/manager.py + controller.py + runtime.py + gui.py` 组合出完整客户端流程：
+
+- 本地创建 / 列出 / 删除机密知识库
+- 从导出 bundle 恢复本地知识库
+- 本地维护外部服务配置
+- 本地执行 ingest / query / history / export
+- 本地对 `LLM / Embedding / Qdrant / MinerU` 做健康检查
+- 桌面端通过后台线程执行 ingest / query / health check，避免 UI 阻塞
+- 客户端保存更新清单地址和 channel，并支持更新检查
 
 ## 9. 默认 Schema 模板
 
@@ -1438,10 +1469,17 @@ open-llm-wiki/
 ├── confidential_client/
 │   ├── __init__.py
 │   ├── cli.py             ← 机密知识库 CLI
+│   ├── controller.py      ← 桌面端与 CLI 复用的控制层
 │   ├── crypto.py          ← 本地加密实现（scrypt + AES-GCM）
+│   ├── desktop.py         ← Tkinter 桌面客户端入口
+│   ├── gui.py             ← Tkinter 界面
+│   ├── health.py          ← 外部服务健康检查
+│   ├── manager.py         ← 本地 repo 管理 / 导入 / 导出
 │   ├── repository.py      ← 加密仓库 manifest + vault 封装
 │   ├── qdrant.py          ← 机密模式 Qdrant payload 最小化适配器
-│   └── runtime.py         ← 本地 ingest / query 运行时
+│   ├── runtime.py         ← 本地 ingest / query 运行时
+│   ├── update.py          ← 自动更新检查
+│   └── version.py         ← 客户端版本元数据
 ├── utils.py               ← 工具函数（Markdown/JSONL/表格 records）
 ├── task_worker.py         ← 后台任务 Worker
 ├── exceptions.py          ← 自定义异常
@@ -1457,7 +1495,20 @@ open-llm-wiki/
 ├── migrations/            ← SQL 迁移文件
 │   └── 001_init.sql
 ├── scripts/
+│   ├── build-confidential-client.sh ← 客户端 launcher 打包脚本
+│   ├── build-confidential-client-binary.sh ← 客户端二进制打包脚本
+│   ├── build-macos-app.sh ← macOS app bundle 构建脚本
+│   ├── build-windows-installer.ps1 ← Windows 安装包构建脚本
+│   ├── sign-macos-client.sh ← macOS 签名脚本
+│   ├── sign-windows-client.ps1 ← Windows 签名脚本
 │   └── deploy.sh          ← 部署脚本
+├── packaging/
+│   ├── appcast.sample.json ← 自动更新清单样例
+│   ├── confidential-client.spec ← PyInstaller 打包配置
+│   ├── macos/
+│   │   └── Info.plist.template
+│   └── windows/
+│       └── open-llm-wiki-client.iss
 ├── templates/
 │   ├── base.html
 │   ├── errors/
@@ -1488,6 +1539,9 @@ open-llm-wiki/
 │       └── d3/
 ├── tests/                 ← 测试
 │   ├── test_confidential_client.py
+│   ├── test_confidential_desktop.py
+│   ├── test_confidential_packaging.py
+│   ├── test_confidential_update.py
 │   └── ...
 ├── logs/                  ← 日志文件（不提交）
 ├── data/                  ← 用户数据（不提交）

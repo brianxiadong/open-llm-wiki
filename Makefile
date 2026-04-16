@@ -1,4 +1,4 @@
-.PHONY: init dev prod migrate check test test-e2e inspect lint format clean deploy
+.PHONY: init dev prod migrate check test test-e2e inspect lint format clean deploy client-desktop client-package client-binary
 
 init:
 	python3 -m venv .venv
@@ -41,3 +41,12 @@ clean:
 
 deploy:
 	bash scripts/deploy.sh
+
+client-desktop:
+	python3 -m confidential_client.desktop
+
+client-package:
+	bash scripts/build-confidential-client.sh
+
+client-binary:
+	bash scripts/build-confidential-client-binary.sh

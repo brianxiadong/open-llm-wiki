@@ -7,8 +7,11 @@ from pathlib import Path
 
 import click
 
+from confidential_client.controller import ConfidentialClientController
+from confidential_client.desktop import main as desktop_main
 from confidential_client.repository import ConfidentialRepository
 from confidential_client.runtime import ConfidentialRuntime
+from confidential_client.version import CLIENT_NAME, CLIENT_VERSION
 from llmwiki_core.contracts import ConfidentialServices
 
 
@@ -73,6 +76,58 @@ def export_bundle(repo_dir: str, output_path: str) -> None:
     repo = ConfidentialRepository(repo_dir)
     bundle = repo.export_bundle(output_path)
     click.echo(str(bundle))
+
+
+@cli.command("list")
+def list_repos() -> None:
+    controller = ConfidentialClientController()
+    repos = [
+        {
+            "repo_uuid": item.repo_uuid,
+            "name": item.name,
+            "slug": item.slug,
+            "updated_at": item.updated_at,
+        }
+        for item in controller.list_repositories()
+    ]
+    click.echo(json.dumps(repos, ensure_ascii=False, indent=2))
+
+
+@cli.command("import")
+@click.argument("bundle_path")
+def import_bundle(bundle_path: str) -> None:
+    controller = ConfidentialClientController()
+    repo = controller.import_repository(bundle_path)
+    click.echo(json.dumps({"repo_uuid": repo.repo_uuid, "name": repo.name, "slug": repo.slug}, ensure_ascii=False))
+
+
+@cli.command("health")
+@click.option("--services-file", type=click.Path(exists=True, dir_okay=False), required=True)
+def health(services_file: str) -> None:
+    services = ConfidentialServices.from_dict(
+        json.loads(Path(services_file).read_text(encoding="utf-8"))
+    )
+    controller = ConfidentialClientController()
+    click.echo(json.dumps(controller.check_services(services), ensure_ascii=False, indent=2))
+
+
+@cli.command("desktop")
+def desktop() -> None:
+    desktop_main()
+
+
+@cli.command("update-check")
+@click.option("--manifest-url", default=None)
+@click.option("--channel", default=None)
+def update_check(manifest_url: str | None, channel: str | None) -> None:
+    controller = ConfidentialClientController()
+    result = controller.check_for_updates(manifest_url=manifest_url, channel=channel)
+    click.echo(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+
+
+@cli.command("version")
+def version() -> None:
+    click.echo(f"{CLIENT_NAME} {CLIENT_VERSION}")
 
 
 if __name__ == "__main__":

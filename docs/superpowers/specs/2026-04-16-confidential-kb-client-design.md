@@ -241,10 +241,15 @@ llmwiki_core/
 建议第一阶段采用：
 
 - Python 3.11+
-- PySide6 桌面 UI
+- `tkinter` 桌面 UI（当前实现）
 - SQLite 本地元数据
 - `cryptography` 实现加密
 - PyInstaller 或 Nuitka 打包
+
+说明：
+
+- 设计上允许后续迁移到独立 GUI 框架
+- 当前优先选择标准库 `tkinter`，避免客户端首版引入额外 GUI 依赖
 
 ### 9.2 平台范围
 
