@@ -77,3 +77,16 @@ def test_binary_packaging_spec_bootstraps_project_root():
     assert "Path(SPECPATH).resolve().parent" in content
     assert "sys.path.insert(0, str(project_root))" in content
     assert "pathex=[str(project_root)]" in content
+
+
+def test_binary_packaging_spec_uses_onedir_layout_for_windows_installer():
+    repo_root = Path(__file__).resolve().parents[1]
+    spec_file = repo_root / "packaging" / "confidential-client.spec"
+    windows_iss = repo_root / "packaging" / "windows" / "open-llm-wiki-client.iss"
+    spec_content = spec_file.read_text(encoding="utf-8")
+    iss_content = windows_iss.read_text(encoding="utf-8")
+
+    assert "exclude_binaries=True" in spec_content
+    assert "COLLECT(" in spec_content
+    assert 'name="open-llm-wiki-client"' in spec_content
+    assert r'open-llm-wiki-client\*' in iss_content
