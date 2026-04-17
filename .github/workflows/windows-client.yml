@@ -59,11 +59,42 @@ jobs:
       - name: Locate Inno Setup compiler
         shell: pwsh
         run: |
-          $candidates = @(
-            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
-            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-          )
-          $iscc = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          $commands = @(
+            (Get-Command ISCC.exe -ErrorAction SilentlyContinue),
+            (Get-Command ISCC -ErrorAction SilentlyContinue)
+          ) | Where-Object { $_ }
+          $iscc = $commands | Select-Object -ExpandProperty Source -First 1
+
+          if (-not $iscc) {
+            $programFilesX86 = ${env:ProgramFiles(x86)}
+            $candidates = @(
+              (Join-Path $programFilesX86 "Inno Setup 6\ISCC.exe"),
+              (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"),
+              "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+              "C:\Program Files\Inno Setup 6\ISCC.exe",
+              "C:\ProgramData\chocolatey\lib\innosetup\tools\Inno Setup 6\ISCC.exe"
+            ) | Where-Object { $_ }
+
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+
+          if (-not $iscc) {
+            $searchRoots = @(
+              ${env:ProgramFiles(x86)},
+              $env:ProgramFiles,
+              "C:\ProgramData\chocolatey\lib"
+            ) | Where-Object { $_ -and (Test-Path $_) }
+
+            foreach ($root in $searchRoots) {
+              $match = Get-ChildItem -Path $root -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty FullName -First 1
+              if ($match) {
+                $iscc = $match
+                break
+              }
+            }
+          }
+
           if (-not $iscc) {
             throw "ISCC.exe not found after installing Inno Setup."
           }
