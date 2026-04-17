@@ -10,27 +10,83 @@
   </ul>
 </nav>
 
-<header class="page-header">
-  <h2 style="margin:0;display:flex;align-items:center;gap:0.5rem;font-size:1.5rem;">
-    <i class="lucide-folder-open" aria-hidden="true"></i>
-    文档管理
-    {% if sources %}
-    <span class="badge badge-muted" style="font-size:0.75rem;">{{ sources|length }} 个文件</span>
-    {% endif %}
-  </h2>
-  <div class="page-header-actions">
+<section class="source-manage-hero">
+  <div class="source-manage-copy">
+    <span class="repo-index-eyebrow">
+      <i class="lucide-folder-open" aria-hidden="true"></i>
+      文档管理
+    </span>
+    <h1 class="source-manage-title">{{ repo.name }} 的来源文件</h1>
+    <p class="source-manage-subtitle">
+      在这里统一上传、筛选、排队摄入和维护来源文档。文档处理完成后会继续生成 Wiki 页面与检索索引。
+    </p>
+    <div class="source-manage-summary">
+      <div class="source-manage-summary-card">
+        <span>文件总数</span>
+        <strong>{{ sources|length }}</strong>
+      </div>
+      <div class="source-manage-summary-card">
+        <span>可编辑权限</span>
+        <strong>{{ "是" if can_edit else "否" }}</strong>
+      </div>
+      <div class="source-manage-summary-card">
+        <span>下载原件</span>
+        <strong>{{ "可用" if can_download else "受限" }}</strong>
+      </div>
+    </div>
+  </div>
+
+  <div class="source-manage-actions">
+    <div class="source-manage-actions-header">
+      <h2>上传与处理</h2>
+      <p>支持拖拽上传、批量筛选、按状态查看和重新摄入。</p>
+    </div>
     {% if can_edit %}
-    <button type="button" class="action-btn action-btn-primary" onclick="document.getElementById('upload-zone').scrollIntoView({behavior:'smooth'})">
-      <i class="lucide-upload" aria-hidden="true"></i>
-      上传文档
-    </button>
+    <div class="source-manage-action-list">
+      <button type="button" class="action-btn action-btn-primary source-manage-primary-btn" onclick="document.getElementById('upload-zone').scrollIntoView({behavior:'smooth'})">
+        <i class="lucide-upload" aria-hidden="true"></i>
+        上传文档
+      </button>
+      <a href="{{ url_for('ops.task_queue', username=username, repo_slug=repo.slug) }}" class="action-btn source-manage-secondary-btn">
+        <i class="lucide-list-todo" aria-hidden="true"></i>
+        查看任务队列
+      </a>
+    </div>
+    <div class="source-manage-tips">
+      <div class="source-manage-tip">
+        <i class="lucide-file-stack" aria-hidden="true"></i>
+        <span>支持 Markdown、PDF、Office、图片、CSV 和 Excel。</span>
+      </div>
+      <div class="source-manage-tip">
+        <i class="lucide-scan-search" aria-hidden="true"></i>
+        <span>列表中可直接查看排队、处理中和已摄入状态。</span>
+      </div>
+    </div>
+    {% else %}
+    <div class="source-manage-tips">
+      <div class="source-manage-tip">
+        <i class="lucide-eye" aria-hidden="true"></i>
+        <span>当前账号仅可浏览来源列表和预览内容。</span>
+      </div>
+      <div class="source-manage-tip">
+        <i class="lucide-lock" aria-hidden="true"></i>
+        <span>上传、删除和重命名仅对 owner / editor 开放。</span>
+      </div>
+    </div>
     {% endif %}
   </div>
-</header>
+</section>
 
 {# ── 上传区域 ── #}
 {% if can_edit %}
-<article class="upload-card" id="upload-zone">
+<article class="upload-card source-upload-card" id="upload-zone">
+  <div class="source-upload-card-header">
+    <div>
+      <span class="repo-section-tag">Upload</span>
+      <h3>新增来源文档</h3>
+      <p>上传后可立即进入排队处理，完成后会出现在知识库索引与问答结果中。</p>
+    </div>
+  </div>
   <form method="POST" id="upload-form"
         action="{{ url_for('source.upload', username=username, repo_slug=repo.slug) }}"
         enctype="multipart/form-data">
@@ -115,8 +171,15 @@
      data-confirm="确定要删除选中的文件吗？此操作不可撤销。"
      data-ingest-action="{{ url_for('source.batch_ingest', username=username, repo_slug=repo.slug) }}">
 </div>
-<article style="padding:0;">
-  <div style="overflow-x:auto;">
+<article class="source-table-card">
+  <div class="source-table-card-header">
+    <div>
+      <span class="repo-section-tag">Library</span>
+      <h3>文件列表</h3>
+      <p>按名称、大小、时间和处理状态管理来源文档。</p>
+    </div>
+  </div>
+  <div class="source-table-wrap">
     <table class="source-table" role="grid">
       <thead>
         <tr>
@@ -213,11 +276,48 @@
 </article>
 
 {% else %}
-<article class="empty-state">
-  <i class="lucide-file-plus" aria-hidden="true"></i>
-  <h3>还没有文档</h3>
-  <p>{% if can_edit %}上传文档后，可以将其摄入为 Wiki 页面。{% else %}当前知识库还没有可浏览的来源文档。{% endif %}</p>
-</article>
+<section class="source-empty-state">
+  <div class="source-empty-copy">
+    <span class="repo-section-tag">Start</span>
+    <h3>还没有来源文档</h3>
+    <p>{% if can_edit %}先上传文档，系统会继续解析内容、生成 Wiki 页面并建立检索索引。{% else %}当前知识库还没有可浏览的来源文档。{% endif %}</p>
+    {% if can_edit %}
+    <div class="source-empty-actions">
+      <button type="button" class="action-btn action-btn-primary" onclick="document.getElementById('upload-zone').scrollIntoView({behavior:'smooth'})">
+        <i class="lucide-upload" aria-hidden="true"></i>
+        上传第一份文档
+      </button>
+      <a href="{{ url_for('guide') }}" class="action-btn">
+        <i class="lucide-book-open-text" aria-hidden="true"></i>
+        查看使用教程
+      </a>
+    </div>
+    {% endif %}
+  </div>
+  <div class="source-empty-panel">
+    <div class="source-empty-panel-row">
+      <span class="source-empty-panel-icon"><i class="lucide-file-up" aria-hidden="true"></i></span>
+      <div>
+        <strong>上传来源</strong>
+        <p>支持多种格式，文档会以原始文件形式保留在知识库来源列表中。</p>
+      </div>
+    </div>
+    <div class="source-empty-panel-row">
+      <span class="source-empty-panel-icon"><i class="lucide-rocket" aria-hidden="true"></i></span>
+      <div>
+        <strong>开始摄入</strong>
+        <p>提交后进入任务队列，自动解析正文、图片和结构信息。</p>
+      </div>
+    </div>
+    <div class="source-empty-panel-row">
+      <span class="source-empty-panel-icon"><i class="lucide-book-open-check" aria-hidden="true"></i></span>
+      <div>
+        <strong>沉淀为 Wiki</strong>
+        <p>处理完成后即可用于检索问答，也能继续维护为结构化页面。</p>
+      </div>
+    </div>
+  </div>
+</section>
 {% endif %}
 
 {# ── 重命名弹窗 ── #}

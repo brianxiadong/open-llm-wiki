@@ -10,43 +10,90 @@
   </ul>
 </nav>
 
-<article class="form-container">
-  <header>
-    <h2>
+<section class="repo-create-shell">
+  <div class="repo-create-hero">
+    <span class="repo-index-eyebrow">
       <i class="lucide-plus-circle" aria-hidden="true"></i>
       新建知识库
-    </h2>
-  </header>
-  <form method="POST" action="{{ url_for('repo.new_repo') }}">
+    </span>
+    <h1 class="repo-create-title">创建一个结构清晰、方便维护的知识库</h1>
+    <p class="repo-create-subtitle">
+      先定义名称、标识和使用范围，创建后即可上传文档、自动生成 Wiki，并开始对话检索。
+    </p>
+    <div class="repo-create-highlights">
+      <div class="repo-create-highlight">
+        <i class="lucide-folder-input" aria-hidden="true"></i>
+        <span>文档导入后自动解析</span>
+      </div>
+      <div class="repo-create-highlight">
+        <i class="lucide-book-open-check" aria-hidden="true"></i>
+        <span>内置 Wiki 结构与维护流程</span>
+      </div>
+      <div class="repo-create-highlight">
+        <i class="lucide-bot-message-square" aria-hidden="true"></i>
+        <span>支持问答、回写与共享协作</span>
+      </div>
+    </div>
+  </div>
+
+  <article class="repo-create-card">
+    <header class="repo-create-card-header">
+      <div>
+        <h2>知识库信息</h2>
+        <p>填写最少必要信息即可创建，后续仍可在设置页调整。</p>
+      </div>
+      <a href="{{ url_for('repo.list_repos', username=current_user.username) }}" class="repo-create-back">
+        <i class="lucide-arrow-left" aria-hidden="true"></i>
+        返回列表
+      </a>
+    </header>
+
+    <form method="POST" action="{{ url_for('repo.new_repo') }}" class="repo-create-form">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% endif %}
 
-    <label for="name">知识库名称 <span class="required">*</span></label>
-    <input type="text" id="name" name="name" placeholder="为知识库起一个清晰易记的名称" required autofocus>
+      <div class="repo-create-grid">
+        <label for="name" class="repo-create-field repo-create-field-full">
+          <span>知识库名称 <span class="required">*</span></span>
+          <input type="text" id="name" name="name" placeholder="为知识库起一个清晰易记的名称" required autofocus>
+          <small>名称会显示在列表页、问答页和共享入口中。</small>
+        </label>
 
-    <label for="slug">URL 标识</label>
-    <input type="text" id="slug" name="slug" placeholder="留空则根据名称自动生成" pattern="[a-z0-9\-]+"
-           aria-describedby="slug-help">
-    <small id="slug-help">仅支持小写字母、数字和短横线；留空时系统将自动生成合法标识。</small>
+        <label for="slug" class="repo-create-field">
+          <span>URL 标识</span>
+          <input type="text" id="slug" name="slug" placeholder="留空则根据名称自动生成" pattern="[a-z0-9\\-]+"
+                 aria-describedby="slug-help">
+          <small id="slug-help">仅支持小写字母、数字和短横线。</small>
+        </label>
 
-    <label for="description">描述</label>
-    <textarea id="description" name="description" placeholder="简要说明该知识库的用途与范围" rows="4"></textarea>
+        <label for="schema_template" class="repo-create-field">
+          <span>Wiki Schema 模板</span>
+          <select id="schema_template" name="schema_template">
+            {% for key, (label, _) in schema_templates.items() %}
+            <option value="{{ key }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+          <small>选择适合场景的预设规范，后续可在设置中修改。</small>
+        </label>
 
-    <label for="schema_template">
-      Wiki Schema 模板
-      <select id="schema_template" name="schema_template">
-        {% for key, (label, _) in schema_templates.items() %}
-        <option value="{{ key }}">{{ label }}</option>
-        {% endfor %}
-      </select>
-      <small>选择适合你知识库类型的预设规范，创建后可在设置中修改。</small>
-    </label>
+        <label for="description" class="repo-create-field repo-create-field-full">
+          <span>描述</span>
+          <textarea id="description" name="description" placeholder="简要说明该知识库的用途、边界和主要内容" rows="5"></textarea>
+          <small>这段描述会展示在知识库列表卡片中，建议写清楚用途。</small>
+        </label>
+      </div>
 
-    <div class="form-actions">
-      <button type="submit">创建知识库</button>
-      <a href="{{ url_for('repo.list_repos', username=current_user.username) }}" role="button" class="outline secondary">取消</a>
-    </div>
-  </form>
-</article>
+      <div class="repo-create-actions">
+        <button type="submit" class="action-btn action-btn-primary repo-create-submit">
+          <i class="lucide-check" aria-hidden="true"></i>
+          创建知识库
+        </button>
+        <a href="{{ url_for('repo.list_repos', username=current_user.username) }}" role="button" class="action-btn">
+          取消
+        </a>
+      </div>
+    </form>
+  </article>
+</section>
 {% endblock %}

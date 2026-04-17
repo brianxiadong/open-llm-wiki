@@ -10,12 +10,50 @@
   </ul>
 </nav>
 
-<header class="page-header">
-  <h2>知识库设置</h2>
-</header>
+<section class="settings-shell">
+  <aside class="settings-hero">
+    <span class="repo-index-eyebrow">
+      <i class="lucide-settings-2" aria-hidden="true"></i>
+      知识库设置
+    </span>
+    <h1 class="settings-title">{{ repo.name }}</h1>
+    <p class="settings-subtitle">
+      在这里统一维护基本信息、共享协作、Schema、导入导出与危险操作。所有配置会直接影响知识库的管理方式和协作边界。
+    </p>
+    <div class="settings-overview">
+      <div class="settings-overview-item">
+        <span>可见性</span>
+        <strong>{{ "公开" if repo.is_public else "私有" }}</strong>
+      </div>
+      <div class="settings-overview-item">
+        <span>访问码</span>
+        <strong>{{ repo_share_codes|length }}</strong>
+      </div>
+      <div class="settings-overview-item">
+        <span>共享成员</span>
+        <strong>{{ repo_members|length }}</strong>
+      </div>
+    </div>
+    <div class="settings-nav">
+      <a href="#settings-basic">基本信息</a>
+      <a href="#settings-share-code">共享访问码</a>
+      <a href="#settings-members">共享成员</a>
+      <a href="#settings-schema">Wiki Schema</a>
+      <a href="#settings-import">导入 Wiki</a>
+      <a href="#settings-readme">README</a>
+      <a href="#settings-danger">删除知识库</a>
+    </div>
+  </aside>
 
-<article>
-  <header><h3>基本信息</h3></header>
+  <div class="settings-sections">
+<article id="settings-basic" class="settings-card">
+  <header class="settings-card-header">
+    <div>
+      <span class="repo-section-tag">General</span>
+      <h3>基本信息</h3>
+      <p>维护知识库名称、描述和公开可见性。</p>
+    </div>
+  </header>
   <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -41,9 +79,14 @@
   </form>
 </article>
 
-<article>
-  <header><h3>共享访问码</h3></header>
-  <p style="color:var(--pico-muted-color);font-size:0.9rem;">生成访问码后，其他用户可在自己的知识库页输入访问码，把这个知识库挂载到自己的列表中。访问码只负责“加入”，实际权限由成员关系控制。</p>
+<article id="settings-share-code" class="settings-card">
+  <header class="settings-card-header">
+    <div>
+      <span class="repo-section-tag">Share</span>
+      <h3>共享访问码</h3>
+      <p>生成访问码后，其他用户可在自己的知识库页输入访问码，把这个知识库挂载到自己的列表中。访问码只负责“加入”，实际权限由成员关系控制。</p>
+    </div>
+  </header>
   <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -60,7 +103,7 @@
   </form>
 
   {% if repo_share_codes %}
-  <div style="margin-top:1rem;overflow-x:auto;">
+  <div class="settings-table-wrap">
     <table>
       <thead>
         <tr>
@@ -93,14 +136,20 @@
     </table>
   </div>
   {% else %}
-  <p style="margin-top:0.75rem;color:var(--pico-muted-color);">还没有访问码。</p>
+  <p class="settings-empty-copy">还没有访问码。</p>
   {% endif %}
 </article>
 
-<article>
-  <header><h3>共享成员</h3></header>
+<article id="settings-members" class="settings-card">
+  <header class="settings-card-header">
+    <div>
+      <span class="repo-section-tag">Members</span>
+      <h3>共享成员</h3>
+      <p>查看通过访问码加入或手动授权的成员，并按需移除访问权限。</p>
+    </div>
+  </header>
   {% if repo_members %}
-  <div style="overflow-x:auto;">
+  <div class="settings-table-wrap">
     <table>
       <thead>
         <tr>
@@ -129,12 +178,18 @@
     </table>
   </div>
   {% else %}
-  <p style="color:var(--pico-muted-color);">目前还没有共享成员。</p>
+  <p class="settings-empty-copy">目前还没有共享成员。</p>
   {% endif %}
 </article>
 
-<article>
-  <header><h3>Wiki Schema</h3></header>
+<article id="settings-schema" class="settings-card">
+  <header class="settings-card-header">
+    <div>
+      <span class="repo-section-tag">Schema</span>
+      <h3>Wiki Schema</h3>
+      <p>定义页面类型、前置元数据与关联规则，影响后续生成与校验行为。</p>
+    </div>
+  </header>
   <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -149,14 +204,19 @@
   </form>
 </article>
 
-<article>
-  <header><h3>导入 Wiki（ZIP）</h3></header>
-  <p style="color:var(--pico-muted-color);font-size:0.9rem;">从导出的 ZIP 文件恢复或迁移知识库。ZIP 中需包含 <code>wiki/</code> 目录。</p>
+<article id="settings-import" class="settings-card">
+  <header class="settings-card-header">
+    <div>
+      <span class="repo-section-tag">Import</span>
+      <h3>导入 Wiki（ZIP）</h3>
+      <p>从导出的 ZIP 文件恢复或迁移知识库。ZIP 中需包含 <code>wiki/</code> 目录。</p>
+    </div>
+  </header>
   <form method="POST" enctype="multipart/form-data"
-        action="{{ url_for('repo.import_zip', username=username, repo_slug=repo.slug) }}">
-    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
-      <input type="file" name="file" accept=".zip" required style="flex:1;min-width:200px;">
-      <select name="mode" style="width:auto;">
+        action="{{ url_for('repo.import_zip', username=username, repo_slug=repo.slug) }}" class="settings-inline-form">
+    <div class="settings-inline-row">
+      <input type="file" name="file" accept=".zip" required class="settings-inline-file">
+      <select name="mode" class="settings-inline-select">
         <option value="merge">合并（保留现有页面）</option>
         <option value="replace">替换（清空后导入）</option>
       </select>
@@ -165,19 +225,30 @@
   </form>
 </article>
 
-<article>
-  <header><h3>知识库说明（README）</h3></header>
-  <p style="color:var(--pico-muted-color);font-size:0.88rem;">用 Markdown 描述这个知识库的用途、内容范围、使用说明等。将显示在知识库首页。</p>
+<article id="settings-readme" class="settings-card">
+  <header class="settings-card-header">
+    <div>
+      <span class="repo-section-tag">Readme</span>
+      <h3>知识库说明（README）</h3>
+      <p>用 Markdown 描述这个知识库的用途、内容范围、使用说明等。将显示在知识库首页。</p>
+    </div>
+  </header>
   <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
     <input type="hidden" name="action" value="update_readme">
     <textarea name="readme" rows="7" placeholder="## 关于本知识库&#10;&#10;（用 Markdown 编写说明…）"
-              style="width:100%;font-family:monospace;font-size:0.88rem;">{{ readme_content or '' }}</textarea>
-    <button type="submit" class="action-btn action-btn-primary" style="margin-top:0.5rem;">保存 README</button>
+              class="code-textarea settings-readme-textarea">{{ readme_content or '' }}</textarea>
+    <button type="submit" class="action-btn action-btn-primary mt-1">保存 README</button>
   </form>
 </article>
 
-<article class="danger-zone">
-  <header><h3>删除知识库</h3></header>
+<article id="settings-danger" class="danger-zone settings-card settings-card-danger">
+  <header class="settings-card-header">
+    <div>
+      <span class="repo-section-tag">Danger</span>
+      <h3>删除知识库</h3>
+      <p>删除后，该知识库下的所有页面、来源文件与向量数据将被永久移除，且<strong>无法恢复</strong>。</p>
+    </div>
+  </header>
   <p>删除后，该知识库下的所有页面、来源文件与向量数据将被永久移除，且<strong>无法恢复</strong>。请谨慎操作。</p>
   <form method="POST" action="{{ url_for('repo.delete', username=username, repo_slug=repo.slug) }}"
         data-confirm="确定要删除知识库「{{ repo.name }}」吗？此操作不可逆。">
@@ -187,4 +258,6 @@
     <button type="submit" class="outline contrast delete-btn">删除知识库</button>
   </form>
 </article>
+</div>
+</section>
 {% endblock %}

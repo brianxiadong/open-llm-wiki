@@ -3,42 +3,114 @@
 {% block title %}{{ username }} 的知识库 - {{ site_name }}{% endblock %}
 
 {% block content %}
-<header class="page-header">
-  <h2>{{ username }} 的知识库</h2>
-  <div class="page-header-actions" style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
-    {% if page_is_self %}
-    <form method="POST" action="{{ url_for('repo.join_by_code') }}" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin:0;">
-      <input type="text" name="access_code" placeholder="输入访问码加入共享知识库" autocomplete="off" style="min-width:220px;margin:0;">
-      <button type="submit" class="action-btn">
-        <i class="lucide-key-round" aria-hidden="true"></i>
-        添加共享知识库
-      </button>
+{% set owned_count = repos|length %}
+{% set shared_count = shared_repos|length if page_is_self else 0 %}
+
+<section class="repo-index-hero">
+  <div class="repo-index-hero-copy">
+    <span class="repo-index-eyebrow">
+      <i class="lucide-library" aria-hidden="true"></i>
+      {{ site_name }}
+    </span>
+    <h1 class="repo-index-title">{{ username }} 的知识库</h1>
+    <p class="repo-index-subtitle">
+      在这里集中管理自己的知识库、通过访问码加入共享知识库，并持续沉淀团队文档与问答结果。
+    </p>
+    <div class="repo-index-summary" aria-label="知识库概览">
+      <div class="repo-index-summary-card">
+        <span class="repo-index-summary-label">我的知识库</span>
+        <strong>{{ owned_count }}</strong>
+      </div>
+      {% if page_is_self %}
+      <div class="repo-index-summary-card">
+        <span class="repo-index-summary-label">共享给我</span>
+        <strong>{{ shared_count }}</strong>
+      </div>
+      {% endif %}
+      <div class="repo-index-summary-card">
+        <span class="repo-index-summary-label">当前视图</span>
+        <strong>{{ "个人工作台" if page_is_self else "公开列表" }}</strong>
+      </div>
+    </div>
+  </div>
+
+  {% if page_is_self %}
+  <div class="repo-index-actions-card">
+    <div class="repo-index-actions-header">
+      <h2>快速开始</h2>
+      <p>新建自己的知识库，或输入访问码把共享知识库加入到当前账号。</p>
+    </div>
+    <form method="POST" action="{{ url_for('repo.join_by_code') }}" class="repo-join-form">
+      <label for="access_code" class="repo-join-label">访问码</label>
+      <div class="repo-join-row">
+        <input id="access_code" type="text" name="access_code" placeholder="例如 KB-ABCD-1234" autocomplete="off">
+        <button type="submit" class="action-btn">
+          <i class="lucide-key-round" aria-hidden="true"></i>
+          添加共享知识库
+        </button>
+      </div>
     </form>
-    <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary">
+    <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary repo-new-btn">
       <i class="lucide-plus" aria-hidden="true"></i>
       新建知识库
     </a>
-    {% endif %}
+    <div class="repo-index-tips">
+      <div class="repo-index-tip">
+        <i class="lucide-folder-kanban" aria-hidden="true"></i>
+        <span>文档上传、问答和 Wiki 维护都在知识库内完成。</span>
+      </div>
+      <div class="repo-index-tip">
+        <i class="lucide-users" aria-hidden="true"></i>
+        <span>共享库会保留独立权限，不会混入你的自有知识库配置。</span>
+      </div>
+    </div>
   </div>
-</header>
+  {% endif %}
+</section>
 
 {% if repos %}
-<section>
-  {% if page_is_self %}
-  <h3 style="margin-bottom:0.85rem;">我的知识库</h3>
-  {% endif %}
+<section class="repo-section">
+  <div class="repo-section-header">
+    <div>
+      <span class="repo-section-tag">{{ "Owned" if page_is_self else "Browse" }}</span>
+      <h3>{{ "我的知识库" if page_is_self else "知识库列表" }}</h3>
+      <p>{{ owned_count }} 个知识库，可直接进入查看、问答和维护。</p>
+    </div>
+  </div>
   <div class="repo-grid">
     {% for repo in repos %}
     <article class="repo-card">
       <a href="{{ url_for('repo.dashboard', username=repo.owner_username, repo_slug=repo.slug) }}" class="repo-card-link">
-        <h3>{{ repo.name }}
-          {% if repo.is_public %}
-          <span class="badge badge-public">公开</span>
-          {% endif %}
-          {% if repo.access_role and repo.access_role != 'owner' %}
-          <span class="badge badge-muted">{{ repo.access_role_label }}</span>
-          {% endif %}
-        </h3>
+        <div class="repo-card-top">
+          <div class="repo-card-heading">
+            <span class="repo-card-symbol">
+              <i class="lucide-book-marked" aria-hidden="true"></i>
+            </span>
+            <div>
+              <h3>{{ repo.name }}</h3>
+              <div class="repo-card-meta">
+                <span>
+                  <i class="lucide-user-round" aria-hidden="true"></i>
+                  {{ repo.owner_username }}
+                </span>
+                {% if page_is_self %}
+                <span>
+                  <i class="lucide-shield-check" aria-hidden="true"></i>
+                  你拥有
+                </span>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          <div class="repo-card-badges">
+            {% if repo.is_public %}
+            <span class="badge badge-public">公开</span>
+            {% endif %}
+            {% if repo.access_role and repo.access_role != 'owner' %}
+            <span class="badge badge-muted">{{ repo.access_role_label }}</span>
+            {% endif %}
+          </div>
+        </div>
         <p class="repo-desc">
           {% if repo.is_shared_repo %}
           来自 {{ repo.owner_username }}{% if repo.description %} · {{ repo.description|truncate(88) }}{% endif %}
@@ -57,6 +129,10 @@
               {{ repo.page_count }}
             </span>
           </div>
+          <span class="repo-card-enter">
+            进入知识库
+            <i class="lucide-arrow-up-right" aria-hidden="true"></i>
+          </span>
         </footer>
       </a>
     </article>
@@ -64,30 +140,94 @@
   </div>
 </section>
 {% else %}
-<div class="empty-state">
-  <i class="lucide-library" aria-hidden="true"></i>
-  <h3>还没有知识库</h3>
-  <p>创建一个知识库，开始整理和管理你的文档与笔记。</p>
-  {% if page_is_self %}
-  <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary">
-    <i class="lucide-plus" aria-hidden="true"></i>
-    创建第一个知识库
-  </a>
-  {% endif %}
-</div>
+<section class="repo-empty-state">
+  <div class="repo-empty-copy">
+    <span class="repo-section-tag">Start</span>
+    <h3>还没有知识库</h3>
+    <p>
+      先创建一个知识库，再上传文档、生成 Wiki，并在统一的问答界面里持续沉淀内容。
+    </p>
+    {% if page_is_self %}
+    <div class="repo-empty-actions">
+      <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary">
+        <i class="lucide-plus" aria-hidden="true"></i>
+        创建第一个知识库
+      </a>
+      <a href="{{ url_for('guide') }}" role="button" class="action-btn">
+        <i class="lucide-book-open-text" aria-hidden="true"></i>
+        查看使用教程
+      </a>
+    </div>
+    {% endif %}
+  </div>
+  <div class="repo-empty-panel">
+    <div class="repo-empty-panel-row">
+      <span class="repo-empty-panel-icon">
+        <i class="lucide-files" aria-hidden="true"></i>
+      </span>
+      <div>
+        <strong>上传文档</strong>
+        <p>支持 Markdown、PDF、Office、图片、表格等常见格式。</p>
+      </div>
+    </div>
+    <div class="repo-empty-panel-row">
+      <span class="repo-empty-panel-icon">
+        <i class="lucide-sparkles" aria-hidden="true"></i>
+      </span>
+      <div>
+        <strong>自动整理</strong>
+        <p>解析来源内容，生成可维护的 Wiki 页面和检索索引。</p>
+      </div>
+    </div>
+    <div class="repo-empty-panel-row">
+      <span class="repo-empty-panel-icon">
+        <i class="lucide-messages-square" aria-hidden="true"></i>
+      </span>
+      <div>
+        <strong>对话问答</strong>
+        <p>基于知识库内容直接提问，并把结果继续沉淀为文档。</p>
+      </div>
+    </div>
+  </div>
+</section>
 {% endif %}
 
 {% if page_is_self and shared_repos %}
-<section style="margin-top:2rem;">
-  <h3 style="margin-bottom:0.85rem;">共享给我的知识库</h3>
+<section class="repo-section repo-section-shared">
+  <div class="repo-section-header">
+    <div>
+      <span class="repo-section-tag">Shared</span>
+      <h3>共享给我的知识库</h3>
+      <p>{{ shared_count }} 个共享知识库，按访问码加入并保持独立权限。</p>
+    </div>
+  </div>
   <div class="repo-grid">
     {% for repo in shared_repos %}
-    <article class="repo-card">
+    <article class="repo-card repo-card-shared">
       <a href="{{ url_for('repo.dashboard', username=repo.owner_username, repo_slug=repo.slug) }}" class="repo-card-link">
-        <h3>
-          {{ repo.name }}
-          <span class="badge badge-muted">{{ repo.access_role_label }}</span>
-        </h3>
+        <div class="repo-card-top">
+          <div class="repo-card-heading">
+            <span class="repo-card-symbol repo-card-symbol-shared">
+              <i class="lucide-users-round" aria-hidden="true"></i>
+            </span>
+            <div>
+              <h3>{{ repo.name }}</h3>
+              <div class="repo-card-meta">
+                <span>
+                  <i class="lucide-user-round" aria-hidden="true"></i>
+                  {{ repo.owner_username }}
+                </span>
+                <span>
+                  <i class="lucide-link-2" aria-hidden="true"></i>
+                  共享接入
+                </span>
+              </div>
+            </div>
+          </div>
+          <div class="repo-card-badges">
+            <span class="badge badge-muted">{{ repo.access_role_label }}</span>
+          </div>
+        </div>
         <p class="repo-desc">来自 {{ repo.owner_username }}{% if repo.description %} · {{ repo.description|truncate(88) }}{% endif %}</p>
         <footer class="repo-card-footer">
           <div class="repo-stats">
@@ -100,10 +240,14 @@
               {{ repo.page_count }}
             </span>
           </div>
+          <span class="repo-card-enter">
+            进入知识库
+            <i class="lucide-arrow-up-right" aria-hidden="true"></i>
+          </span>
         </footer>
       </a>
-      <form method="POST" action="{{ url_for('repo.leave_shared_repo', repo_id=repo.id) }}" style="padding:0 1rem 1rem;margin:0;">
-        <button type="submit" class="action-btn" style="width:100%;">退出共享</button>
+      <form method="POST" action="{{ url_for('repo.leave_shared_repo', repo_id=repo.id) }}" class="repo-card-secondary-action">
+        <button type="submit" class="action-btn repo-leave-btn">退出共享</button>
       </form>
     </article>
     {% endfor %}
