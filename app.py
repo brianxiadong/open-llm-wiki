@@ -969,6 +969,8 @@ def _register_routes(app: Flask) -> None:
     @repo_bp.route("/<username>")
     def list_repos(username):
         user = User.query.filter_by(username=username).first_or_404()
+        if not current_user.is_authenticated:
+            return redirect(url_for("auth.login", next=request.url))
         page_is_self = (
             current_user.is_authenticated
             and (current_user.id == user.id or _is_admin())

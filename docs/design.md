@@ -482,7 +482,7 @@ POST /user/settings/tokens/{id}/revoke   → 吊销 API Token
 仓库管理：
 GET  /                                   → 首页（已登录则跳转仓库列表）
 GET  /guide                              → 使用教程（`templates/guide.html`，顶栏「使用教程」文字按钮）
-GET  /{username}                         → 用户的仓库列表
+GET  /{username}                         → 用户的仓库列表（需登录，未登录重定向到登录页）
 POST /repos/join                         → 通过访问码挂载共享知识库到当前用户列表
 POST /shared-repos/{repo_id}/leave       → 退出共享知识库
 POST /{username}/repos                   → 创建新仓库

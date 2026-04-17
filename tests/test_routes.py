@@ -211,6 +211,18 @@ def test_join_repo_by_access_code_mounts_shared_repo(sample_repo, app):
         assert share_code.use_count == 1
 
 
+def test_repo_list_redirects_guest_to_login(sample_repo):
+    owner_client, repo_info = sample_repo
+    resp = owner_client.get("/logout", follow_redirects=True)
+    assert resp.status_code == 200
+
+    guest = owner_client
+    resp = guest.get("/alice", follow_redirects=False)
+    assert resp.status_code == 302
+    assert "/login?next=" in resp.headers["Location"]
+    assert resp.headers["Location"].endswith("/alice")
+
+
 def test_shared_viewer_cannot_edit_repo(sample_repo, app):
     owner_client, repo_info = sample_repo
     slug = repo_info["slug"]
