@@ -670,6 +670,9 @@ ADMIN_USERNAME=admin
 | **对比模板**（`build_comparison_user_prompt`） | 关键词命中 comparison 且 context 非空 | 动态归纳 ≥ N 个维度 + 维度对比表 + 可选选型建议 + 资料缺口；维度不足时 LLM 自动退化为要点回答 | `RAG_ENABLE_COMPARISON_TEMPLATE`、`RAG_COMPARISON_MIN_DIMENSIONS` |
 | **引用合法性后校验**（`validate_citations` + `apply_citation_penalty`） | `RAG_CITATION_POSTCHECK=true` | 扫描答案里的 `xxx.md/docx/pdf` 等文件名，若不在`wiki_evidence ∪ chunk_evidence ∪ fact_evidence.source_file/source_markdown_filename` 中，对 confidence 扣 `RAG_CITATION_PENALTY` 并写入 `confidence.reasons` | `RAG_CITATION_POSTCHECK`、`RAG_CITATION_PENALTY` |
 
+
+> **证据追溯位置**：guard 规则 3 显式禁止 LLM 在答案正文中嵌入文件名 / 手册名 / 章节号 / 行号等来源信息，避免答案出现 `(来源: xxx.md)` 这类追溯标注影响阅读体验。证据可追溯性由前端的 `wiki_evidence` / `chunk_evidence` / `fact_evidence` 面板统一承担，对 RAG 整体证据链无损失。引用合法性校验仍保留：一旦 LLM 违反指令写了文件名，系统会抽取并对比 allowed 集合，非法项触发 confidence 扣分。
+
 实现位置：`wiki_prompts.py`（纯函数）+ `wiki_engine.py` 的 `query_with_evidence` / `query_stream` 分支。返回体额外包含 `intent` 与 `citation_validation` 两个字段以便前端展示。
 
 设计约束：

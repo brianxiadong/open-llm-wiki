@@ -57,15 +57,21 @@ def test_compose_system_prompt_injects_guard_only_when_context():
 
 
 def test_guard_system_prompt_contains_core_rules():
-    """guard 必须覆盖 5 条核心规则（跨域通用性保证）。"""
+    """guard 必须覆盖 6 条核心规则（跨域通用性保证）。"""
     for key in (
         "字段级严格",
         "推理级允许",
-        "来源合法",
+        "无正文来源标注",
         "未知即未知",
         "不跨实体传染",
     ):
         assert key in GUARD_SYSTEM_PROMPT, f"guard 缺失规则：{key}"
+
+
+def test_guard_forbids_inline_source_markers():
+    """guard 文案必须显式禁止在正文中嵌入 `(来源: xxx.md)` / `(依据: xxx.md)` 等追溯标注。"""
+    for forbidden in ("文件名", "手册名", "(来源:", "(依据:", "章节号"):
+        assert forbidden in GUARD_SYSTEM_PROMPT, f"guard 未覆盖：{forbidden}"
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +98,22 @@ def test_build_comparison_user_prompt_contains_structure_and_sources():
     assert "退化规则" in prompt
 
 
+def test_build_comparison_user_prompt_forbids_inline_source_in_instructions():
+    """对比模板指令必须禁止表格/正文中嵌入文件名。"""
+    prompt = build_comparison_user_prompt(
+        question="AE350 和 AE650 的对比",
+        context_block="ctx",
+        allowed_sources=["ae350-overview.md"],
+        query_mode="hybrid",
+    )
+    # 不再要求表格最后一列为「来源」
+    assert "表格最后一列为" not in prompt
+    # 必须显式禁止在表格 / 正文中出现文件名
+    assert "【不要】出现文件名" in prompt or "不要】出现文件名" in prompt
+    # 清单区提示 LLM 不要在答案正文写文件名
+    assert "请勿" in prompt and ("文件名" in prompt)
+
+
 def test_build_comparison_user_prompt_handles_no_sources():
     prompt = build_comparison_user_prompt(
         question="A vs B",
@@ -109,9 +131,11 @@ def test_build_generic_user_prompt_basic():
         allowed_sources=["a.md"],
         query_mode="narrative",
     )
-    assert "可引用的来源列表" in prompt
+    assert "命中资料清单" in prompt
     assert "a.md" in prompt
     assert "narrative" in prompt
+    # guard 指令要求 LLM 不在正文写文件名
+    assert "请勿" in prompt and "文件名" in prompt
 
 
 # ---------------------------------------------------------------------------

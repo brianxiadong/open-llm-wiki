@@ -751,7 +751,7 @@ def test_query_with_evidence_injects_guard_when_context_present(tmp_data_dir):
     user_content = messages[1]["content"]
     assert "字段级严格" in system_content
     assert "不跨实体传染" in system_content
-    assert "可引用的来源列表" in user_content
+    assert "命中资料清单" in user_content
     assert "ae350-overview.md" in user_content
     assert "ae650-overview.md" in user_content
 
