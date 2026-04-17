@@ -257,10 +257,20 @@ article header, article footer { padding: 0; margin: 0; background: none; border
 .repo-list-actions {
   flex-wrap: nowrap;
   align-items: center;
+  gap: 0.75rem;
 }
 .repo-list-action-btn {
-  min-width: 11rem;
+  display: inline-flex !important;
+  align-items: center;
   justify-content: center;
+  min-width: 11rem;
+  min-height: 3.6rem;
+  height: 3.6rem;
+  margin: 0 !important;
+  padding: 0 1.25rem !important;
+  line-height: 1;
+  box-sizing: border-box;
+  white-space: nowrap;
 }
 
 /* ── Repo Grid ───────────────────────────────────────────── */
