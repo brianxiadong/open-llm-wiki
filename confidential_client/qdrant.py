@@ -25,13 +25,24 @@ class ConfidentialQdrantService(QdrantService):
         embedding_api_key: str | None,
         embedding_model: str,
         embedding_dimensions: int = 1024,
+        chunk_min: int | None = None,
+        chunk_max: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> None:
+        kwargs: dict[str, Any] = {}
+        if chunk_min is not None:
+            kwargs["chunk_min"] = chunk_min
+        if chunk_max is not None:
+            kwargs["chunk_max"] = chunk_max
+        if chunk_overlap is not None:
+            kwargs["chunk_overlap"] = chunk_overlap
         super().__init__(
             qdrant_url=qdrant_url,
             embedding_api_base=embedding_api_base,
             embedding_api_key=embedding_api_key,
             embedding_model=embedding_model,
             embedding_dimensions=embedding_dimensions,
+            **kwargs,
         )
         self._map_path = Path(qdrant_map_path)
         self._map_path.parent.mkdir(parents=True, exist_ok=True)
@@ -174,11 +185,16 @@ class ConfidentialQdrantService(QdrantService):
         if not chunks:
             return
         self.ensure_chunk_collection(repo_id)
-        points = []
+        embedded = self._embed_chunks_batched(chunks, page_title=title)
+        if not embedded:
+            return
+        points: list[PointStruct] = []
         with self._connect() as conn:
-            conn.execute("DELETE FROM chunk_map WHERE repo_id = ? AND filename = ?", (repo_id, filename))
-            for chunk in chunks:
-                vector = self._embed(chunk["chunk_text"])
+            conn.execute(
+                "DELETE FROM chunk_map WHERE repo_id = ? AND filename = ?",
+                (repo_id, filename),
+            )
+            for chunk, vector in embedded:
                 point_id = self._safe_point_id(
                     self._stable_chunk_point_id(repo_id, filename, chunk["chunk_id"])
                 )
@@ -196,7 +212,7 @@ class ConfidentialQdrantService(QdrantService):
                         page_type,
                         f"{filename}#{chunk['chunk_id']}",
                         chunk["heading"],
-                        chunk["chunk_text"][:800],
+                        chunk["chunk_text"][:1200],
                         int(chunk["position"]),
                     ),
                 )
@@ -217,8 +233,18 @@ class ConfidentialQdrantService(QdrantService):
                 points=points,
             )
 
-    def search_chunks(self, repo_id: int, query: str, limit: int = 8) -> list[dict[str, Any]]:
+    def search_chunks(
+        self,
+        repo_id: int,
+        query: str,
+        limit: int = 8,
+        *,
+        score_threshold: float | None = None,
+        max_per_file: int | None = None,
+        oversample: int = 3,
+    ) -> list[dict[str, Any]]:
         collection = self._chunk_collection_name(repo_id)
+        fetch_limit = max(limit, limit * max(1, int(oversample)))
         try:
             if not self._qdrant.collection_exists(collection_name=collection):
                 return []
@@ -226,7 +252,7 @@ class ConfidentialQdrantService(QdrantService):
             results = self._qdrant.query_points(
                 collection_name=collection,
                 query=vector,
-                limit=limit,
+                limit=fetch_limit,
             ).points
         except Exception as exc:
             raise self._wrap_error(exc) from exc
@@ -243,24 +269,57 @@ class ConfidentialQdrantService(QdrantService):
                 [repo_id, *point_ids],
             ).fetchall()
         row_map = {int(row["point_id"]): row for row in rows}
+        per_file_count: dict[str, int] = {}
         out: list[dict[str, Any]] = []
         for hit in results:
+            score = hit.score or 0.0
+            if score_threshold is not None and score < score_threshold:
+                continue
             row = row_map.get(int(hit.id))
             if row is None:
                 continue
+            fn = row["filename"]
+            if max_per_file is not None and fn:
+                if per_file_count.get(fn, 0) >= max_per_file:
+                    continue
+                per_file_count[fn] = per_file_count.get(fn, 0) + 1
             out.append(
                 {
                     "chunk_id": row["chunk_id"],
-                    "filename": row["filename"],
+                    "filename": fn,
                     "page_title": row["page_title"],
                     "page_type": row["page_type"],
                     "heading": row["heading"],
                     "chunk_text": row["chunk_text"],
                     "position": row["position"],
-                    "score": hit.score,
+                    "score": score,
                 }
             )
+            if len(out) >= limit:
+                break
         return out
+
+    def scroll_all_chunks(self, repo_id: int) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT chunk_id, filename, page_title, page_type, heading, chunk_text, position
+                FROM chunk_map WHERE repo_id = ?
+                """,
+                (repo_id,),
+            ).fetchall()
+        return [
+            {
+                "chunk_id": row["chunk_id"],
+                "filename": row["filename"],
+                "page_title": row["page_title"],
+                "page_type": row["page_type"],
+                "heading": row["heading"],
+                "chunk_text": row["chunk_text"],
+                "position": int(row["position"] or 0),
+            }
+            for row in rows
+        ]
 
     def delete_page_chunks(self, repo_id: int, filename: str) -> None:
         with self._connect() as conn:
@@ -356,8 +415,12 @@ class ConfidentialQdrantService(QdrantService):
         repo_id: int,
         query: str,
         limit: int = 8,
+        *,
+        score_threshold: float | None = None,
+        oversample: int = 2,
     ) -> list[dict[str, Any]]:
         collection = self._fact_collection_name(repo_id)
+        fetch_limit = max(limit, limit * max(1, int(oversample)))
         try:
             if not self._qdrant.collection_exists(collection_name=collection):
                 return []
@@ -365,7 +428,7 @@ class ConfidentialQdrantService(QdrantService):
             results = self._qdrant.query_points(
                 collection_name=collection,
                 query=vector,
-                limit=limit,
+                limit=fetch_limit,
             ).points
         except Exception as exc:
             raise self._wrap_error(exc) from exc
@@ -385,6 +448,9 @@ class ConfidentialQdrantService(QdrantService):
         row_map = {int(row["point_id"]): row for row in rows}
         out: list[dict[str, Any]] = []
         for hit in results:
+            score = hit.score or 0.0
+            if score_threshold is not None and score < score_threshold:
+                continue
             row = row_map.get(int(hit.id))
             if row is None:
                 continue
@@ -397,9 +463,11 @@ class ConfidentialQdrantService(QdrantService):
                     "row_index": row["row_index"],
                     "fields": json.loads(row["fields_json"]),
                     "fact_text": row["fact_text"],
-                    "score": hit.score,
+                    "score": score,
                 }
             )
+            if len(out) >= limit:
+                break
         return out
 
     def delete_fact_records(self, repo_id: int, source_filename: str) -> None:

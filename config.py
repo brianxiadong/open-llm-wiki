@@ -36,6 +36,25 @@ class Config:
 
     QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 
+    # ── RAG 检索参数 ────────────────────────────────────────────────────
+    # Chunk 切分
+    RAG_CHUNK_MIN = int(os.environ.get("RAG_CHUNK_MIN", "400"))
+    RAG_CHUNK_MAX = int(os.environ.get("RAG_CHUNK_MAX", "1200"))
+    RAG_CHUNK_OVERLAP = int(os.environ.get("RAG_CHUNK_OVERLAP", "80"))
+    # 召回参数
+    RAG_CHUNK_TOP_K = int(os.environ.get("RAG_CHUNK_TOP_K", "12"))
+    RAG_FACT_TOP_K = int(os.environ.get("RAG_FACT_TOP_K", "12"))
+    RAG_CHUNK_SCORE_THRESHOLD = float(os.environ.get("RAG_CHUNK_SCORE_THRESHOLD", "0.35"))
+    RAG_FACT_SCORE_THRESHOLD = float(os.environ.get("RAG_FACT_SCORE_THRESHOLD", "0.40"))
+    RAG_MAX_CHUNKS_PER_FILE = int(os.environ.get("RAG_MAX_CHUNKS_PER_FILE", "2"))
+    # 融合与重写
+    RAG_RRF_K = int(os.environ.get("RAG_RRF_K", "60"))
+    RAG_ENABLE_BM25 = os.environ.get("RAG_ENABLE_BM25", "true").lower() == "true"
+    RAG_ENABLE_HYDE = os.environ.get("RAG_ENABLE_HYDE", "false").lower() == "true"
+    # Context 组装
+    RAG_CONTEXT_CHUNK_CHARS = int(os.environ.get("RAG_CONTEXT_CHUNK_CHARS", "700"))
+    RAG_CONTEXT_EXPAND_NEIGHBORS = int(os.environ.get("RAG_CONTEXT_EXPAND_NEIGHBORS", "1"))
+
     MINERU_API_URL = os.environ.get("MINERU_API_URL", "http://localhost:8000")
     MINERU_TIMEOUT = int(os.environ.get("MINERU_TIMEOUT", "300"))
 

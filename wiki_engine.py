@@ -10,6 +10,7 @@ from typing import Any, Generator
 
 from exceptions import LLMClientError, QdrantServiceError, WikiEngineError
 from llm_client import LLMClient
+from llmwiki_core import HybridRetriever, RetrievalConfig
 from qdrant_service import QdrantService
 from utils import classify_query_mode, list_wiki_pages, read_jsonl, render_markdown
 
@@ -99,10 +100,25 @@ class WikiEngine:
         llm_client: LLMClient,
         qdrant_service: QdrantService,
         data_dir: str,
+        *,
+        retriever: HybridRetriever | None = None,
+        retrieval_config: RetrievalConfig | None = None,
+        enable_hyde: bool = False,
+        context_chunk_chars: int = 700,
+        context_expand_neighbors: int = 1,
     ) -> None:
         self._llm = llm_client
         self._qdrant = qdrant_service
         self._data_dir = data_dir
+        if retriever is None and qdrant_service is not None:
+            retriever = HybridRetriever(
+                qdrant=qdrant_service,
+                config=retrieval_config or RetrievalConfig(),
+            )
+        self._retriever = retriever
+        self._enable_hyde = bool(enable_hyde)
+        self._context_chunk_chars = max(200, int(context_chunk_chars))
+        self._context_expand_neighbors = max(0, int(context_expand_neighbors))
 
     # -- path helpers -------------------------------------------------------
 
@@ -268,6 +284,133 @@ class WikiEngine:
                 }
             )
         return fact_evidence
+
+    # -----------------------------------------------------------------------
+    # RETRIEVAL (shared by query_stream / query_with_evidence)
+    # -----------------------------------------------------------------------
+
+    def _retrieval_top_k(self, query_mode: str) -> tuple[int, int]:
+        """根据 query_mode 动态分配 chunk/fact 的召回数量。
+
+        规则（基于默认 RetrievalConfig）：
+        - ``fact``: 结构化事实为主，加大 fact_top_k、减小 chunk_top_k
+        - ``narrative``: 文本综述为主，反之
+        - ``hybrid`` 或未知: 两边都足量
+        """
+        cfg = self._retriever.config if self._retriever else RetrievalConfig()
+        base_chunk = cfg.chunk_top_k
+        base_fact = cfg.fact_top_k
+        if query_mode == "fact":
+            return max(4, base_chunk // 2), max(base_fact, int(base_fact * 1.5))
+        if query_mode == "narrative":
+            return max(base_chunk, int(base_chunk * 1.2)), max(4, base_fact // 2)
+        return base_chunk, base_fact
+
+    def _maybe_hyde(self, question: str) -> str | None:
+        """可选 HyDE：用低温度让 LLM 先写一段假想答案，再作为 dense 检索的查询文本。
+
+        只影响向量通道；BM25 仍用原始问题，避免假想答案污染关键字排序。
+        返回 None 表示不启用或失败，调用方应退回原始 question。
+        """
+        if not self._enable_hyde:
+            return None
+        try:
+            text = self._llm.chat(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你在帮助检索。请用 3~5 句话写一段简短、具体的答案草稿，"
+                            "用词尽量与可能的资料表述接近。不要声明自己不确定，不要列大纲。"
+                        ),
+                    },
+                    {"role": "user", "content": question},
+                ],
+                temperature=0.2,
+            )
+            text = (text or "").strip()
+            if len(text) < 10:
+                return None
+            return f"{question}\n{text}"
+        except Exception as exc:
+            logger.warning("HyDE failed, fallback to raw question: %s", exc)
+            return None
+
+    def _retrieve_chunks(self, repo_id: int, question: str, query_mode: str) -> list[dict]:
+        if self._retriever is None:
+            return []
+        chunk_k, _ = self._retrieval_top_k(query_mode)
+        dense_q = self._maybe_hyde(question)
+        try:
+            hits = self._retriever.retrieve_chunks(
+                repo_id=repo_id,
+                query=question,
+                top_k=chunk_k,
+                dense_query=dense_q,
+            )
+        except QdrantServiceError as exc:
+            logger.warning("retrieve_chunks failed: %s", exc)
+            return []
+        except Exception as exc:
+            logger.warning("retrieve_chunks failed: %s", exc)
+            return []
+        if not isinstance(hits, list):
+            return []
+        return [h for h in hits if isinstance(h, dict)]
+
+    def _retrieve_facts(self, repo_id: int, question: str, query_mode: str) -> list[dict]:
+        if self._retriever is None:
+            return []
+        _, fact_k = self._retrieval_top_k(query_mode)
+        try:
+            hits = self._retriever.retrieve_facts(
+                repo_id=repo_id,
+                query=question,
+                top_k=fact_k,
+            )
+        except QdrantServiceError as exc:
+            logger.warning("retrieve_facts failed: %s", exc)
+            return []
+        except Exception as exc:
+            logger.warning("retrieve_facts failed: %s", exc)
+            return []
+        if not isinstance(hits, list):
+            return []
+        return [h for h in hits if isinstance(h, dict)]
+
+    def _build_chunk_context(
+        self,
+        chunk_hits: list[dict],
+        page_contents: dict[str, str],
+    ) -> str:
+        """以 chunk 为单位拼装上下文；不再把整页灌给 LLM。
+
+        - 每条 chunk 输出 ``page_title / heading`` 做小标题，``filename`` 作为来源引用
+        - 同页多条 chunk 按 ``position`` 排序，便于 LLM 理解上下文连续性
+        - 截断长度由 ``RAG_CONTEXT_CHUNK_CHARS`` 控制
+        """
+        if not chunk_hits:
+            return ""
+        by_file: dict[str, list[dict]] = {}
+        for hit in chunk_hits:
+            fn = hit.get("filename") or ""
+            by_file.setdefault(fn, []).append(hit)
+        parts: list[str] = []
+        limit = self._context_chunk_chars
+        for fn, hits in by_file.items():
+            hits_sorted = sorted(hits, key=lambda h: int(h.get("position") or 0))
+            title = hits_sorted[0].get("page_title") or fn.replace(".md", "")
+            parts.append(f"=== {title} ({fn}) ===")
+            for h in hits_sorted:
+                heading = h.get("heading") or ""
+                snippet = str(h.get("chunk_text") or "").strip()
+                if len(snippet) > limit:
+                    snippet = snippet[:limit].rstrip() + "…"
+                if heading:
+                    parts.append(f"[{heading}]\n{snippet}")
+                else:
+                    parts.append(snippet)
+        return "\n\n".join(parts)
 
     def _build_fact_context(self, fact_hits: list[dict]) -> str:
         parts: list[str] = []
@@ -751,39 +894,22 @@ class WikiEngine:
                 wiki_filenames = [wiki_filenames]
 
         qdrant_filenames: list[str] = []
-        chunk_hits: list[dict] = []
-        fact_hits: list[dict] = []
-        if self._qdrant:
-            try:
-                chunk_hits = self._qdrant.search_chunks(repo_id=repo_id, query=question, limit=8)
-                if not isinstance(chunk_hits, list):
-                    chunk_hits = []
-                qdrant_filenames = list({h["filename"] for h in chunk_hits})
-            except QdrantServiceError:
-                pass
-            try:
-                fact_hits = self._qdrant.search_facts(repo_id=repo_id, query=question, limit=8)
-                if not isinstance(fact_hits, list):
-                    fact_hits = []
-            except QdrantServiceError:
-                pass
+        chunk_hits = self._retrieve_chunks(repo_id, question, query_mode)
+        fact_hits = self._retrieve_facts(repo_id, question, query_mode)
+        if chunk_hits:
+            qdrant_filenames = list({h["filename"] for h in chunk_hits if h.get("filename")})
 
         yield {"event": "progress", "data": {"message": "正在读取页面内容…", "percent": 40}}
 
-        seen: set[str] = set()
-        merged: list[str] = []
-        for fn in wiki_filenames + qdrant_filenames:
-            if fn not in seen:
-                seen.add(fn)
-                merged.append(fn)
-
+        # 只有 Wiki 结构化通道挑中的页面才读整页（用于 evidence URL / 兜底）；
+        # chunk 通道命中的片段直接走 _build_chunk_context，不再灌整页。
         page_contents: dict[str, str] = {}
-        for fn in merged:
+        for fn in wiki_filenames:
             content = _read_file(os.path.join(wiki_dir, fn))
             if content:
                 page_contents[fn] = content
 
-        if not page_contents and not fact_hits:
+        if not page_contents and not chunk_hits and not fact_hits:
             yield {"event": "done", "data": {
                 "answer": "暂无相关 Wiki 内容可以回答该问题。请先导入相关资料。",
                 "wiki_sources": [], "qdrant_sources": [], "referenced_pages": [],
@@ -791,12 +917,17 @@ class WikiEngine:
             }}
             return
 
-        wiki_context_parts = [
-            f"=== {fn} ===\n{content[:6000]}"
-            for fn, content in page_contents.items()
-        ]
+        context_parts: list[str] = []
+        chunk_context = self._build_chunk_context(chunk_hits, page_contents)
+        if chunk_context:
+            context_parts.append(chunk_context)
+        # Wiki 通道命中但 chunk 通道没命中的页面，仍给 LLM 一段前言作为兜底
+        chunk_files = {h.get("filename") for h in chunk_hits if h.get("filename")}
+        for fn, content in page_contents.items():
+            if fn in chunk_files:
+                continue
+            context_parts.append(f"=== {fn} ===\n{content[:2000]}")
         fact_context = self._build_fact_context(fact_hits)
-        context_parts = wiki_context_parts[:]
         if fact_context:
             context_parts.append(fact_context)
         context_block = "\n\n".join(context_parts)
@@ -927,31 +1058,14 @@ class WikiEngine:
             if isinstance(wiki_filenames, str):
                 wiki_filenames = [wiki_filenames]
 
-        # -- Chunk path ------------------------------------------------
-        chunk_hits: list[dict] = []
-        fact_hits: list[dict] = []
-        if self._qdrant:
-            try:
-                chunk_hits = self._qdrant.search_chunks(
-                    repo_id=repo_id, query=question, limit=8
-                )
-                if not isinstance(chunk_hits, list):
-                    chunk_hits = []
-            except QdrantServiceError as exc:
-                logger.warning("search_chunks failed: %s", exc)
-            try:
-                fact_hits = self._qdrant.search_facts(
-                    repo_id=repo_id, query=question, limit=8
-                )
-                if not isinstance(fact_hits, list):
-                    fact_hits = []
-            except QdrantServiceError as exc:
-                logger.warning("search_facts failed: %s", exc)
+        # -- Chunk / Fact path (hybrid: dense + BM25 RRF, mode-aware top-k) --
+        chunk_hits = self._retrieve_chunks(repo_id, question, query_mode)
+        fact_hits = self._retrieve_facts(repo_id, question, query_mode)
 
         # -- Build wiki_evidence ---------------------------------------
         wiki_evidence: list[dict] = []
         page_contents: dict[str, str] = {}
-        chunk_fns = {h["filename"] for h in chunk_hits}
+        chunk_fns = {h["filename"] for h in chunk_hits if h.get("filename")}
         for fn in wiki_filenames:
             content = _read_file(os.path.join(wiki_dir, fn))
             if not content:
@@ -977,7 +1091,7 @@ class WikiEngine:
         chunk_evidence: list[dict] = []
         for hit in chunk_hits:
             fn = hit["filename"]
-            if fn not in page_contents:
+            if fn and fn not in page_contents:
                 content = _read_file(os.path.join(wiki_dir, fn))
                 if content:
                     page_contents[fn] = content
@@ -990,11 +1104,12 @@ class WikiEngine:
                 "url": f"{wiki_base_url}/{page_slug}" if wiki_base_url else f"/{page_slug}",
                 "snippet": hit.get("chunk_text", "")[:200],
                 "score": hit.get("score", 0.0),
+                "sources": hit.get("sources") or ["dense"],
             })
 
         fact_evidence = self._build_fact_evidence(username, repo_slug, fact_hits)
 
-        if not page_contents and not fact_hits:
+        if not page_contents and not chunk_hits and not fact_hits:
             empty_conf = self._score_confidence(0, 0, 0.0, False, False, "", 0, 0.0, False)
             return {
                 "markdown": "暂无相关 Wiki 内容可以回答该问题。请先导入相关资料。",
@@ -1009,10 +1124,15 @@ class WikiEngine:
             }
 
         # -- Build context & generate answer ---------------------------
-        context_parts = [
-            f"=== {fn} ===\n{content[:5000]}"
-            for fn, content in page_contents.items()
-        ]
+        # Chunk 粒度优先，Wiki 整页只作兜底（命中了 chunk 的页面不再整页灌入）
+        context_parts: list[str] = []
+        chunk_context = self._build_chunk_context(chunk_hits, page_contents)
+        if chunk_context:
+            context_parts.append(chunk_context)
+        for fn, content in page_contents.items():
+            if fn in chunk_fns:
+                continue
+            context_parts.append(f"=== {fn} ===\n{content[:2000]}")
         fact_context = self._build_fact_context(fact_hits)
         if fact_context:
             context_parts.append(fact_context)

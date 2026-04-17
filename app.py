@@ -591,11 +591,26 @@ def create_app() -> Flask:
             Config.EMBEDDING_API_KEY,
             Config.EMBEDDING_MODEL,
             Config.EMBEDDING_DIMENSIONS,
+            chunk_min=Config.RAG_CHUNK_MIN,
+            chunk_max=Config.RAG_CHUNK_MAX,
+            chunk_overlap=Config.RAG_CHUNK_OVERLAP,
         )
     except Exception:
         app.qdrant = None
         logging.warning("Qdrant service unavailable, running in degraded mode")
-    app.wiki_engine = WikiEngine(app.llm, app.qdrant, Config.DATA_DIR)
+    from llmwiki_core import HybridRetriever, RetrievalConfig
+    _rag_cfg = RetrievalConfig.from_config(Config)
+    _retriever = HybridRetriever(qdrant=app.qdrant, config=_rag_cfg) if app.qdrant else None
+    app.wiki_engine = WikiEngine(
+        app.llm,
+        app.qdrant,
+        Config.DATA_DIR,
+        retriever=_retriever,
+        retrieval_config=_rag_cfg,
+        enable_hyde=Config.RAG_ENABLE_HYDE,
+        context_chunk_chars=Config.RAG_CONTEXT_CHUNK_CHARS,
+        context_expand_neighbors=Config.RAG_CONTEXT_EXPAND_NEIGHBORS,
+    )
 
     # Query trace logger: daily JSONL files under DATA_DIR/logs/
     from utils import QueryTraceLogger

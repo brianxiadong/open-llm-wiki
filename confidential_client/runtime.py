@@ -17,6 +17,7 @@ from confidential_client.qdrant import ConfidentialQdrantService
 from confidential_client.repository import ConfidentialRepository
 from exceptions import MineruClientError
 from llm_client import LLMClient
+from llmwiki_core import HybridRetriever, RetrievalConfig
 from llmwiki_core.contracts import QueryRunResult
 from mineru_client import MineruClient
 from utils import build_tabular_markdown_and_records, list_wiki_pages, render_markdown, write_jsonl
@@ -43,7 +44,16 @@ class ConfidentialRuntime:
             max_tokens=services.llm_max_tokens,
         )
         qdrant = self._build_qdrant(workspace)
-        return WikiEngine(llm, qdrant, str(workspace.repo_paths.data_dir))
+        retrieval_cfg = RetrievalConfig()
+        retriever = HybridRetriever(qdrant=qdrant, config=retrieval_cfg) if qdrant else None
+        return WikiEngine(
+            llm,
+            qdrant,
+            str(workspace.repo_paths.data_dir),
+            retriever=retriever,
+            retrieval_config=retrieval_cfg,
+            enable_hyde=False,
+        )
 
     def _build_qdrant(self, workspace) -> ConfidentialQdrantService:
         services = workspace.load_services()

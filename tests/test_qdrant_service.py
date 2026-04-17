@@ -129,6 +129,90 @@ def test_search_chunks_returns_structured_results(qdrant_service):
     assert results[0]["heading"] == "Section A"
 
 
+def test_upsert_page_chunks_uses_batch_embed_and_injects_heading(qdrant_service):
+    svc, mock_client = qdrant_service
+    mock_client.collection_exists.return_value = True
+    with patch.object(svc, "_embed_batch") as mock_batch:
+        mock_batch.return_value = [[0.1] * 128, [0.2] * 128]
+        svc.upsert_page_chunks(
+            repo_id=7,
+            filename="x.md",
+            title="My Page",
+            page_type="concept",
+            content="# Heading A\n\n" + "alpha " * 120 + "\n\n## Heading B\n\n" + "beta " * 120,
+        )
+    assert mock_batch.called
+    texts = mock_batch.call_args_list[0][0][0]
+    assert any("My Page" in t for t in texts), f"page_title not injected into embed text: {texts}"
+    assert any("Heading A" in t or "Heading B" in t for t in texts)
+
+
+def test_search_chunks_applies_score_threshold(qdrant_service):
+    svc, mock_client = qdrant_service
+    mock_client.collection_exists.return_value = True
+    low = MagicMock(score=0.10, payload={"chunk_id": "a#0", "filename": "a.md", "chunk_text": "t"})
+    high = MagicMock(score=0.80, payload={"chunk_id": "b#0", "filename": "b.md", "chunk_text": "t"})
+    mock_client.query_points.return_value = MagicMock(points=[low, high])
+    out = svc.search_chunks(repo_id=1, query="q", limit=5, score_threshold=0.5)
+    assert [h["chunk_id"] for h in out] == ["b#0"]
+
+
+def test_search_chunks_applies_max_per_file(qdrant_service):
+    svc, mock_client = qdrant_service
+    mock_client.collection_exists.return_value = True
+    hits = [
+        MagicMock(score=0.9, payload={"chunk_id": "a#0", "filename": "a.md", "chunk_text": "1"}),
+        MagicMock(score=0.85, payload={"chunk_id": "a#1", "filename": "a.md", "chunk_text": "2"}),
+        MagicMock(score=0.80, payload={"chunk_id": "a#2", "filename": "a.md", "chunk_text": "3"}),
+        MagicMock(score=0.70, payload={"chunk_id": "b#0", "filename": "b.md", "chunk_text": "4"}),
+    ]
+    mock_client.query_points.return_value = MagicMock(points=hits)
+    out = svc.search_chunks(repo_id=1, query="q", limit=5, max_per_file=2)
+    assert [h["chunk_id"] for h in out] == ["a#0", "a#1", "b#0"]
+
+
+def test_scroll_all_chunks_iterates_pages(qdrant_service):
+    svc, mock_client = qdrant_service
+    mock_client.collection_exists.return_value = True
+    point = MagicMock()
+    point.payload = {"chunk_id": "a#0", "filename": "a.md", "chunk_text": "hi", "position": 0}
+    mock_client.scroll.side_effect = [([point], None)]
+    out = svc.scroll_all_chunks(repo_id=42)
+    assert out == [{
+        "chunk_id": "a#0",
+        "filename": "a.md",
+        "page_title": "",
+        "page_type": "",
+        "heading": "",
+        "chunk_text": "hi",
+        "position": 0,
+    }]
+
+
+def test_fact_embed_text_contains_sheet_and_row(qdrant_service):
+    svc, _ = qdrant_service
+    text = svc._normalize_fact_embed_text(
+        {"source_file": "s.csv", "sheet": "Q1", "row_index": 5},
+        "地区=华东; 收入=1200",
+    )
+    assert text.startswith("[s.csv | 表=Q1 | 行=5]\n")
+    assert "地区=华东" in text
+
+
+def test_split_page_into_chunks_respects_overlap(qdrant_service):
+    svc, _ = qdrant_service
+    svc._chunk_min = 200
+    svc._chunk_max = 400
+    svc._chunk_overlap = 60
+    body = "句子。" * 400
+    chunks = svc.split_page_into_chunks(f"# Big\n\n{body}")
+    assert len(chunks) >= 2
+    prev = chunks[0]["chunk_text"]
+    nxt = chunks[1]["chunk_text"]
+    # 相邻 chunk 必须有尾-首重叠，至少几个字符
+    assert any(prev[-i:] == nxt[:i] for i in range(8, 40))
+
+
 def test_delete_page_chunks_no_collection(qdrant_service):
     svc, mock_client = qdrant_service
     mock_client.collection_exists.return_value = False

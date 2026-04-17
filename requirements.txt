@@ -17,3 +17,5 @@ lxml_html_clean>=0.4
 xai-sdk>=1.11
 openpyxl>=3.1
 pywebview>=5.1
+rank-bm25>=0.2.2
+jieba>=0.42.1

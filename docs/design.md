@@ -730,49 +730,88 @@ User Prompt:（根据操作类型不同）
 请返回更新后的完整 markdown 内容。
 ```
 
-### 7.4 查询的 Prompt 细节（双通道）
+### 7.4 查询的 Prompt 细节（多通道 Hybrid RAG）
 
-**Step 1 — 双通道页面定位**（并行执行）：
+查询分四步：**问题分类 → 多通道召回 → RRF 融合 → Chunk 粒度 Prompt**。所有
+参数都可通过 `config.py`（`RAG_*` 环境变量）调整，evaluation 脚本
+`eval/scripts/eval_retrieval.py` 用来量化改动对 Recall@k / MRR 的影响。
 
-通道 A — Wiki 结构化导航：
+**Step 1 — 问题分类**（`utils.classify_query_mode`）：
+
+- `fact`：字段 / 表格类事实问答 → 放大 fact 通道 top-k，缩小 chunk 通道
+- `narrative`：综述 / 对比 / 技术演进 → 反之
+- `hybrid` / 未知：两边都取足量
+
+**Step 2 — 多通道召回**：
+
+通道 A — Wiki 结构化导航（LLM 从 `index.md` 挑选最多 10 个页面）：
+
 ```
 用户问题：{question}
 当前 Wiki 目录：
 ---
-{index.md 内容}
+{index.md}
 ---
-请选出回答此问题所需的 Wiki 页面（最多 10 个），以 JSON 数组返回文件名列表。
+请选出回答此问题所需的 Wiki 页面，以 JSON {"filenames":[...]} 返回。
 ```
 
-通道 B — Qdrant 语义检索（无需 LLM 调用）：
+通道 B — Chunk 级 Hybrid 检索（`HybridRetriever.retrieve_chunks`）：
+
 ```python
-# 系统自动执行
-query_vector = embedding_model.encode(question)
-qdrant_results = qdrant.search(
-    collection_name=f"repo_{repo_id}",
-    query_vector=query_vector,
-    limit=10
+# 1) Dense (cosine)：bge-m3 embedding + Qdrant
+#    - chunk embed 前缀拼入 page_title / heading，显著提高语义区分度
+#    - score_threshold 过滤低分噪声；max_per_file 避免单页霸榜
+dense_hits = qdrant.search_chunks(
+    repo_id, query,
+    limit=top_k * 2,
+    score_threshold=Config.RAG_CHUNK_SCORE_THRESHOLD,  # 默认 0.35
+    oversample=3,
 )
-qdrant_pages = [hit.payload["filename"] for hit in qdrant_results]
+
+# 2) BM25 (关键字)：rank_bm25 + jieba，按 repo_id 惰性构建
+#    - corpus 从 qdrant.scroll_all_chunks 拉取（桌面端来自本地 SQLite）
+#    - 缓存 key=(repo, n_chunks + max_position)，ingest 后自动失效
+bm25_hits = keyword_index.search(query)
+
+# 3) RRF 融合：score = Σ 1/(k + rank_i)，默认 k=60
+#    - 不直接相加 cosine + BM25 分数（量纲不同）
+#    - 同时出现在两个通道的 chunk 排名更靠前
+fused = rrf_merge(dense_hits, bm25_hits, k=Config.RAG_RRF_K)
 ```
 
-合并：将两个通道的结果去重合并，得到最终页面集合。
+通道 C — Fact 检索（`HybridRetriever.retrieve_facts`，结构化表格）：
+fact embedding 前缀写入 `[source | 表=<sheet> | 行=<idx>]`，让「Q1 华东收入」
+这种字段定位型问题能显著跑对行。
 
-**Step 2 — 回答**：
+可选 HyDE（`RAG_ENABLE_HYDE=true`）：让 LLM 先用低温度写一段 3~5 句假想答案，
+再作为 *dense* 查询文本；BM25 仍用原始问题，避免假想答案污染关键字排序。
+
+**Step 3 — Chunk 粒度 Prompt**：不再把命中页面整页灌给 LLM，而是用
+`_build_chunk_context` 按 `filename` 分组，同页 chunk 按 `position` 排序，
+每段只保留 `RAG_CONTEXT_CHUNK_CHARS`（默认 700）字符。仅 Wiki 结构通道
+挑中但未出现在 chunk 命中里的页面，才追加前 2000 字作为兜底。
+
 ```
 用户问题：{question}
-相关 Wiki 页面：
----
-{page1.md 内容}
----
-{page2.md 内容}
----
-请基于以上 Wiki 内容回答问题。要求：
-1. 综合多个页面的信息
-2. 引用具体页面：使用 [页面标题](page.md) 格式
-3. 如果 Wiki 中信息不足，明确指出
-4. 如果此回答值得保存，建议一个文件名
+
+=== Attention Mechanism (attention-mechanism.md) ===
+[FlashAttention]
+FlashAttention 由 Dao 等人在 2022 年提出……
+
+=== Transformer 架构 (transformer-architecture.md) ===
+[多头自注意力]
+……
+
+(可选) Fact 证据（结构化表格）：
+[sales.csv | 表=Q1 | 行=3]
+地区=华东; 收入=1200
+
+请基于以上片段回答问题，并在 JSON 里返回 referenced_pages。
 ```
+
+**Step 4 — Confidence 评分**（规则）：综合 wiki 通道命中数、chunk/fact 通道
+Top-1 分数、是否同时命中 wiki + chunk、是否命中 `overview.md` 等特征，
+给出 `confidence_label + reasons`，供前端展示并决定是否触发二次提问。
 
 ### 7.5 维护检查的 Prompt
 
@@ -1008,6 +1047,32 @@ Qdrant 既承担叙事层的页面/片段检索，也承担 Fact Layer 的 recor
 - `repo_{repo_id}`：页面级向量（Wiki 页面全文）
 - `repo_{repo_id}_chunks`：段落级向量（chunk evidence）
 - `repo_{repo_id}_facts`：结构化 record 向量（fact evidence）
+
+**Chunking 策略**（`QdrantService.split_page_into_chunks`）：
+
+- 切分参数由 `RAG_CHUNK_MIN / RAG_CHUNK_MAX / RAG_CHUNK_OVERLAP`（默认 400 / 1200 / 80）控制。
+- 先按 H1~H4 切出 section；短 section 合并到下一段，避免碎片。
+- 超长 section 在句末（`。！？\n` 等）就近断开，**相邻 chunk 保留 `chunk_overlap` 字符重叠**，
+  避免重要句子被刚好切在边界上。
+- 在**送入 embedding 之前**会把 `page_title / heading` 拼到正文前面：
+
+  ```
+  {page_title} / {heading}
+
+  {chunk_text}
+  ```
+
+  这对 bge-m3 这类通用 embedding 模型非常关键——它让「Transformer → 多头自注意力」和
+  「Transformer → 位置编码」这种同主题不同切面的片段在向量空间里拉开距离。
+  `chunk_text` 本身不含前缀，payload 里还是原文，不影响 Prompt 显示。
+
+**Upsert 性能**：`upsert_page_chunks` 和 `upsert_fact_records` 都走 batch embed
+（`_embed_chunks_batched` / `_iter_embedded_fact_batches`）。失败时按批回退到逐条，
+避免单条异常带崩整次摄入。
+
+**Hybrid 检索与旁路索引**：见 §7.4。`QdrantService.scroll_all_chunks(repo_id)` 把
+某个 repo 下所有 chunk payload 吐出来，供 `llmwiki_core/keyword_index.py` 构建 BM25；
+同一签名的 corpus 会被进程级缓存，下一次查询不重复分词。
 
 ```python
 # qdrant_service.py 核心逻辑
