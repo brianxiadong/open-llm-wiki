@@ -5,6 +5,7 @@ import json
 import os
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
 
 
@@ -123,6 +124,61 @@ def test_login_wrong_password(client, app):
         data={"username": "wrongpwuser", "password": "wrong!!!"},
     )
     assert resp.status_code == 200
+
+
+def test_login_requires_csrf_when_enabled(client, app):
+    app.config["WTF_CSRF_ENABLED"] = True
+    resp = client.post(
+        "/login",
+        data={"username": "nobody", "password": "wrong"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_login_accepts_valid_csrf_token(client, app):
+    app.config["WTF_CSRF_ENABLED"] = True
+    with app.app_context():
+        from models import User, db
+
+        user = User(username="csrfuser", email="csrf@example.com", display_name="CSRF User")
+        user.set_password("password123")
+        user.email_verified = True
+        db.session.add(user)
+        db.session.commit()
+
+    with client.session_transaction() as sess:
+        sess["_csrf_token"] = "known-token"
+
+    resp = client.post(
+        "/login",
+        data={"username": "csrfuser", "password": "password123", "csrf_token": "known-token"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+
+def test_login_ignores_external_next_url(client, app):
+    app.config["WTF_CSRF_ENABLED"] = True
+    with app.app_context():
+        from models import User, db
+
+        user = User(username="redirectuser", email="redirect@example.com", display_name="Redirect User")
+        user.set_password("password123")
+        user.email_verified = True
+        db.session.add(user)
+        db.session.commit()
+
+    with client.session_transaction() as sess:
+        sess["_csrf_token"] = "next-token"
+
+    resp = client.post(
+        "/login?next=https://evil.example/steal",
+        data={"username": "redirectuser", "password": "password123", "csrf_token": "next-token"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/redirectuser")
 
 
 def test_logout(auth_client):
@@ -837,6 +893,17 @@ def test_index_redirect(client):
     resp = client.get("/", follow_redirects=False)
     assert resp.status_code == 302
     assert "login" in (resp.headers.get("Location") or "").lower()
+
+
+def test_create_app_requires_non_default_secret_key(monkeypatch):
+    from app import create_app
+    from config import Config
+
+    monkeypatch.setattr(Config, "TESTING", False, raising=False)
+    monkeypatch.setattr(Config, "SECRET_KEY", "dev-secret-key", raising=False)
+
+    with pytest.raises(RuntimeError, match="SECRET_KEY"):
+        create_app()
 
 
 # -- Wiki edit/delete ------------------------------------------------------

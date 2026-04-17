@@ -7,6 +7,7 @@ import re
 import secrets
 import shutil
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from flask import (
     Flask,
@@ -20,6 +21,7 @@ from flask import (
     render_template,
     request,
     send_file,
+    session,
     stream_with_context,
     url_for,
 )
@@ -91,6 +93,8 @@ REPO_ROLE_LABELS = {
     "viewer": "只读",
 }
 REPO_ROLE_LEVELS = {"viewer": 1, "editor": 2, "owner": 3}
+_DEFAULT_SECRET_KEYS = {"", "dev-secret-key", "change-me-to-a-random-string"}
+_CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +220,26 @@ def _ensure_repo_access(repo: Repo) -> None:
 
 def _normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def _get_csrf_token() -> str:
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
+def _is_safe_next_url(target: str | None) -> bool:
+    if not target:
+        return False
+    parsed = urlparse(target)
+    if parsed.scheme and parsed.scheme not in {"http", "https"}:
+        return False
+    if not parsed.netloc:
+        return target.startswith("/")
+    host = urlparse(request.host_url)
+    return parsed.scheme in {"http", "https"} and parsed.netloc == host.netloc
 
 
 def _is_valid_email(email: str) -> bool:
@@ -534,6 +558,12 @@ def create_app() -> Flask:
     app.config.from_object(Config)
     app.config["MAX_CONTENT_LENGTH"] = Config.MAX_UPLOAD_SIZE
 
+    if (
+        not app.config.get("TESTING")
+        and app.config.get("SECRET_KEY") in _DEFAULT_SECRET_KEYS
+    ):
+        raise RuntimeError("SECRET_KEY 未配置或仍为默认值，拒绝启动")
+
     db.init_app(app)
     login_manager.init_app(app)
     login_manager.login_view = "auth.login"
@@ -573,7 +603,11 @@ def create_app() -> Flask:
 
     @app.context_processor
     def inject_admin():
-        return {"admin_username": Config.ADMIN_USERNAME, "site_name": Config.SITE_NAME}
+        return {
+            "admin_username": Config.ADMIN_USERNAME,
+            "site_name": Config.SITE_NAME,
+            "csrf_token": _get_csrf_token,
+        }
 
     @app.before_request
     def _check_api_token():
@@ -594,6 +628,24 @@ def create_app() -> Flask:
             login_user(token.user, remember=False)
             token.last_used_at = datetime.now(timezone.utc)
             db.session.commit()
+
+    @app.before_request
+    def _csrf_protect():
+        if not app.config.get("WTF_CSRF_ENABLED", True):
+            return
+        if request.method in _CSRF_SAFE_METHODS:
+            return
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            return
+        expected = session.get("_csrf_token")
+        provided = (
+            request.form.get("csrf_token")
+            or request.headers.get("X-CSRFToken")
+            or request.headers.get("X-CSRF-Token")
+        )
+        if not expected or not provided or not secrets.compare_digest(expected, provided):
+            abort(400, description="CSRF token missing or invalid")
 
     _register_routes(app)
     _register_error_handlers(app)
@@ -716,7 +768,7 @@ def _register_routes(app: Flask) -> None:
                 _audit("login")
                 next_url = request.args.get("next")
                 return redirect(
-                    next_url
+                    (next_url if _is_safe_next_url(next_url) else None)
                     or url_for("repo.list_repos", username=user.username)
                 )
             flash("用户名或密码错误", "error")

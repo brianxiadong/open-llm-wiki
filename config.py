@@ -12,6 +12,8 @@ logging.basicConfig(format=LOG_FORMAT, level=LOG_LEVEL)
 
 class Config:
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key")
+    TESTING = os.environ.get("TESTING", "false").lower() == "true"
+    WTF_CSRF_ENABLED = os.environ.get("WTF_CSRF_ENABLED", "true").lower() == "true"
     DATA_DIR = os.environ.get("DATA_DIR", "./data")
 
     _db_user = os.environ.get("DB_USER", "root")

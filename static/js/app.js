@@ -1,6 +1,59 @@
 (function () {
   'use strict';
 
+  function getCsrfToken() {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : '';
+  }
+
+  function isUnsafeMethod(method) {
+    return ['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(String(method || 'GET').toUpperCase()) >= 0;
+  }
+
+  function isSameOrigin(url) {
+    try {
+      var target = new URL(url || window.location.href, window.location.href);
+      return target.origin === window.location.origin;
+    } catch (_e) {
+      return true;
+    }
+  }
+
+  if (window.fetch) {
+    var originalFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      init = init || {};
+      var method = init.method || (input && input.method) || 'GET';
+      var url = typeof input === 'string' ? input : (input && input.url) || window.location.href;
+      if (isUnsafeMethod(method) && isSameOrigin(url)) {
+        var headers = new Headers(init.headers || (input && input.headers) || {});
+        if (!headers.has('X-CSRFToken')) {
+          var token = getCsrfToken();
+          if (token) headers.set('X-CSRFToken', token);
+        }
+        init.headers = headers;
+      }
+      return originalFetch(input, init);
+    };
+  }
+
+  if (window.XMLHttpRequest) {
+    var originalOpen = XMLHttpRequest.prototype.open;
+    var originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      this.__csrfMethod = method;
+      this.__csrfUrl = url;
+      return originalOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function () {
+      if (isUnsafeMethod(this.__csrfMethod) && isSameOrigin(this.__csrfUrl)) {
+        var token = getCsrfToken();
+        if (token) this.setRequestHeader('X-CSRFToken', token);
+      }
+      return originalSend.apply(this, arguments);
+    };
+  }
+
   /* --- Convert lucide-* classes to data-lucide and render SVG icons --- */
   document.querySelectorAll('[class*="lucide-"]').forEach(function (el) {
     var match = Array.from(el.classList).find(function (c) { return c.indexOf('lucide-') === 0; });
@@ -75,6 +128,20 @@
         e.preventDefault();
       }
     });
+  });
+
+  document.querySelectorAll('form').forEach(function (form) {
+    var method = (form.getAttribute('method') || 'GET').toUpperCase();
+    if (!isUnsafeMethod(method)) return;
+    if (!isSameOrigin(form.getAttribute('action') || window.location.href)) return;
+    if (form.querySelector('input[name="csrf_token"]')) return;
+    var token = getCsrfToken();
+    if (!token) return;
+    var input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'csrf_token';
+    input.value = token;
+    form.appendChild(input);
   });
 
   /* --- SSE listener for ingest progress (reusable) --- */

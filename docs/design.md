@@ -577,7 +577,9 @@ GET  /admin/feedbacks                        → 用户反馈列表（关联 que
 
 **来源证据页**（`templates/source/list.html`、`templates/source/view.html`）：公开仓库允许访客查看来源列表和来源 Markdown 预览，用于承接 evidence 链接；上传、删除、重命名和摄入按钮对 owner/editor 可见，下载原始文件对已登录且有仓库访问权的成员可见。文档管理页的上传流程包含明确的“已选择文件”确认态；批量删除和批量摄入按钮默认禁用，只有勾选文件后才进入可点击状态。内部系统前端不再展示“从 URL 导入网页”入口。
 
-**认证页**（`templates/auth/login.html`、`templates/auth/register.html`、`templates/auth/forgot_password.html`、`templates/auth/reset_password.html`）：注册时收集邮箱并创建未验证账号，系统发送一次性邮箱验证链接；用户完成验证后才允许登录。登录支持用户名或邮箱，若账号未验证则拒绝登录并重发验证邮件。忘记密码通过 SMTP 发送一次性重置链接；若邮件服务未配置，注册和找回密码都会直接提示不可用，不继续尝试发信。
+**认证页**（`templates/auth/login.html`、`templates/auth/register.html`、`templates/auth/forgot_password.html`、`templates/auth/reset_password.html`）：注册时收集邮箱并创建未验证账号，系统发送一次性邮箱验证链接；用户完成验证后才允许登录。登录支持用户名或邮箱，若账号未验证则拒绝登录并重发验证邮件。忘记密码通过 SMTP 发送一次性重置链接；若邮件服务未配置，注册和找回密码都会直接提示不可用，不继续尝试发信。登录成功后的 `next` 参数仅允许站内地址，防止开放重定向。
+
+**表单安全**：服务端对所有同源非只读请求统一启用 CSRF 校验，模板通过 `csrf_token()` 注入隐藏字段，前端 `fetch/XMLHttpRequest` 会自动附带 `X-CSRFToken` 头；携带 `Authorization: Bearer` 的 API Token 请求不参与 CSRF 校验。
 
 **关系图**：用 D3.js 力导向图展示页面间的链接关系。类似 Obsidian 的 graph view。
 
@@ -625,9 +627,11 @@ DB_USER=private_cloud
 DB_PASSWORD=****
 
 # Flask
+# 生产/公测环境必须设置随机 SECRET_KEY；默认值仅允许测试/开发环境使用
 SECRET_KEY=change-me-to-a-random-string
 DATA_DIR=./data
 APP_BASE_URL=https://wiki.example.com
+WTF_CSRF_ENABLED=true
 
 # SMTP / 注册验证 / 找回密码
 MAIL_HOST=smtp.example.com
