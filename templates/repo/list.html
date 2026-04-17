@@ -6,67 +6,44 @@
 {% set owned_count = repos|length %}
 {% set shared_count = shared_repos|length if page_is_self else 0 %}
 
-<section class="repo-index-hero">
-  <div class="repo-index-hero-copy">
-    <span class="repo-index-eyebrow">
-      <i class="lucide-library" aria-hidden="true"></i>
-      {{ site_name }}
-    </span>
-    <h1 class="repo-index-title">{{ username }} 的知识库</h1>
-    <p class="repo-index-subtitle">
-      在这里集中管理自己的知识库、通过访问码加入共享知识库，并持续沉淀团队文档与问答结果。
-    </p>
-    <div class="repo-index-summary" aria-label="知识库概览">
-      <div class="repo-index-summary-card">
-        <span class="repo-index-summary-label">我的知识库</span>
-        <strong>{{ owned_count }}</strong>
-      </div>
-      {% if page_is_self %}
-      <div class="repo-index-summary-card">
-        <span class="repo-index-summary-label">共享给我</span>
-        <strong>{{ shared_count }}</strong>
-      </div>
-      {% endif %}
-      <div class="repo-index-summary-card">
-        <span class="repo-index-summary-label">当前视图</span>
-        <strong>{{ "个人工作台" if page_is_self else "公开列表" }}</strong>
-      </div>
-    </div>
+{% if page_is_self %}
+<section class="repo-index-toolbar">
+  <div class="repo-index-toolbar-actions">
+    <button type="button" class="action-btn" id="open-join-dialog-btn">
+      <i class="lucide-key-round" aria-hidden="true"></i>
+      添加共享知识库
+    </button>
+    <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary repo-new-btn">
+      <i class="lucide-plus" aria-hidden="true"></i>
+      新建知识库
+    </a>
   </div>
+</section>
 
-  {% if page_is_self %}
-  <div class="repo-index-actions-card">
-    <div class="repo-index-actions-header">
-      <h2>快速开始</h2>
-      <p>新建自己的知识库，或输入访问码把共享知识库加入到当前账号。</p>
-    </div>
-    <form method="POST" action="{{ url_for('repo.join_by_code') }}" class="repo-join-form">
+<dialog id="join-repo-dialog">
+  <article class="repo-join-dialog-card">
+    <header class="repo-join-dialog-header">
+      <div>
+        <span class="repo-section-tag">Share</span>
+        <h3 class="repo-join-dialog-title">添加共享知识库</h3>
+        <p class="repo-join-dialog-copy">输入访问码，把其他人共享给你的知识库加入到当前账号列表。</p>
+      </div>
+      <button type="button" class="flash-close" id="close-join-dialog" aria-label="关闭">&times;</button>
+    </header>
+    <form method="POST" action="{{ url_for('repo.join_by_code') }}" class="repo-join-form repo-join-dialog-form">
       <label for="access_code" class="repo-join-label">访问码</label>
-      <div class="repo-join-row">
-        <input id="access_code" type="text" name="access_code" placeholder="例如 KB-ABCD-1234" autocomplete="off">
-        <button type="submit" class="action-btn">
+      <input id="access_code" type="text" name="access_code" placeholder="例如 KB-ABCD-1234" autocomplete="off" required>
+      <div class="repo-join-dialog-actions">
+        <button type="button" class="action-btn" id="cancel-join-dialog">取消</button>
+        <button type="submit" class="action-btn action-btn-primary">
           <i class="lucide-key-round" aria-hidden="true"></i>
           添加共享知识库
         </button>
       </div>
     </form>
-    <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary repo-new-btn">
-      <i class="lucide-plus" aria-hidden="true"></i>
-      新建知识库
-    </a>
-    <div class="repo-index-tips">
-      <div class="repo-index-tip">
-        <i class="lucide-folder-kanban" aria-hidden="true"></i>
-        <span>文档上传、问答和 Wiki 维护都在知识库内完成。</span>
-      </div>
-      <div class="repo-index-tip">
-        <i class="lucide-users" aria-hidden="true"></i>
-        <span>共享库会保留独立权限，不会混入你的自有知识库配置。</span>
-      </div>
-    </div>
-  </div>
-  {% endif %}
-</section>
+  </article>
+</dialog>
+{% endif %}
 
 {% if repos %}
 <section class="repo-section">
@@ -253,5 +230,41 @@
     {% endfor %}
   </div>
 </section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if page_is_self %}
+<script>
+(function() {
+  var openBtn = document.getElementById('open-join-dialog-btn');
+  var dialog = document.getElementById('join-repo-dialog');
+  var closeBtn = document.getElementById('close-join-dialog');
+  var cancelBtn = document.getElementById('cancel-join-dialog');
+  var input = document.getElementById('access_code');
+
+  if (!openBtn || !dialog) {
+    return;
+  }
+
+  openBtn.addEventListener('click', function() {
+    dialog.showModal();
+    if (input) {
+      window.setTimeout(function() { input.focus(); }, 0);
+    }
+  });
+
+  function closeDialog() {
+    dialog.close();
+  }
+
+  if (closeBtn) {
+    closeBtn.addEventListener('click', closeDialog);
+  }
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', closeDialog);
+  }
+})();
+</script>
 {% endif %}
 {% endblock %}

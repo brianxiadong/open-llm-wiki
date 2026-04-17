@@ -177,7 +177,8 @@ def test_public_dashboard_hides_session_bar_for_guest(client, app):
 def test_repo_list_has_access_code_join_form(client, app):
     _login(client, app)
     html = _html(client.get("/fe_alice"))
-    assert 'name="access_code"' in html
+    assert 'id="open-join-dialog-btn"' in html
+    assert 'id="join-repo-dialog"' in html
     assert "添加共享知识库" in html
 
 
@@ -185,9 +186,8 @@ def test_repo_list_has_hero_and_grouped_sections(client, app):
     _login(client, app)
     _create_repo(client)
     html = _html(client.get("/fe_alice"))
-    assert "repo-index-hero" in html
-    assert "repo-index-summary" in html
-    assert "快速开始" in html
+    assert "repo-index-toolbar" in html
+    assert "repo-index-hero" not in html
     assert "我的知识库" in html
 
 
