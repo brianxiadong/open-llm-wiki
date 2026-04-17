@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
-project_root = Path(__file__).resolve().parents[1]
+project_root = Path(SPECPATH).resolve().parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 

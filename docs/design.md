@@ -872,7 +872,7 @@ openpyxl>=3.1
 - Windows 安装包：`make client-windows-installer`
 - GitHub Actions Windows 打包：推送到 `main`（命中客户端/打包相关路径）或手动触发 `.github/workflows/windows-client.yml`
 - `scripts/build-confidential-client.sh` 生成的是跨平台 launcher 包
-- `scripts/build-confidential-client-binary.sh` 读取 `packaging/confidential-client.spec`，在具备 `pyinstaller` 的构建机上生成独立桌面包；spec 会基于自身路径定位仓库根目录并注入 `sys.path/pathex`，避免 Windows CI 因工作目录差异找不到 `confidential_client`，同时打入 `static/` 前端资源供 WebView 使用
+- `scripts/build-confidential-client-binary.sh` 读取 `packaging/confidential-client.spec`，在具备 `pyinstaller` 的构建机上生成独立桌面包；spec 会基于 PyInstaller 注入的 `SPECPATH` 定位仓库根目录并注入 `sys.path/pathex`，避免 Windows CI 因执行上下文差异找不到 `confidential_client`，同时打入 `static/` 前端资源供 WebView 使用
 - `scripts/build-macos-app.sh` 生成 `.app` 包结构
 - `scripts/build-windows-installer.ps1` 调用 Inno Setup 生成 Windows 安装包
 - `.github/workflows/windows-client.yml` 在 `windows-latest` 上执行 `PyInstaller + Inno Setup`，自动上传 `open-llm-wiki-client-<version>-setup.exe` 与二进制 zip 工件；如需内嵌生产外部服务配置，可在仓库 Secrets 中提供 `CLIENT_DEFAULT_SERVICES_JSON`

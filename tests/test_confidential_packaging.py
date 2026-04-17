@@ -74,6 +74,6 @@ def test_binary_packaging_spec_bootstraps_project_root():
     spec_file = repo_root / "packaging" / "confidential-client.spec"
     content = spec_file.read_text(encoding="utf-8")
 
-    assert "Path(__file__).resolve().parents[1]" in content
+    assert "Path(SPECPATH).resolve().parent" in content
     assert "sys.path.insert(0, str(project_root))" in content
     assert "pathex=[str(project_root)]" in content
