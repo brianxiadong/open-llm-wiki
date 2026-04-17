@@ -5,22 +5,44 @@
 {% block content %}
 <header class="page-header">
   <h2>{{ username }} 的知识库</h2>
-  <div class="page-header-actions" style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
-    {% if page_is_self %}
-    <form method="POST" action="{{ url_for('repo.join_by_code') }}" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin:0;">
-      <input type="text" name="access_code" placeholder="输入访问码加入共享知识库" autocomplete="off" style="min-width:220px;margin:0;">
-      <button type="submit" class="action-btn">
-        <i class="lucide-key-round" aria-hidden="true"></i>
-        添加共享知识库
-      </button>
-    </form>
-    <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary">
+  {% if page_is_self %}
+  <div class="page-header-actions repo-list-actions">
+    <button type="button" class="action-btn repo-list-action-btn" id="open-join-dialog-btn">
+      <i class="lucide-key-round" aria-hidden="true"></i>
+      添加共享知识库
+    </button>
+    <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary repo-list-action-btn">
       <i class="lucide-plus" aria-hidden="true"></i>
       新建知识库
     </a>
-    {% endif %}
   </div>
+  {% endif %}
 </header>
+
+{% if page_is_self %}
+<dialog id="join-repo-dialog">
+  <article class="repo-join-dialog-card">
+    <header class="rename-dialog-header">
+      <h3 class="rename-dialog-title">
+        <i class="lucide-key-round" aria-hidden="true"></i>
+        添加共享知识库
+      </h3>
+      <button type="button" class="flash-close" id="close-join-dialog" aria-label="关闭">&times;</button>
+    </header>
+    <form method="POST" action="{{ url_for('repo.join_by_code') }}" class="repo-join-dialog-form">
+      <label for="access_code">访问码</label>
+      <input id="access_code" type="text" name="access_code" placeholder="输入访问码加入共享知识库" autocomplete="off" required>
+      <div class="rename-dialog-actions">
+        <button type="button" class="btn-sm" id="cancel-join-dialog">取消</button>
+        <button type="submit" class="btn-sm btn-sm-primary">
+          <i class="lucide-key-round" aria-hidden="true"></i>
+          添加共享知识库
+        </button>
+      </div>
+    </form>
+  </article>
+</dialog>
+{% endif %}
 
 {% if repos %}
 <section>
@@ -109,5 +131,43 @@
     {% endfor %}
   </div>
 </section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if page_is_self %}
+<script>
+(function() {
+  var dialog = document.getElementById('join-repo-dialog');
+  var openBtn = document.getElementById('open-join-dialog-btn');
+  var closeBtn = document.getElementById('close-join-dialog');
+  var cancelBtn = document.getElementById('cancel-join-dialog');
+  var accessCodeInput = document.getElementById('access_code');
+
+  if (!dialog || !openBtn) {
+    return;
+  }
+
+  function closeDialog() {
+    dialog.close();
+  }
+
+  openBtn.addEventListener('click', function() {
+    dialog.showModal();
+    if (accessCodeInput) {
+      window.setTimeout(function() {
+        accessCodeInput.focus();
+      }, 0);
+    }
+  });
+
+  if (closeBtn) {
+    closeBtn.addEventListener('click', closeDialog);
+  }
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', closeDialog);
+  }
+})();
+</script>
 {% endif %}
 {% endblock %}

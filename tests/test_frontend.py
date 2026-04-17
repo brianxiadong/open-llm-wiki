@@ -177,7 +177,8 @@ def test_public_dashboard_hides_session_bar_for_guest(client, app):
 def test_repo_list_has_access_code_join_form(client, app):
     _login(client, app)
     html = _html(client.get("/fe_alice"))
-    assert 'name="access_code"' in html
+    assert 'id="open-join-dialog-btn"' in html
+    assert 'id="join-repo-dialog"' in html
     assert "添加共享知识库" in html
 
 

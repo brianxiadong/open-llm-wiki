@@ -254,6 +254,14 @@ article header, article footer { padding: 0; margin: 0; background: none; border
 }
 .page-header h2 { margin: 0; font-size: 1.6rem; }
 .page-header-actions { display: flex; gap: 0.5rem; }
+.repo-list-actions {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.repo-list-action-btn {
+  min-width: 11rem;
+  justify-content: center;
+}
 
 /* ── Repo Grid ───────────────────────────────────────────── */
 .repo-grid {
@@ -569,6 +577,18 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
   min-width: min(28rem, calc(100vw - 2rem));
   padding: 1.25rem 1.25rem 1rem;
 }
+.repo-join-dialog-card {
+  min-width: min(30rem, calc(100vw - 2rem));
+  padding: 1.25rem 1.25rem 1rem;
+}
+.repo-join-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.repo-join-dialog-form input {
+  margin: 0;
+}
 .rename-dialog-header {
   display: flex;
   justify-content: space-between;
@@ -774,6 +794,13 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
   .wiki-page-layout { grid-template-columns: 1fr; }
   .wiki-page-sidebar { position: static; }
   .repo-grid { grid-template-columns: 1fr; }
+  .repo-list-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .repo-list-action-btn {
+    width: 100%;
+  }
   .action-bar { flex-direction: column; }
   .action-bar .action-btn { justify-content: center; }
   .query-input-row { flex-direction: column; padding: 0.5rem; }
