@@ -870,10 +870,12 @@ openpyxl>=3.1
 - 独立二进制打包：`make client-binary`
 - macOS `.app` 包骨架：`make client-macos-app`
 - Windows 安装包：`make client-windows-installer`
+- GitHub Actions Windows 打包：推送到 `main`（命中客户端/打包相关路径）或手动触发 `.github/workflows/windows-client.yml`
 - `scripts/build-confidential-client.sh` 生成的是跨平台 launcher 包
 - `scripts/build-confidential-client-binary.sh` 读取 `packaging/confidential-client.spec`，在具备 `pyinstaller` 的构建机上生成独立桌面包；spec 同时打入 `static/` 前端资源供 WebView 使用
 - `scripts/build-macos-app.sh` 生成 `.app` 包结构
 - `scripts/build-windows-installer.ps1` 调用 Inno Setup 生成 Windows 安装包
+- `.github/workflows/windows-client.yml` 在 `windows-latest` 上执行 `PyInstaller + Inno Setup`，自动上传 `open-llm-wiki-client-<version>-setup.exe` 与二进制 zip 工件；如需内嵌生产外部服务配置，可在仓库 Secrets 中提供 `CLIENT_DEFAULT_SERVICES_JSON`
 - `scripts/sign-macos-client.sh` / `scripts/sign-windows-client.ps1` 分别承载 macOS / Windows 签名步骤
 - `packaging/appcast.sample.json` 是自动更新清单样例
 
@@ -1527,6 +1529,9 @@ open-llm-wiki/
 ├── requirements-dev.txt   ← 开发依赖
 ├── .env                   ← 环境变量（不提交）
 ├── .env.example           ← 环境变量模板
+├── .github/
+│   └── workflows/
+│       └── windows-client.yml ← Windows 客户端自动打包流水线
 ├── .gitignore
 ├── deploy/
 │   └── llmwiki.service    ← 受版本控制的 systemd 服务文件模板

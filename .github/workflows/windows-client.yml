@@ -1,0 +1,97 @@
+name: Build Windows Client
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/windows-client.yml"
+      - "confidential_client/**"
+      - "llmwiki_core/**"
+      - "packaging/**"
+      - "scripts/build-confidential-client-binary.sh"
+      - "scripts/build-windows-installer.ps1"
+      - "static/**"
+      - "requirements.txt"
+      - "config.py"
+
+jobs:
+  build-windows-client:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Prepare bundled default services
+        shell: pwsh
+        env:
+          CLIENT_DEFAULT_SERVICES_JSON: ${{ secrets.CLIENT_DEFAULT_SERVICES_JSON }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:CLIENT_DEFAULT_SERVICES_JSON)) {
+            New-Item -ItemType Directory -Force -Path "packaging/client" | Out-Null
+            Set-Content -Path "packaging/client/default-services.local.json" -Value $env:CLIENT_DEFAULT_SERVICES_JSON -Encoding UTF8
+            Write-Host "Bundled default services loaded from CLIENT_DEFAULT_SERVICES_JSON."
+          } else {
+            Write-Host "CLIENT_DEFAULT_SERVICES_JSON is empty; workflow will fall back to config.Config defaults."
+          }
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install pyinstaller
+          python -m pip install -r requirements.txt
+
+      - name: Build Windows binary
+        shell: bash
+        run: scripts/build-confidential-client-binary.sh
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Locate Inno Setup compiler
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          if (-not $iscc) {
+            throw "ISCC.exe not found after installing Inno Setup."
+          }
+          "ISCC_PATH=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using ISCC at $iscc"
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: ./scripts/build-windows-installer.ps1
+
+      - name: Collect build artifacts
+        shell: pwsh
+        run: |
+          $version = python -c "from confidential_client.version import CLIENT_VERSION; print(CLIENT_VERSION)"
+          $artifactDir = "dist/windows-artifacts"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+
+          $installer = Get-ChildItem -Path "packaging/windows" -Filter "open-llm-wiki-client-setup.exe" -Recurse | Select-Object -First 1
+          if (-not $installer) {
+            throw "open-llm-wiki-client-setup.exe not found."
+          }
+          Copy-Item $installer.FullName (Join-Path $artifactDir "open-llm-wiki-client-$version-setup.exe")
+
+          Compress-Archive -Path "dist/confidential-client-binary/open-llm-wiki-client/*" -DestinationPath (Join-Path $artifactDir "open-llm-wiki-client-$version-windows-binary.zip")
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-llm-wiki-client-windows
+          path: dist/windows-artifacts/*
+          if-no-files-found: error

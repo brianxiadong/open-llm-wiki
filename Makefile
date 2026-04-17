@@ -1,4 +1,4 @@
-.PHONY: init dev prod migrate check test test-e2e inspect lint format clean deploy client-desktop client-package client-binary
+.PHONY: init dev prod migrate check test test-e2e inspect lint format clean deploy client-desktop client-package client-binary client-windows-installer
 
 init:
 	python3 -m venv .venv
@@ -50,3 +50,6 @@ client-package:
 
 client-binary:
 	bash scripts/build-confidential-client-binary.sh
+
+client-windows-installer:
+	powershell -ExecutionPolicy Bypass -File scripts/build-windows-installer.ps1
