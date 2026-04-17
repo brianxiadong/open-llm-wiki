@@ -3,7 +3,18 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from models import db, User, Repo, Task, load_user, ConversationSession, AuditLog, ApiToken
+from models import (
+    ApiToken,
+    AuditLog,
+    ConversationSession,
+    Repo,
+    RepoMember,
+    RepoShareCode,
+    Task,
+    User,
+    db,
+    load_user,
+)
 
 
 def test_user_create(app):
@@ -224,3 +235,45 @@ def test_task_cancel_requested_default_false(app):
         db.session.add(task)
         db.session.commit()
         assert task.cancel_requested is False
+
+
+def test_repo_member_unique_per_user_and_repo(app):
+    with app.app_context():
+        owner = User(username="share_owner", email="share_owner@example.com")
+        owner.set_password("pw")
+        viewer = User(username="share_viewer", email="share_viewer@example.com")
+        viewer.set_password("pw")
+        db.session.add_all([owner, viewer])
+        db.session.commit()
+
+        repo = Repo(user_id=owner.id, name="Shared Repo", slug="shared-repo")
+        db.session.add(repo)
+        db.session.commit()
+
+        db.session.add(RepoMember(repo_id=repo.id, user_id=viewer.id, role="viewer"))
+        db.session.commit()
+
+        db.session.add(RepoMember(repo_id=repo.id, user_id=viewer.id, role="editor"))
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+
+def test_repo_share_code_unique(app):
+    with app.app_context():
+        owner = User(username="code_owner", email="code_owner@example.com")
+        owner.set_password("pw")
+        db.session.add(owner)
+        db.session.commit()
+
+        repo = Repo(user_id=owner.id, name="Code Repo", slug="code-repo")
+        db.session.add(repo)
+        db.session.commit()
+
+        db.session.add(RepoShareCode(repo_id=repo.id, code="KB-TEST-1234", role="viewer"))
+        db.session.commit()
+
+        db.session.add(RepoShareCode(repo_id=repo.id, code="KB-TEST-1234", role="editor"))
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()

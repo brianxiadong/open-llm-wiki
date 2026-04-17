@@ -38,7 +38,7 @@
         <th style="width:40%;">标题</th>
         <th>文件名</th>
         <th>更新时间</th>
-        {% if is_owner %}<th style="width:120px;">操作</th>{% endif %}
+        {% if can_edit %}<th style="width:120px;">操作</th>{% endif %}
       </tr>
     </thead>
     <tbody>
@@ -52,7 +52,7 @@
         <td style="color:var(--text-muted);font-size:0.8rem;white-space:nowrap;">
           {{ page.updated or '—' }}
         </td>
-        {% if is_owner %}
+        {% if can_edit %}
         <td>
           <div style="display:flex;gap:0.4rem;">
             <a href="{{ url_for('wiki.edit_page', username=username, repo_slug=repo.slug, page_slug=page.slug) }}"

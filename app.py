@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 from datetime import datetime, timezone
 
@@ -39,6 +40,8 @@ from models import (
     QueryFeedback,
     QueryLog,
     Repo,
+    RepoMember,
+    RepoShareCode,
     Task,
     User,
     db,
@@ -82,6 +85,12 @@ TYPE_LABELS = {
     "entity": "实体",
     "analysis": "分析",
 }
+REPO_ROLE_LABELS = {
+    "owner": "所有者",
+    "editor": "可编辑",
+    "viewer": "只读",
+}
+REPO_ROLE_LEVELS = {"viewer": 1, "editor": 2, "owner": 3}
 
 
 # ---------------------------------------------------------------------------
@@ -152,8 +161,49 @@ def _is_owner(repo: Repo) -> bool:
     )
 
 
+def _get_repo_member(repo: Repo, user: User | None = None) -> RepoMember | None:
+    if user is None:
+        if not current_user.is_authenticated:
+            return None
+        user = current_user
+    if user.id == repo.user_id:
+        return None
+    return RepoMember.query.filter_by(repo_id=repo.id, user_id=user.id).first()
+
+
+def _get_repo_role(repo: Repo, user: User | None = None) -> str | None:
+    if user is None:
+        if not current_user.is_authenticated:
+            return None
+        user = current_user
+    if _is_admin() and user.id == current_user.id:
+        return "owner"
+    if user.id == repo.user_id:
+        return "owner"
+    membership = _get_repo_member(repo, user)
+    return membership.role if membership else None
+
+
+def _can_edit_repo(repo: Repo, user: User | None = None) -> bool:
+    role = _get_repo_role(repo, user)
+    return role in {"owner", "editor"}
+
+
+def _can_manage_sessions(repo: Repo) -> bool:
+    if not current_user.is_authenticated:
+        return False
+    return repo.is_public or _get_repo_role(repo) is not None
+
+
 def _can_access_repo(repo: Repo) -> bool:
-    return repo.is_public or _is_owner(repo)
+    return repo.is_public or _get_repo_role(repo) is not None
+
+
+def _require_editor(repo: Repo) -> None:
+    if not current_user.is_authenticated:
+        abort(403)
+    if not _can_edit_repo(repo):
+        abort(403)
 
 
 def _ensure_repo_access(repo: Repo) -> None:
@@ -260,6 +310,16 @@ def _audit(
         logger.warning("audit log failed: %s", exc)
 
 
+def _generate_repo_share_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    while True:
+        code = "KB-" + "".join(secrets.choice(alphabet) for _ in range(4)) + "-" + "".join(
+            secrets.choice(alphabet) for _ in range(4)
+        )
+        if not RepoShareCode.query.filter_by(code=code).first():
+            return code
+
+
 def _enrich_sources(raw_dir: str, repo: Repo) -> list[dict]:
     sources = list_raw_sources(raw_dir)
     ingested_files: set[str] = set()
@@ -358,6 +418,8 @@ def _delete_repo_data(app: Flask, repo: Repo, username: str) -> str:
             except Exception:
                 logger.warning("Failed to run %s for repo %s", fn_name, repo.id)
 
+    RepoMember.query.filter_by(repo_id=repo.id).delete(synchronize_session=False)
+    RepoShareCode.query.filter_by(repo_id=repo.id).delete(synchronize_session=False)
     Task.query.filter_by(repo_id=repo.id).delete(synchronize_session=False)
     ConversationSession.query.filter_by(repo_id=repo.id).delete(
         synchronize_session=False
@@ -377,6 +439,13 @@ def _delete_user_account(app: Flask, user: User) -> None:
     ]
 
     ApiToken.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+    RepoMember.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+    RepoMember.query.filter_by(granted_by_user_id=user.id).update(
+        {"granted_by_user_id": None}, synchronize_session=False
+    )
+    RepoShareCode.query.filter_by(created_by_user_id=user.id).delete(
+        synchronize_session=False
+    )
     ConversationSession.query.filter_by(user_id=user.id).delete(
         synchronize_session=False
     )
@@ -900,18 +969,122 @@ def _register_routes(app: Flask) -> None:
     @repo_bp.route("/<username>")
     def list_repos(username):
         user = User.query.filter_by(username=username).first_or_404()
-        repos = (
+        page_is_self = (
+            current_user.is_authenticated
+            and (current_user.id == user.id or _is_admin())
+        )
+        all_owned_repos = (
             Repo.query.filter_by(user_id=user.id)
             .order_by(Repo.updated_at.desc())
             .all()
         )
+        repos = (
+            all_owned_repos
+            if page_is_self
+            else [repo for repo in all_owned_repos if _can_access_repo(repo)]
+        )
+        shared_repos = []
+        if page_is_self:
+            memberships = (
+                RepoMember.query.filter_by(user_id=current_user.id)
+                .order_by(RepoMember.created_at.desc())
+                .all()
+            )
+            for membership in memberships:
+                repo = db.session.get(Repo, membership.repo_id)
+                if repo is None or repo.user_id == current_user.id:
+                    continue
+                repo.access_role = membership.role
+                repo.access_role_label = REPO_ROLE_LABELS.get(membership.role, membership.role)
+                repo.owner_username = repo.user.username
+                repo.is_shared_repo = True
+                shared_repos.append(repo)
         # Attach active task count to each repo for the card UI
         for repo in repos:
+            role = _get_repo_role(repo)
+            repo.access_role = role or ("viewer" if repo.is_public else None)
+            repo.access_role_label = (
+                REPO_ROLE_LABELS.get(repo.access_role, "公开访客")
+                if repo.access_role
+                else "公开访客"
+            )
+            repo.owner_username = user.username
+            repo.is_shared_repo = False
             repo.active_task_count = Task.query.filter(
                 Task.repo_id == repo.id,
                 Task.status.in_(["queued", "running"]),
             ).count()
-        return render_template("repo/list.html", username=username, repos=repos)
+        for repo in shared_repos:
+            repo.active_task_count = Task.query.filter(
+                Task.repo_id == repo.id,
+                Task.status.in_(["queued", "running"]),
+            ).count()
+        return render_template(
+            "repo/list.html",
+            username=username,
+            repos=repos,
+            shared_repos=shared_repos,
+            page_is_self=page_is_self,
+        )
+
+    @repo_bp.route("/repos/join", methods=["POST"])
+    @login_required
+    def join_by_code():
+        raw_code = request.form.get("access_code", "").strip().upper()
+        if not raw_code:
+            flash("请输入访问码", "error")
+            return redirect(url_for("repo.list_repos", username=current_user.username))
+
+        share_code = RepoShareCode.query.filter_by(code=raw_code).first()
+        if share_code is None or not share_code.is_active:
+            flash("访问码无效或已停用", "error")
+            return redirect(url_for("repo.list_repos", username=current_user.username))
+
+        repo = db.session.get(Repo, share_code.repo_id)
+        if repo is None:
+            flash("访问码关联的知识库不存在", "error")
+            return redirect(url_for("repo.list_repos", username=current_user.username))
+        if repo.user_id == current_user.id:
+            flash("这是你自己的知识库，无需加入", "info")
+            return redirect(url_for("repo.list_repos", username=current_user.username))
+
+        existing = RepoMember.query.filter_by(
+            repo_id=repo.id, user_id=current_user.id
+        ).first()
+        if existing:
+            flash("该共享知识库已在你的列表中", "info")
+            return redirect(url_for("repo.list_repos", username=current_user.username))
+
+        membership = RepoMember(
+            repo_id=repo.id,
+            user_id=current_user.id,
+            role=share_code.role,
+            granted_by_user_id=share_code.created_by_user_id,
+            share_code_id=share_code.id,
+        )
+        db.session.add(membership)
+        share_code.use_count += 1
+        db.session.commit()
+        flash(
+            f"已加入共享知识库「{repo.name}」({REPO_ROLE_LABELS.get(share_code.role, share_code.role)})",
+            "success",
+        )
+        return redirect(url_for("repo.list_repos", username=current_user.username))
+
+    @repo_bp.route("/shared-repos/<int:repo_id>/leave", methods=["POST"])
+    @login_required
+    def leave_shared_repo(repo_id):
+        membership = RepoMember.query.filter_by(
+            repo_id=repo_id, user_id=current_user.id
+        ).first_or_404()
+        repo = db.session.get(Repo, membership.repo_id)
+        db.session.delete(membership)
+        db.session.commit()
+        flash(
+            f"已退出共享知识库「{repo.name if repo else '未知知识库'}」",
+            "success",
+        )
+        return redirect(url_for("repo.list_repos", username=current_user.username))
 
     @repo_bp.route("/repos/new", methods=["GET", "POST"])
     @login_required
@@ -1021,6 +1194,8 @@ def _register_routes(app: Flask) -> None:
             page_content=page_content,
             active_page=active_page,
             is_owner=_is_owner(repo),
+            can_edit=_can_edit_repo(repo),
+            can_manage_sessions=_can_manage_sessions(repo),
             readme_html=readme_html,
         )
 
@@ -1057,6 +1232,23 @@ def _register_routes(app: Flask) -> None:
                 with open(readme_path, "w", encoding="utf-8") as f:
                     f.write(readme_content)
                 flash("README 已保存", "success")
+            elif action == "create_share_code":
+                role = request.form.get("share_role", "viewer").strip()
+                if role not in {"viewer", "editor"}:
+                    flash("共享权限无效", "error")
+                else:
+                    share_code = RepoShareCode(
+                        repo_id=repo.id,
+                        code=_generate_repo_share_code(),
+                        role=role,
+                        created_by_user_id=current_user.id,
+                    )
+                    db.session.add(share_code)
+                    db.session.commit()
+                    flash(
+                        f"已生成访问码：{share_code.code}（{REPO_ROLE_LABELS.get(role, role)}）",
+                        "success",
+                    )
             return redirect(
                 url_for("repo.settings", username=username, repo_slug=repo_slug)
             )
@@ -1072,13 +1264,57 @@ def _register_routes(app: Flask) -> None:
             with open(readme_path, "r", encoding="utf-8") as f:
                 readme_content = f.read()
 
+        repo_members = (
+            RepoMember.query.filter_by(repo_id=repo.id)
+            .order_by(RepoMember.created_at.asc())
+            .all()
+        )
+        repo_share_codes = (
+            RepoShareCode.query.filter_by(repo_id=repo.id)
+            .order_by(RepoShareCode.created_at.desc())
+            .all()
+        )
+
         return render_template(
             "repo/settings.html",
             username=username,
             repo=repo,
             schema_content=schema_content,
             readme_content=readme_content,
+            repo_members=repo_members,
+            repo_share_codes=repo_share_codes,
+            role_labels=REPO_ROLE_LABELS,
         )
+
+    @repo_bp.route("/<username>/<repo_slug>/members/<int:member_id>/delete", methods=["POST"])
+    @login_required
+    def remove_member(username, repo_slug, member_id):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        membership = RepoMember.query.filter_by(
+            id=member_id, repo_id=repo.id
+        ).first_or_404()
+        member_user = db.session.get(User, membership.user_id)
+        db.session.delete(membership)
+        db.session.commit()
+        flash(
+            f"已移除成员「{member_user.username if member_user else member_id}」",
+            "success",
+        )
+        return redirect(url_for("repo.settings", username=username, repo_slug=repo_slug))
+
+    @repo_bp.route("/<username>/<repo_slug>/share-codes/<int:code_id>/disable", methods=["POST"])
+    @login_required
+    def disable_share_code(username, repo_slug, code_id):
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+        share_code = RepoShareCode.query.filter_by(
+            id=code_id, repo_id=repo.id
+        ).first_or_404()
+        share_code.is_active = False
+        db.session.commit()
+        flash(f"访问码 {share_code.code} 已停用", "success")
+        return redirect(url_for("repo.settings", username=username, repo_slug=repo_slug))
 
     @repo_bp.route("/<username>/<repo_slug>/delete", methods=["POST"])
     @login_required
@@ -1291,6 +1527,7 @@ def _register_routes(app: Flask) -> None:
             content=html,
             backlinks=backlinks,
             is_owner=_is_owner(repo),
+            can_edit=_can_edit_repo(repo),
         )
 
     @wiki_bp.route("/<username>/<repo_slug>/graph")
@@ -1375,13 +1612,14 @@ def _register_routes(app: Flask) -> None:
             all_pages=all_pages,
             sorted_groups=sorted_groups,
             is_owner=_is_owner(repo),
+            can_edit=_can_edit_repo(repo),
         )
 
     @wiki_bp.route("/<username>/<repo_slug>/wiki/<page_slug>/edit", methods=["GET", "POST"])
     @login_required
     def edit_page(username, repo_slug, page_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
         wiki_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
         )
@@ -1437,7 +1675,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def delete_page(username, repo_slug, page_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
         wiki_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "wiki"
         )
@@ -1542,6 +1780,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def semantic_search(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        _ensure_repo_access(repo)
         q = request.args.get("q", "").strip()
         results = []
         if q and current_app.qdrant:
@@ -1574,6 +1813,8 @@ def _register_routes(app: Flask) -> None:
             repo=repo,
             sources=_enrich_sources(raw_dir, repo),
             is_owner=_is_owner(repo),
+            can_edit=_can_edit_repo(repo),
+            can_download=current_user.is_authenticated and _can_access_repo(repo),
         )
 
     @source_bp.route("/<username>/<repo_slug>/sources/<source_id>")
@@ -1609,13 +1850,15 @@ def _register_routes(app: Flask) -> None:
             source=source,
             content=html,
             is_owner=_is_owner(repo),
+            can_edit=_can_edit_repo(repo),
+            can_download=current_user.is_authenticated and _can_access_repo(repo),
         )
 
     @source_bp.route("/<username>/<repo_slug>/sources/upload", methods=["POST"])
     @login_required
     def upload(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
 
         uploaded = request.files.get("file")
         if not uploaded or not uploaded.filename:
@@ -1807,7 +2050,9 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def download_source(username, repo_slug, source_id):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _ensure_repo_access(repo)
+        if not current_user.is_authenticated:
+            abort(403)
         raw_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
         )
@@ -1845,7 +2090,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def delete_source(username, repo_slug, source_id):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
         raw_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
         )
@@ -1867,7 +2112,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def rename_source(username, repo_slug, source_id):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
         new_name = request.form.get("new_name", "").strip()
         if not new_name:
             flash("文件名不能为空", "error")
@@ -1910,7 +2155,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def batch_delete(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
         filenames = request.form.getlist("files")
         raw_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
@@ -1934,7 +2179,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def batch_ingest(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
         raw_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
         )
@@ -1973,7 +2218,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def import_url(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
         url = request.form.get("url", "").strip()
         if not url:
             flash("URL 不能为空", "error")
@@ -2034,7 +2279,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def ingest(username, repo_slug, source_id):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
 
         raw_dir = os.path.join(
             get_repo_path(Config.DATA_DIR, username, repo_slug), "raw"
@@ -2064,7 +2309,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def ingest_progress(username, repo_slug, task_id):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
         task = Task.query.get_or_404(task_id)
         if task.repo_id != repo.id:
             abort(404)
@@ -2081,8 +2326,7 @@ def _register_routes(app: Flask) -> None:
         """SSE endpoint that polls task progress from DB (worker runs in background)."""
         task = Task.query.get_or_404(task_id)
         repo = Repo.query.get_or_404(task.repo_id)
-        if current_user.id != repo.user_id:
-            abort(403)
+        _require_editor(repo)
 
         import time
 
@@ -2128,7 +2372,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def task_queue(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
         tasks = (
             Task.query.filter_by(repo_id=repo.id)
             .order_by(Task.created_at.desc())
@@ -2141,6 +2385,7 @@ def _register_routes(app: Flask) -> None:
             repo=repo,
             tasks=tasks,
             is_owner=_is_owner(repo),
+            can_edit=_can_edit_repo(repo),
         )
 
     @ops_bp.route("/api/tasks/<int:task_id>/status")
@@ -2148,8 +2393,7 @@ def _register_routes(app: Flask) -> None:
     def task_status_api(task_id):
         task = Task.query.get_or_404(task_id)
         repo = Repo.query.get_or_404(task.repo_id)
-        if current_user.id != repo.user_id:
-            abort(403)
+        _require_editor(repo)
         return jsonify(
             id=task.id,
             status=task.status,
@@ -2166,8 +2410,7 @@ def _register_routes(app: Flask) -> None:
         repo = db.session.get(Repo, task.repo_id)
         if repo is None:
             abort(404)
-        if current_user.id != repo.user_id:
-            abort(403)
+        _require_editor(repo)
         if task.status not in ("failed", "cancelled"):
             return jsonify(error="只能重试失败或已取消的任务"), 400
         task.status = "queued"
@@ -2186,8 +2429,7 @@ def _register_routes(app: Flask) -> None:
         repo = db.session.get(Repo, task.repo_id)
         if repo is None:
             abort(404)
-        if current_user.id != repo.user_id:
-            abort(403)
+        _require_editor(repo)
         if task.status == "queued":
             task.status = "cancelled"
             task.cancel_requested = True
@@ -2207,23 +2449,25 @@ def _register_routes(app: Flask) -> None:
     )
     def query_page(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        if not repo.is_public:
-            if not current_user.is_authenticated:
-                return redirect(url_for("auth.login", next=request.url))
-            if current_user.id != repo.user_id and not _is_admin():
-                abort(403)
-        return render_template("ops/query.html", username=username, repo=repo)
+        access_result = _ensure_repo_access(repo)
+        if access_result is not None:
+            return access_result
+        return render_template(
+            "ops/query.html",
+            username=username,
+            repo=repo,
+            can_edit=_can_edit_repo(repo),
+        )
 
     @ops_bp.route(
         "/<username>/<repo_slug>/query", methods=["POST"], endpoint="query_api"
     )
     def query_api(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        if not repo.is_public:
+        if not _can_access_repo(repo):
             if not current_user.is_authenticated:
                 return jsonify(error="请先登录"), 401
-            if current_user.id != repo.user_id and not _is_admin():
-                abort(403)
+            abort(403)
         data = request.get_json(silent=True) or {}
         question = data.get("q", "").strip()
         session_key = data.get("session_key", "")
@@ -2460,11 +2704,10 @@ def _register_routes(app: Flask) -> None:
     @ops_bp.route("/<username>/<repo_slug>/query/stream", methods=["GET"])
     def query_stream(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        if not repo.is_public:
+        if not _can_access_repo(repo):
             if not current_user.is_authenticated:
                 return jsonify(error="请先登录"), 401
-            if current_user.id != repo.user_id and not _is_admin():
-                abort(403)
+            abort(403)
         question = request.args.get("q", "").strip()
         if not question:
             return jsonify(error="请输入问题"), 400
@@ -2489,7 +2732,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def save_query_page(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
-        _require_owner(repo)
+        _require_editor(repo)
 
         content = request.form.get("content", "")
         query_text = request.form.get("query", "").strip()
@@ -2553,6 +2796,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def lint(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
 
         try:
             raw_result = current_app.wiki_engine.lint(repo, username)
@@ -2643,6 +2887,8 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def get_session(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not _can_manage_sessions(repo):
+            abort(403)
         key = request.args.get("key", "")
         if not key:
             return jsonify(messages=[])
@@ -2657,11 +2903,10 @@ def _register_routes(app: Flask) -> None:
     def render_markdown_api(username, repo_slug):
         """轻量 Markdown 渲染接口，供前端历史消息回显使用。"""
         user, repo = _get_repo_or_404(username, repo_slug)
-        if not repo.is_public:
+        if not _can_access_repo(repo):
             if not current_user.is_authenticated:
                 return jsonify(error="请先登录"), 401
-            if current_user.id != repo.user_id:
-                abort(403)
+            abort(403)
         data = request.get_json(silent=True) or {}
         base_url = _wiki_base_url(username, repo_slug)
         # batch mode: {"messages": ["md1", "md2", ...]}
@@ -2680,6 +2925,8 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def list_sessions(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not _can_manage_sessions(repo):
+            abort(403)
         from models import ConversationSession
         sessions = (
             ConversationSession.query
@@ -2700,6 +2947,8 @@ def _register_routes(app: Flask) -> None:
     def new_session(username, repo_slug):
         import uuid
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not _can_manage_sessions(repo):
+            abort(403)
         from models import ConversationSession
         key = "sess_" + uuid.uuid4().hex[:16]
         cs = ConversationSession(
@@ -2714,6 +2963,8 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def delete_session(username, repo_slug, session_key):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not _can_manage_sessions(repo):
+            abort(403)
         from models import ConversationSession
         cs = ConversationSession.query.filter_by(
             repo_id=repo.id, user_id=current_user.id, session_key=session_key
@@ -2727,6 +2978,8 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def rename_session(username, repo_slug, session_key):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not _can_manage_sessions(repo):
+            abort(403)
         title = (request.get_json(silent=True) or {}).get("title", "").strip()
         if not title:
             return jsonify(error="标题不能为空"), 400
@@ -2743,6 +2996,8 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def clear_session(username, repo_slug):
         user, repo = _get_repo_or_404(username, repo_slug)
+        if not _can_manage_sessions(repo):
+            abort(403)
         key = (request.get_json(silent=True) or {}).get("key", "")
         if key:
             from models import ConversationSession

@@ -32,7 +32,7 @@
         {% endfor %}
       </span>
       {% endif %}
-      {% if is_owner %}
+      {% if can_edit %}
       <div class="page-actions" style="margin-left:auto;display:flex;gap:0.5rem;align-items:center;">
         <a href="{{ url_for('wiki.edit_page', username=username, repo_slug=repo.slug, page_slug=page_slug) }}"
            role="button" class="outline secondary" style="padding:0.3rem 0.75rem;font-size:0.85rem;margin:0;">

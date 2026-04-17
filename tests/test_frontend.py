@@ -174,6 +174,13 @@ def test_public_dashboard_hides_session_bar_for_guest(client, app):
     assert "chat-session-bar" not in html
 
 
+def test_repo_list_has_access_code_join_form(client, app):
+    _login(client, app)
+    html = _html(client.get("/fe_alice"))
+    assert 'name="access_code"' in html
+    assert "添加共享知识库" in html
+
+
 # ── Source list: no nested forms ─────────────────────────────
 
 def _count_nested_forms(html: str) -> int:
@@ -322,6 +329,15 @@ def test_repo_settings_form_includes_update_info_action(client, app):
     _create_repo(client)
     html = _html(client.get("/fe_alice/fe-test/settings"))
     assert 'name="action" value="update_info"' in html
+
+
+def test_repo_settings_has_share_code_and_members_sections(client, app):
+    _login(client, app)
+    _create_repo(client)
+    html = _html(client.get("/fe_alice/fe-test/settings"))
+    assert 'name="share_role"' in html
+    assert "共享访问码" in html
+    assert "共享成员" in html
 
 
 def test_user_settings_has_display_name(client, app):

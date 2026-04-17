@@ -42,6 +42,98 @@
 </article>
 
 <article>
+  <header><h3>共享访问码</h3></header>
+  <p style="color:var(--pico-muted-color);font-size:0.9rem;">生成访问码后，其他用户可在自己的知识库页输入访问码，把这个知识库挂载到自己的列表中。访问码只负责“加入”，实际权限由成员关系控制。</p>
+  <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
+    {% if csrf_token is defined %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% endif %}
+    <input type="hidden" name="action" value="create_share_code">
+
+    <label for="share_role">访问码授权角色</label>
+    <select id="share_role" name="share_role">
+      <option value="viewer">只读</option>
+      <option value="editor">可编辑</option>
+    </select>
+
+    <button type="submit" class="action-btn action-btn-primary" style="margin-top:0.75rem;">生成访问码</button>
+  </form>
+
+  {% if repo_share_codes %}
+  <div style="margin-top:1rem;overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>访问码</th>
+          <th>角色</th>
+          <th>使用次数</th>
+          <th>状态</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in repo_share_codes %}
+        <tr>
+          <td><code>{{ item.code }}</code></td>
+          <td>{{ role_labels.get(item.role, item.role) }}</td>
+          <td>{{ item.use_count }}</td>
+          <td>{{ '有效' if item.is_active else '已停用' }}</td>
+          <td>
+            {% if item.is_active %}
+            <form method="POST" action="{{ url_for('repo.disable_share_code', username=username, repo_slug=repo.slug, code_id=item.id) }}" style="margin:0;">
+              <button type="submit" class="action-btn">停用</button>
+            </form>
+            {% else %}
+            <span style="color:var(--pico-muted-color);">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p style="margin-top:0.75rem;color:var(--pico-muted-color);">还没有访问码。</p>
+  {% endif %}
+</article>
+
+<article>
+  <header><h3>共享成员</h3></header>
+  {% if repo_members %}
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>用户名</th>
+          <th>角色</th>
+          <th>加入方式</th>
+          <th>加入时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for member in repo_members %}
+        <tr>
+          <td>{{ member.user.username if member.user else member.user_id }}</td>
+          <td>{{ role_labels.get(member.role, member.role) }}</td>
+          <td>{{ member.share_code.code if member.share_code_id and member.share_code else '手动授权' }}</td>
+          <td>{{ member.created_at.strftime('%Y-%m-%d %H:%M') if member.created_at else '—' }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('repo.remove_member', username=username, repo_slug=repo.slug, member_id=member.id) }}" style="margin:0;">
+              <button type="submit" class="action-btn">移除</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p style="color:var(--pico-muted-color);">目前还没有共享成员。</p>
+  {% endif %}
+</article>
+
+<article>
   <header><h3>Wiki Schema</h3></header>
   <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
     {% if csrf_token is defined %}

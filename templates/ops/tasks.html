@@ -87,12 +87,12 @@
             {% else %}-{% endif %}
           </td>
           <td>
-            {% if is_owner and t.status in ('queued', 'running') %}
+            {% if can_edit and t.status in ('queued', 'running') %}
             <button class="outline contrast cancel-task-btn" style="font-size:0.8rem;padding:0.2rem 0.6rem;"
                     data-task-id="{{ t.id }}" {% if t.cancel_requested %}disabled{% endif %}>
               <i data-lucide="square" aria-hidden="true"></i> {{ '终止中' if t.cancel_requested else '取消' }}
             </button>
-            {% elif is_owner and t.status in ('failed', 'cancelled') %}
+            {% elif can_edit and t.status in ('failed', 'cancelled') %}
             <button class="outline contrast retry-task-btn" style="font-size:0.8rem;padding:0.2rem 0.6rem;"
                     data-task-id="{{ t.id }}">
               <i data-lucide="refresh-cw" aria-hidden="true"></i> 重试

@@ -17,7 +17,7 @@
     {{ source.filename }}
   </h2>
   <div class="page-header-actions">
-    {% if not source.ingested and is_owner %}
+    {% if not source.ingested and can_edit %}
     <form method="POST" action="{{ url_for('source.ingest', username=username, repo_slug=repo.slug, source_id=source.id) }}">
       {% if csrf_token is defined %}
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -30,7 +30,7 @@
     {% elif source.ingested %}
     <span class="badge badge-source">已摄入</span>
     {% endif %}
-    {% if is_owner %}
+    {% if can_download %}
     <a href="{{ url_for('source.download_source', username=username, repo_slug=repo.slug, source_id=source.id) }}"
        class="action-btn" download>
       <i class="lucide-download" aria-hidden="true"></i>

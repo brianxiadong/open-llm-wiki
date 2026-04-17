@@ -8,6 +8,22 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 
+def _create_verified_user(app, username: str, email: str, password: str = "password123"):
+    with app.app_context():
+        from models import User, db
+
+        user = User(username=username, email=email, display_name=username)
+        user.set_password(password)
+        user.email_verified = True
+        db.session.add(user)
+        db.session.commit()
+        return user.id
+
+
+def _login_as(client, username: str, password: str = "password123"):
+    return client.post("/login", data={"username": username, "password": password}, follow_redirects=False)
+
+
 # -- Auth ------------------------------------------------------------------
 
 
@@ -152,6 +168,117 @@ def test_repo_settings_get(sample_repo):
     slug = repo_info["slug"]
     resp = client.get(f"/alice/{slug}/settings")
     assert resp.status_code == 200
+
+
+def test_join_repo_by_access_code_mounts_shared_repo(sample_repo, app):
+    owner_client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    owner_client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "create_share_code", "share_role": "viewer"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        from models import RepoMember, RepoShareCode
+
+        share_code = RepoShareCode.query.filter_by(repo_id=repo_info["id"]).first()
+        assert share_code is not None
+        code = share_code.code
+        assert RepoMember.query.count() == 0
+
+    share_client = app.test_client()
+    _create_verified_user(app, "bob", "bob@example.com")
+    _login_as(share_client, "bob")
+    resp = share_client.post(
+        "/repos/join",
+        data={"access_code": code},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    html = resp.data.decode("utf-8")
+    assert "共享给我的知识库" in html
+    assert "Test KB" in html
+
+    with app.app_context():
+        from models import RepoMember, RepoShareCode
+
+        member = RepoMember.query.filter_by(repo_id=repo_info["id"]).first()
+        share_code = RepoShareCode.query.filter_by(repo_id=repo_info["id"]).first()
+        assert member is not None
+        assert member.role == "viewer"
+        assert share_code.use_count == 1
+
+
+def test_shared_viewer_cannot_edit_repo(sample_repo, app):
+    owner_client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    owner_client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "create_share_code", "share_role": "viewer"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        from models import RepoShareCode
+
+        share_code = RepoShareCode.query.filter_by(repo_id=repo_info["id"]).first()
+        code = share_code.code
+
+    share_client = app.test_client()
+    _create_verified_user(app, "viewer_user", "viewer@example.com")
+    _login_as(share_client, "viewer_user")
+    share_client.post("/repos/join", data={"access_code": code}, follow_redirects=True)
+
+    assert share_client.get(f"/alice/{slug}").status_code == 200
+    assert share_client.get(f"/alice/{slug}/query").status_code == 200
+    assert share_client.get(f"/alice/{slug}/wiki/overview/edit").status_code == 403
+    assert share_client.post(
+        f"/alice/{slug}/query/save",
+        data={"content": "# Saved", "query": "viewer save"},
+        follow_redirects=False,
+    ).status_code == 403
+
+
+def test_shared_editor_can_edit_repo(sample_repo, app):
+    owner_client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    owner_client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "create_share_code", "share_role": "editor"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        from models import RepoShareCode
+
+        share_code = RepoShareCode.query.filter_by(repo_id=repo_info["id"]).first()
+        code = share_code.code
+
+    share_client = app.test_client()
+    _create_verified_user(app, "editor_user", "editor@example.com")
+    _login_as(share_client, "editor_user")
+    share_client.post("/repos/join", data={"access_code": code}, follow_redirects=True)
+
+    edit_get = share_client.get(f"/alice/{slug}/wiki/overview/edit")
+    assert edit_get.status_code == 200
+
+    save_resp = share_client.post(
+        f"/alice/{slug}/wiki/overview/edit",
+        data={"content": "---\ntitle: 概览\ntype: overview\n---\n\n# 共享编辑\n"},
+        follow_redirects=False,
+    )
+    assert save_resp.status_code == 302
+
+    query_save = share_client.post(
+        f"/alice/{slug}/query/save",
+        data={"content": "# Saved from editor", "query": "editor save"},
+        follow_redirects=False,
+    )
+    assert query_save.status_code == 302
 
 
 def test_user_settings_update_profile(auth_client, app):

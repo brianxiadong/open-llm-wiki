@@ -50,6 +50,52 @@ class Repo(db.Model):
 
     user = db.relationship("User", backref="repos")
     tasks = db.relationship("Task", back_populates="repo")
+    members = db.relationship(
+        "RepoMember",
+        back_populates="repo",
+        cascade="all, delete-orphan",
+    )
+    share_codes = db.relationship(
+        "RepoShareCode",
+        back_populates="repo",
+        cascade="all, delete-orphan",
+    )
+
+
+class RepoMember(db.Model):
+    __tablename__ = "repo_members"
+    __table_args__ = (
+        UniqueConstraint("repo_id", "user_id", name="uq_repo_member_repo_user"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    repo_id = db.Column(db.Integer, db.ForeignKey("repos.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    role = db.Column(db.String(16), nullable=False, default="viewer")
+    granted_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    share_code_id = db.Column(db.Integer, db.ForeignKey("repo_share_codes.id"), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utc_now)
+
+    repo = db.relationship("Repo", back_populates="members")
+    user = db.relationship("User", foreign_keys=[user_id], backref="repo_memberships")
+    granted_by = db.relationship("User", foreign_keys=[granted_by_user_id])
+    share_code = db.relationship("RepoShareCode", foreign_keys=[share_code_id], backref="members")
+
+
+class RepoShareCode(db.Model):
+    __tablename__ = "repo_share_codes"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    repo_id = db.Column(db.Integer, db.ForeignKey("repos.id"), nullable=False, index=True)
+    code = db.Column(db.String(32), nullable=False, unique=True, index=True)
+    role = db.Column(db.String(16), nullable=False, default="viewer")
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    use_count = db.Column(db.Integer, nullable=False, default=0)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utc_now)
+
+    repo = db.relationship("Repo", back_populates="share_codes")
+    created_by = db.relationship("User", foreign_keys=[created_by_user_id])
 
 
 class Task(db.Model):

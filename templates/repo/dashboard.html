@@ -18,7 +18,7 @@
       <span><i class="lucide-book-open" aria-hidden="true"></i> {{ repo.page_count }}</span>
     </div>
   </div>
-  {% if is_owner %}
+  {% if can_edit or can_manage_sessions %}
   <div class="kb-topbar-right">
     <details class="dropdown kb-more-menu">
       <summary class="kb-more-btn">
@@ -27,18 +27,22 @@
       </summary>
       <ul dir="rtl">
         <li><a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}"><i class="lucide-folder-open"></i> 文档管理</a></li>
+        {% if can_edit %}
         <li><a href="{{ url_for('ops.task_queue', username=username, repo_slug=repo.slug) }}"><i class="lucide-list-todo"></i> 任务队列</a></li>
+        {% endif %}
         <li><a href="{{ url_for('wiki.graph', username=username, repo_slug=repo.slug) }}"><i class="lucide-git-branch"></i> 关系图谱</a></li>
+        <li><a href="{{ url_for('wiki.semantic_search', username=username, repo_slug=repo.slug) }}"><i class="lucide-brain"></i> 语义检索</a></li>
+        {% if is_owner %}
         <li><a href="{{ url_for('ops.lint', username=username, repo_slug=repo.slug) }}"><i class="lucide-shield-check"></i> 维护检查</a></li>
         <li><a href="{{ url_for('ops.insights', username=username, repo_slug=repo.slug) }}"><i class="lucide-search-x"></i> 知识缺口分析</a></li>
         <li><a href="{{ url_for('ops.entity_check', username=username, repo_slug=repo.slug) }}"><i class="lucide-git-merge"></i> 实体去重检查</a></li>
-        <li><a href="{{ url_for('wiki.semantic_search', username=username, repo_slug=repo.slug) }}"><i class="lucide-brain"></i> 语义检索</a></li>
         <li><a href="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}"><i class="lucide-settings"></i> 设置</a></li>
         <li>
           <a href="{{ url_for('wiki.export_zip', username=username, repo_slug=repo.slug) }}">
             <i class="lucide-download" aria-hidden="true"></i> 导出 Wiki (ZIP)
           </a>
         </li>
+        {% endif %}
       </ul>
     </details>
   </div>
@@ -57,7 +61,7 @@
   <aside class="kb-sidebar">
 
     {# Upload Zone #}
-    {% if is_owner %}
+    {% if can_edit %}
     <div class="kb-upload-zone">
       <form method="POST" enctype="multipart/form-data" id="upload-form"
             action="{{ url_for('source.upload', username=username, repo_slug=repo.slug) }}">
@@ -160,7 +164,7 @@
   <section class="kb-chat" id="chat-area">
 
     {# ── Session Bar ────────────────────────────────────── #}
-    {% if is_owner %}
+    {% if can_manage_sessions %}
     <div class="chat-session-bar" id="chat-session-bar">
       <div class="chat-session-list" id="chat-session-list">
         <span style="color:var(--pico-muted-color);font-size:0.82rem;padding:0 0.25rem;">加载中…</span>
@@ -228,19 +232,19 @@
   window.__chatConfig = {{ {
     "queryUrl": url_for("ops.query_api", username=username, repo_slug=repo.slug),
     "queryStreamUrl": url_for("ops.query_stream", username=username, repo_slug=repo.slug),
-    "saveUrl": url_for("ops.save_query_page", username=username, repo_slug=repo.slug) if is_owner else "",
-    "clearSessionUrl": url_for("ops.clear_session", username=username, repo_slug=repo.slug) if is_owner else "",
-    "listSessionsUrl": url_for("ops.list_sessions", username=username, repo_slug=repo.slug) if is_owner else "",
-    "newSessionUrl": url_for("ops.new_session", username=username, repo_slug=repo.slug) if is_owner else "",
-    "deleteSessionBaseUrl": ("/" ~ username ~ "/" ~ repo.slug ~ "/sessions/") if is_owner else "",
-    "getSessionUrl": url_for("ops.get_session", username=username, repo_slug=repo.slug) if is_owner else "",
+    "saveUrl": url_for("ops.save_query_page", username=username, repo_slug=repo.slug) if can_edit else "",
+    "clearSessionUrl": url_for("ops.clear_session", username=username, repo_slug=repo.slug) if can_manage_sessions else "",
+    "listSessionsUrl": url_for("ops.list_sessions", username=username, repo_slug=repo.slug) if can_manage_sessions else "",
+    "newSessionUrl": url_for("ops.new_session", username=username, repo_slug=repo.slug) if can_manage_sessions else "",
+    "deleteSessionBaseUrl": ("/" ~ username ~ "/" ~ repo.slug ~ "/sessions/") if can_manage_sessions else "",
+    "getSessionUrl": url_for("ops.get_session", username=username, repo_slug=repo.slug) if can_manage_sessions else "",
     "renderMarkdownUrl": url_for("ops.render_markdown_api", username=username, repo_slug=repo.slug),
     "feedbackUrl": url_for("ops.submit_feedback", username=username, repo_slug=repo.slug),
     "wikiBaseUrl": "/" ~ username ~ "/" ~ repo.slug ~ "/wiki/",
     "repoSlug": repo.slug,
     "isOwner": is_owner,
-    "canSave": is_owner,
-    "canManageSessions": is_owner,
+    "canSave": can_edit,
+    "canManageSessions": can_manage_sessions,
   } | tojson }};
 </script>
 <script src="{{ url_for('static', filename='js/chat.js') }}"></script>

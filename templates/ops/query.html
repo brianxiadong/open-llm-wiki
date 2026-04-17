@@ -52,6 +52,7 @@
       <ul id="reference-list" style="margin:0;padding-left:1.25rem;"></ul>
     </section>
 
+    {% if can_edit %}
     <footer style="padding:0;margin:0;border:none;">
       <form method="POST" id="save-page-form"
             action="{{ url_for('ops.save_query_page', username=username, repo_slug=repo.slug) }}">
@@ -63,6 +64,7 @@
         </button>
       </form>
     </footer>
+    {% endif %}
   </article>
 </div>
 
@@ -117,8 +119,12 @@
             li.appendChild(a);
             refList.appendChild(li);
           });
-          document.getElementById('save-content').value = data.markdown || '';
-          document.getElementById('save-query').value = q;
+          var saveContent = document.getElementById('save-content');
+          var saveQuery = document.getElementById('save-query');
+          if (saveContent && saveQuery) {
+            saveContent.value = data.markdown || '';
+            saveQuery.value = q;
+          }
           result.hidden = false;
         })
         .catch(function () {

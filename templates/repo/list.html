@@ -5,8 +5,15 @@
 {% block content %}
 <header class="page-header">
   <h2>{{ username }} 的知识库</h2>
-  <div class="page-header-actions">
-    {% if current_user and current_user.is_authenticated and current_user.username == username %}
+  <div class="page-header-actions" style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
+    {% if page_is_self %}
+    <form method="POST" action="{{ url_for('repo.join_by_code') }}" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin:0;">
+      <input type="text" name="access_code" placeholder="输入访问码加入共享知识库" autocomplete="off" style="min-width:220px;margin:0;">
+      <button type="submit" class="action-btn">
+        <i class="lucide-key-round" aria-hidden="true"></i>
+        添加共享知识库
+      </button>
+    </form>
     <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary">
       <i class="lucide-plus" aria-hidden="true"></i>
       新建知识库
@@ -16,16 +23,29 @@
 </header>
 
 {% if repos %}
-<div class="repo-grid">
-  {% for repo in repos %}
-  <article class="repo-card">
-    <a href="{{ url_for('repo.dashboard', username=username, repo_slug=repo.slug) }}" class="repo-card-link">
-    <h3>{{ repo.name }}
-      {% if repo.is_public %}
-      <span class="badge badge-public">公开</span>
-      {% endif %}
-    </h3>
-      <p class="repo-desc">{{ repo.description|truncate(100) if repo.description else '暂无描述' }}</p>
+<section>
+  {% if page_is_self %}
+  <h3 style="margin-bottom:0.85rem;">我的知识库</h3>
+  {% endif %}
+  <div class="repo-grid">
+    {% for repo in repos %}
+    <article class="repo-card">
+      <a href="{{ url_for('repo.dashboard', username=repo.owner_username, repo_slug=repo.slug) }}" class="repo-card-link">
+        <h3>{{ repo.name }}
+          {% if repo.is_public %}
+          <span class="badge badge-public">公开</span>
+          {% endif %}
+          {% if repo.access_role and repo.access_role != 'owner' %}
+          <span class="badge badge-muted">{{ repo.access_role_label }}</span>
+          {% endif %}
+        </h3>
+        <p class="repo-desc">
+          {% if repo.is_shared_repo %}
+          来自 {{ repo.owner_username }}{% if repo.description %} · {{ repo.description|truncate(88) }}{% endif %}
+          {% else %}
+          {{ repo.description|truncate(100) if repo.description else '暂无描述' }}
+          {% endif %}
+        </p>
         <footer class="repo-card-footer">
           <div class="repo-stats">
             <span class="repo-stat" title="来源数量">
@@ -37,22 +57,57 @@
               {{ repo.page_count }}
             </span>
           </div>
-      </footer>
-    </a>
-  </article>
-  {% endfor %}
-</div>
+        </footer>
+      </a>
+    </article>
+    {% endfor %}
+  </div>
+</section>
 {% else %}
 <div class="empty-state">
   <i class="lucide-library" aria-hidden="true"></i>
   <h3>还没有知识库</h3>
   <p>创建一个知识库，开始整理和管理你的文档与笔记。</p>
-  {% if current_user and current_user.is_authenticated and current_user.username == username %}
+  {% if page_is_self %}
   <a href="{{ url_for('repo.new_repo') }}" role="button" class="action-btn action-btn-primary">
     <i class="lucide-plus" aria-hidden="true"></i>
     创建第一个知识库
   </a>
   {% endif %}
 </div>
+{% endif %}
+
+{% if page_is_self and shared_repos %}
+<section style="margin-top:2rem;">
+  <h3 style="margin-bottom:0.85rem;">共享给我的知识库</h3>
+  <div class="repo-grid">
+    {% for repo in shared_repos %}
+    <article class="repo-card">
+      <a href="{{ url_for('repo.dashboard', username=repo.owner_username, repo_slug=repo.slug) }}" class="repo-card-link">
+        <h3>
+          {{ repo.name }}
+          <span class="badge badge-muted">{{ repo.access_role_label }}</span>
+        </h3>
+        <p class="repo-desc">来自 {{ repo.owner_username }}{% if repo.description %} · {{ repo.description|truncate(88) }}{% endif %}</p>
+        <footer class="repo-card-footer">
+          <div class="repo-stats">
+            <span class="repo-stat" title="来源数量">
+              <i class="lucide-file-text" aria-hidden="true"></i>
+              {{ repo.source_count }}
+            </span>
+            <span class="repo-stat" title="页面数量">
+              <i class="lucide-book-open" aria-hidden="true"></i>
+              {{ repo.page_count }}
+            </span>
+          </div>
+        </footer>
+      </a>
+      <form method="POST" action="{{ url_for('repo.leave_shared_repo', repo_id=repo.id) }}" style="padding:0 1rem 1rem;margin:0;">
+        <button type="submit" class="action-btn" style="width:100%;">退出共享</button>
+      </form>
+    </article>
+    {% endfor %}
+  </div>
+</section>
 {% endif %}
 {% endblock %}

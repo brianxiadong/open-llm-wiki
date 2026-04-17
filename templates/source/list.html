@@ -19,7 +19,7 @@
     {% endif %}
   </h2>
   <div class="page-header-actions">
-    {% if is_owner %}
+    {% if can_edit %}
     <button type="button" class="action-btn action-btn-primary" onclick="document.getElementById('upload-zone').scrollIntoView({behavior:'smooth'})">
       <i class="lucide-upload" aria-hidden="true"></i>
       上传文档
@@ -29,7 +29,7 @@
 </header>
 
 {# ── 上传区域 ── #}
-{% if is_owner %}
+{% if can_edit %}
 <article class="upload-card" id="upload-zone">
   <form method="POST" id="upload-form"
         action="{{ url_for('source.upload', username=username, repo_slug=repo.slug) }}"
@@ -72,7 +72,7 @@
 {% if sources %}
 <div class="source-toolbar">
   <div class="source-toolbar-left">
-    {% if is_owner %}
+    {% if can_edit %}
     <label class="source-select-all">
       <input type="checkbox" id="select-all"> 全选
     </label>
@@ -120,7 +120,7 @@
     <table class="source-table" role="grid">
       <thead>
         <tr>
-          {% if is_owner %}<th style="width:2.5rem;"></th>{% endif %}
+          {% if can_edit %}<th style="width:2.5rem;"></th>{% endif %}
           <th>文件名</th>
           <th>大小</th>
           <th>类型</th>
@@ -135,7 +135,7 @@
             data-size="{{ src.size_kb }}"
             data-status="{{ 'ingested' if src.ingested else 'pending' }}"
             data-date="{{ src.created_at.strftime('%Y%m%d%H%M') if src.created_at else '0' }}">
-          {% if is_owner %}
+          {% if can_edit %}
           <td>
             <input type="checkbox" name="files" value="{{ src.filename }}" class="source-cb">
           </td>
@@ -176,11 +176,13 @@
                class="btn-sm" title="预览">
               <i class="lucide-eye" aria-hidden="true"></i>
             </a>
-            {% if is_owner %}
+            {% if can_download %}
             <a href="{{ url_for('source.download_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
                class="btn-sm" title="下载原始文件（PDF/Word 等）" download>
               <i class="lucide-download" aria-hidden="true"></i>
             </a>
+            {% endif %}
+            {% if can_edit %}
             {% if src.task_status not in ('queued', 'running') %}
             <form method="POST" style="display:inline;"
                   action="{{ url_for('source.ingest', username=username, repo_slug=repo.slug, source_id=src.id) }}">
@@ -214,7 +216,7 @@
 <article class="empty-state">
   <i class="lucide-file-plus" aria-hidden="true"></i>
   <h3>还没有文档</h3>
-  <p>{% if is_owner %}上传文档后，可以将其摄入为 Wiki 页面。{% else %}当前公开仓库还没有可浏览的来源文档。{% endif %}</p>
+  <p>{% if can_edit %}上传文档后，可以将其摄入为 Wiki 页面。{% else %}当前知识库还没有可浏览的来源文档。{% endif %}</p>
 </article>
 {% endif %}
 
