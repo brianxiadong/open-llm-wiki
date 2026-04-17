@@ -256,55 +256,6 @@ article header, article footer { padding: 0; margin: 0; background: none; border
 .page-header-actions { display: flex; gap: 0.5rem; }
 
 /* ── Repo Grid ───────────────────────────────────────────── */
-.repo-index-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 1.25rem;
-}
-.repo-index-toolbar-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-}
-.repo-index-toolbar-actions .action-btn {
-  min-width: 10.5rem;
-  justify-content: center;
-}
-.repo-join-dialog-card {
-  min-width: min(30rem, calc(100vw - 2rem));
-  padding: 1.35rem 1.35rem 1.1rem;
-}
-.repo-join-dialog-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1rem;
-  padding-bottom: 0.85rem;
-  border-bottom: 1px solid var(--border-light);
-}
-.repo-join-dialog-title {
-  margin: 0.45rem 0 0;
-  font-size: 1.15rem;
-}
-.repo-join-dialog-copy {
-  margin: 0.3rem 0 0;
-  color: var(--text-muted);
-  font-size: 0.88rem;
-  line-height: 1.65;
-}
-.repo-join-dialog-form {
-  gap: 0.7rem;
-}
-.repo-join-dialog-form input {
-  margin: 0;
-}
-.repo-join-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.65rem;
-  margin-top: 0.3rem;
-}
 .repo-index-hero {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(20rem, 0.95fr);
@@ -1716,18 +1667,6 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
 
 /* ── Responsive ──────────────────────────────────────────── */
 @media (max-width: 768px) {
-  .repo-index-toolbar { justify-content: stretch; }
-  .repo-index-toolbar-actions {
-    width: 100%;
-    flex-direction: column;
-  }
-  .repo-index-toolbar-actions .action-btn,
-  .repo-join-dialog-actions .action-btn {
-    width: 100%;
-  }
-  .repo-join-dialog-actions {
-    flex-direction: column-reverse;
-  }
   .source-manage-hero { grid-template-columns: 1fr; }
   .source-manage-copy { padding: 1.5rem 1.35rem; }
   .source-manage-summary { grid-template-columns: 1fr; }
