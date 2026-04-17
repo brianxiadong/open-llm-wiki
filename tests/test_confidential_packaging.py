@@ -61,8 +61,19 @@ def test_binary_packaging_assets_exist():
     assert macos_plist.exists()
     assert windows_iss.exists()
     assert appcast.exists()
-    assert "confidential_client/desktop.py" in spec_file.read_text(encoding="utf-8")
-    assert "default-services.json" in spec_file.read_text(encoding="utf-8")
+    spec_content = spec_file.read_text(encoding="utf-8")
+    assert '"confidential_client" / "desktop.py"' in spec_content
+    assert "default-services.json" in spec_content
     assert "pyinstaller" in build_script.read_text(encoding="utf-8").lower()
     assert "codesign" in sign_macos.read_text(encoding="utf-8")
     assert "signtool sign" in sign_windows.read_text(encoding="utf-8").lower()
+
+
+def test_binary_packaging_spec_bootstraps_project_root():
+    repo_root = Path(__file__).resolve().parents[1]
+    spec_file = repo_root / "packaging" / "confidential-client.spec"
+    content = spec_file.read_text(encoding="utf-8")
+
+    assert "Path(__file__).resolve().parents[1]" in content
+    assert "sys.path.insert(0, str(project_root))" in content
+    assert "pathex=[str(project_root)]" in content

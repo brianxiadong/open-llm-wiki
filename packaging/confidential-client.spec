@@ -1,14 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import json
+import sys
 import tempfile
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
+project_root = Path(__file__).resolve().parents[1]
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from confidential_client.manager import default_services_from_server_config
 
-project_root = Path.cwd()
 bundle_defaults_dir = Path(tempfile.mkdtemp(prefix="open-llm-wiki-client-"))
 bundle_defaults_path = bundle_defaults_dir / "default-services.json"
 local_defaults_path = project_root / "packaging" / "client" / "default-services.local.json"
@@ -24,11 +28,11 @@ else:
 hiddenimports = collect_submodules("confidential_client") + collect_submodules("llmwiki_core")
 
 a = Analysis(
-    ["confidential_client/desktop.py"],
-    pathex=[],
+    [str(project_root / "confidential_client" / "desktop.py")],
+    pathex=[str(project_root)],
     binaries=[],
     datas=[
-        ("static", "static"),
+        (str(project_root / "static"), "static"),
         (str(bundle_defaults_path), "."),
     ],
     hiddenimports=hiddenimports,
