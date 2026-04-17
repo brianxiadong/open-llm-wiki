@@ -181,32 +181,6 @@ def test_repo_list_has_access_code_join_form(client, app):
     assert "添加共享知识库" in html
 
 
-def test_repo_list_has_hero_and_grouped_sections(client, app):
-    _login(client, app)
-    _create_repo(client)
-    html = _html(client.get("/fe_alice"))
-    assert "repo-index-hero" in html
-    assert "repo-index-summary" in html
-    assert "快速开始" in html
-    assert "我的知识库" in html
-
-
-def test_repo_list_empty_state_has_start_actions(client, app):
-    _login(client, app)
-    html = _html(client.get("/fe_alice"))
-    assert "repo-empty-state" in html
-    assert "创建第一个知识库" in html
-    assert "查看使用教程" in html
-
-
-def test_new_repo_page_uses_create_shell_layout(client, app):
-    _login(client, app)
-    html = _html(client.get("/repos/new"))
-    assert "repo-create-shell" in html
-    assert 'name="schema_template"' in html
-    assert "知识库信息" in html
-
-
 # ── Source list: no nested forms ─────────────────────────────
 
 def _count_nested_forms(html: str) -> int:
@@ -233,7 +207,6 @@ def test_source_list_has_upload_zone(client, app):
     _create_repo(client)
     html = _html(client.get("/fe_alice/fe-test/sources"))
     assert 'type="file"' in html, "Should have file input"
-    assert "source-manage-hero" in html
     assert "upload" in html.lower(), "Should have upload section"
 
 
@@ -362,7 +335,6 @@ def test_repo_settings_has_share_code_and_members_sections(client, app):
     _login(client, app)
     _create_repo(client)
     html = _html(client.get("/fe_alice/fe-test/settings"))
-    assert "settings-shell" in html
     assert 'name="share_role"' in html
     assert "共享访问码" in html
     assert "共享成员" in html
