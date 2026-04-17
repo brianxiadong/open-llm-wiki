@@ -718,39 +718,87 @@ class QdrantService:
         except Exception as e:
             raise QdrantServiceError(str(e)) from e
 
+    def _embed_chunk_batch_with_fallback(
+        self,
+        sub_chunks: list[dict],
+        sub_texts: list[str],
+        *,
+        use_isolated_client: bool,
+    ) -> list[tuple[dict, list[float]]]:
+        """对一个 chunk 批次做 embed；失败时回退到逐条以提高鲁棒性。"""
+        if not sub_chunks:
+            return []
+        client = self._create_embedding_client() if use_isolated_client else self._embedding
+        try:
+            vectors = self._embed_batch(sub_texts, client=client)
+            return list(zip(sub_chunks, vectors))
+        except QdrantServiceError:
+            logger.warning(
+                "Chunk batch embed failed size=%s; retrying individually",
+                len(sub_chunks),
+            )
+            out: list[tuple[dict, list[float]]] = []
+            for chunk, text in zip(sub_chunks, sub_texts):
+                try:
+                    vec = self._embed_batch([text], client=client)[0]
+                except QdrantServiceError:
+                    logger.warning(
+                        "Chunk embed failed chunk_id=%s heading=%r",
+                        chunk.get("chunk_id"),
+                        chunk.get("heading"),
+                    )
+                    continue
+                out.append((chunk, vec))
+            return out
+
     def _embed_chunks_batched(
         self,
         chunks: list[dict],
         *,
         page_title: str,
     ) -> list[tuple[dict, list[float]]]:
-        """对 chunk 批量 embed；失败时回退到逐条以提高鲁棒性。"""
+        """对 chunk 批量 embed；单页多 batch 之间并发调用 embedding 服务。"""
         if not chunks:
             return []
         texts = [
             self.build_chunk_embed_text(page_title, c.get("heading", ""), c["chunk_text"])
             for c in chunks
         ]
+        batch_specs: list[tuple[list[dict], list[str]]] = [
+            (chunks[start:start + self.EMBEDDING_BATCH_SIZE],
+             texts[start:start + self.EMBEDDING_BATCH_SIZE])
+            for start in range(0, len(chunks), self.EMBEDDING_BATCH_SIZE)
+        ]
+        if not batch_specs:
+            return []
+
+        results: list[list[tuple[dict, list[float]]]] = [[] for _ in batch_specs]
+        if len(batch_specs) == 1 or self.EMBEDDING_MAX_WORKERS <= 1:
+            for idx, (sub_chunks, sub_texts) in enumerate(batch_specs):
+                results[idx] = self._embed_chunk_batch_with_fallback(
+                    sub_chunks, sub_texts, use_isolated_client=False,
+                )
+        else:
+            with ThreadPoolExecutor(
+                max_workers=min(self.EMBEDDING_MAX_WORKERS, len(batch_specs)),
+                thread_name_prefix="chunk-embed",
+            ) as executor:
+                future_to_idx = {
+                    executor.submit(
+                        self._embed_chunk_batch_with_fallback,
+                        sub_chunks,
+                        sub_texts,
+                        use_isolated_client=True,
+                    ): idx
+                    for idx, (sub_chunks, sub_texts) in enumerate(batch_specs)
+                }
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    results[idx] = future.result()
+
         out: list[tuple[dict, list[float]]] = []
-        for start in range(0, len(chunks), self.EMBEDDING_BATCH_SIZE):
-            sub_chunks = chunks[start:start + self.EMBEDDING_BATCH_SIZE]
-            sub_texts = texts[start:start + self.EMBEDDING_BATCH_SIZE]
-            try:
-                vectors = self._embed_batch(sub_texts)
-                out.extend(zip(sub_chunks, vectors))
-            except QdrantServiceError:
-                logger.warning("Chunk batch embed failed size=%s; retrying individually", len(sub_chunks))
-                for chunk, text in zip(sub_chunks, sub_texts):
-                    try:
-                        vec = self._embed_batch([text])[0]
-                    except QdrantServiceError:
-                        logger.warning(
-                            "Chunk embed failed chunk_id=%s heading=%r",
-                            chunk.get("chunk_id"),
-                            chunk.get("heading"),
-                        )
-                        continue
-                    out.append((chunk, vec))
+        for batch in results:
+            out.extend(batch)
         return out
 
     def upsert_page_chunks(

@@ -559,6 +559,124 @@ def test_query_with_evidence_with_pages(tmp_data_dir):
     assert "qdrant_sources" in result
 
 
+def test_ingest_runs_multiple_pages_concurrently(tmp_data_dir):
+    """ingest_llm_concurrency>1 时，多页应同时触发 LLM 调用（峰值并发 >= 2）。"""
+    import threading
+    import time
+
+    base = os.path.join(tmp_data_dir, "alice", "concurrency")
+    os.makedirs(os.path.join(base, "raw"), exist_ok=True)
+    os.makedirs(os.path.join(base, "wiki"), exist_ok=True)
+    with open(os.path.join(base, "raw", "doc.md"), "w", encoding="utf-8") as f:
+        f.write("# Source\n\nbody\n")
+    for name, body in [
+        ("schema.md", "# Schema\n"),
+        ("index.md", "---\ntitle: x\ntype: index\n---\n\n"),
+    ]:
+        with open(os.path.join(base, "wiki", name), "w", encoding="utf-8") as f:
+            f.write(body)
+
+    analyze_json = {"summary": "s", "key_entities": [], "key_concepts": [], "main_findings": []}
+    plan_json = {
+        "pages_to_create": [
+            {"filename": f"p{i}.md", "title": f"P{i}", "type": "concept", "reason": "r"}
+            for i in range(3)
+        ],
+        "pages_to_update": [],
+    }
+
+    active = {"n": 0, "peak": 0}
+    lock = threading.Lock()
+
+    def slow_chat(*args, **kwargs):
+        with lock:
+            active["n"] += 1
+            active["peak"] = max(active["peak"], active["n"])
+        time.sleep(0.15)
+        with lock:
+            active["n"] -= 1
+        return "---\ntitle: p\ntype: concept\nupdated: 2026-01-01\n---\n\n# P\n\nBody.\n"
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.side_effect = [analyze_json, plan_json]
+    mock_llm.chat.side_effect = slow_chat
+
+    mock_qdrant = MagicMock()
+    engine = WikiEngine(
+        mock_llm, mock_qdrant, tmp_data_dir,
+        ingest_llm_concurrency=3,
+        ingest_index_concurrency=3,
+    )
+    repo = MagicMock()
+    repo.slug = "concurrency"
+    repo.id = 42
+
+    events = list(engine.ingest(repo, "alice", "doc.md"))
+
+    assert any(e.get("phase") == "done" for e in events)
+    wiki_dir = os.path.join(base, "wiki")
+    for i in range(3):
+        assert os.path.isfile(os.path.join(wiki_dir, f"p{i}.md")), f"page p{i}.md not created"
+    assert active["peak"] >= 2, f"page generation should run concurrently, peak={active['peak']}"
+    # 3 个新页面 + 可能的 overview.md
+    assert mock_qdrant.upsert_page.call_count >= 3
+    assert mock_qdrant.upsert_page_chunks.call_count >= 3
+
+
+def test_ingest_handles_single_page_generation_failure(tmp_data_dir):
+    """单页生成失败不应阻塞其他页面。"""
+    base = os.path.join(tmp_data_dir, "alice", "fail-iso")
+    os.makedirs(os.path.join(base, "raw"), exist_ok=True)
+    os.makedirs(os.path.join(base, "wiki"), exist_ok=True)
+    with open(os.path.join(base, "raw", "doc.md"), "w", encoding="utf-8") as f:
+        f.write("# S\n\nbody\n")
+    with open(os.path.join(base, "wiki", "schema.md"), "w", encoding="utf-8") as f:
+        f.write("# s\n")
+
+    plan_json = {
+        "pages_to_create": [
+            {"filename": "ok1.md", "title": "O", "type": "concept", "reason": "r"},
+            {"filename": "bad.md", "title": "B", "type": "concept", "reason": "r"},
+            {"filename": "ok2.md", "title": "O2", "type": "concept", "reason": "r"},
+        ],
+        "pages_to_update": [],
+    }
+    analyze_json = {"summary": "", "key_entities": [], "key_concepts": [], "main_findings": []}
+
+    call_count = {"n": 0}
+
+    def flaky_chat(*args, **kwargs):
+        call_count["n"] += 1
+        messages = args[0] if args else kwargs.get("messages", [])
+        user_content = messages[1].get("content", "") if len(messages) > 1 else ""
+        if "文件名: bad.md" in user_content:
+            raise RuntimeError("boom")
+        return "---\ntitle: t\ntype: concept\n---\n\n# T\n"
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.side_effect = [analyze_json, plan_json]
+    mock_llm.chat.side_effect = flaky_chat
+
+    mock_qdrant = MagicMock()
+    engine = WikiEngine(
+        mock_llm, mock_qdrant, tmp_data_dir,
+        ingest_llm_concurrency=3,
+        ingest_index_concurrency=3,
+    )
+    repo = MagicMock()
+    repo.slug = "fail-iso"
+    repo.id = 99
+
+    events = list(engine.ingest(repo, "alice", "doc.md"))
+
+    wiki_dir = os.path.join(base, "wiki")
+    assert os.path.isfile(os.path.join(wiki_dir, "ok1.md"))
+    assert os.path.isfile(os.path.join(wiki_dir, "ok2.md"))
+    assert not os.path.isfile(os.path.join(wiki_dir, "bad.md"))
+    assert any("Failed to create bad.md" in e.get("message", "") for e in events)
+    assert any(e.get("phase") == "done" for e in events)
+
+
 def test_apply_fixes_route(sample_repo, app):
     """apply_fixes route should handle empty issues_json gracefully."""
     client, repo_info = sample_repo

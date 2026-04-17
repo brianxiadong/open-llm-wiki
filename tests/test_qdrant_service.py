@@ -250,6 +250,40 @@ def test_upsert_fact_records_calls_qdrant(qdrant_service):
     assert mock_client.upsert.called
 
 
+def test_embed_chunks_batched_runs_multiple_batches(qdrant_service):
+    """chunks 超过 batch size 时，多批次都会被 embed 且结果齐全。"""
+    import threading
+    import time
+
+    svc, _ = qdrant_service
+    svc.EMBEDDING_BATCH_SIZE = 2
+    chunks = [
+        {"chunk_id": str(i), "heading": f"H{i}", "chunk_text": f"text {i}", "position": i}
+        for i in range(5)
+    ]
+
+    active = {"n": 0, "peak": 0}
+    lock = threading.Lock()
+
+    def fake_embed_batch(texts, *, client=None):
+        with lock:
+            active["n"] += 1
+            if active["n"] > active["peak"]:
+                active["peak"] = active["n"]
+        time.sleep(0.05)
+        with lock:
+            active["n"] -= 1
+        return [[0.1] * 128 for _ in texts]
+
+    with patch.object(svc, "_embed_batch", side_effect=fake_embed_batch):
+        out = svc._embed_chunks_batched(chunks, page_title="T")
+
+    assert len(out) == 5
+    returned_ids = {c["chunk_id"] for c, _ in out}
+    assert returned_ids == {"0", "1", "2", "3", "4"}
+    assert active["peak"] >= 2, "chunk batches should have run concurrently"
+
+
 def test_search_facts_returns_structured_results(qdrant_service):
     svc, mock_client = qdrant_service
     mock_client.collection_exists.return_value = True

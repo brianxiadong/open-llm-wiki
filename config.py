@@ -55,6 +55,12 @@ class Config:
     RAG_CONTEXT_CHUNK_CHARS = int(os.environ.get("RAG_CONTEXT_CHUNK_CHARS", "700"))
     RAG_CONTEXT_EXPAND_NEIGHBORS = int(os.environ.get("RAG_CONTEXT_EXPAND_NEIGHBORS", "1"))
 
+    # ── 摄入并发 ─────────────────────────────────────────────────────────
+    # 单文件 ingest 内 LLM 并发度（pages_to_create / pages_to_update 生成）
+    INGEST_LLM_CONCURRENCY = int(os.environ.get("INGEST_LLM_CONCURRENCY", "4"))
+    # 单文件 ingest 内 Qdrant 索引并发度（upsert_page + upsert_page_chunks）
+    INGEST_INDEX_CONCURRENCY = int(os.environ.get("INGEST_INDEX_CONCURRENCY", "4"))
+
     MINERU_API_URL = os.environ.get("MINERU_API_URL", "http://localhost:8000")
     MINERU_TIMEOUT = int(os.environ.get("MINERU_TIMEOUT", "300"))
 

@@ -615,6 +615,10 @@ EMBEDDING_DIMENSIONS=1024
 # Qdrant 向量数据库
 QDRANT_URL=http://localhost:6333
 
+# 摄入并发（单文件 ingest 内）
+INGEST_LLM_CONCURRENCY=4       # 页面生成阶段 LLM 并发
+INGEST_INDEX_CONCURRENCY=4     # 向量索引阶段页面并发
+
 # MinerU 文档解析服务
 MINERU_API_URL=http://172.36.237.175:8000
 MINERU_TIMEOUT=300
@@ -979,6 +983,18 @@ openpyxl>=3.1
 - 运行中的任务通过 `cancel_requested=1` 协作式终止，Worker 在阶段边界检查后收尾并写回 `cancelled`
 
 **任务队列看板**（`/{user}/{repo}/tasks`）：显示所有任务的状态、进度条、耗时，支持取消/终止与失败后重试，JS 自动刷新。
+
+**单文件 ingest 内部并发**：`wiki_engine.ingest` 在三个阶段启用线程池，最大化利用 LLM / Embedding 服务的并发承载能力：
+
+| 阶段 | 并发度来源 | 行为 |
+|------|-----------|------|
+| 页面生成（create + update） | `Config.INGEST_LLM_CONCURRENCY`（默认 4） | `pages_to_create` 和 `pages_to_update` 合并后用 `ThreadPoolExecutor` 并发调 `_chat_text`；单页失败仅影响自身，进度事件按 `[X/N]` 语义累计上报 |
+| 向量索引（多页） | `Config.INGEST_INDEX_CONCURRENCY`（默认 4） | 所有改动页面并发执行 `upsert_page` + `upsert_page_chunks`；单页 Qdrant 失败不影响其它页 |
+| chunk embedding（单页多批次） | `QdrantService.EMBEDDING_MAX_WORKERS`（默认 4） | `_embed_chunks_batched` 把一页的多个 embedding batch 交给线程池并发，失败时回退到逐条 embed 保证鲁棒性 |
+
+Fact 批量索引（`_iter_embedded_fact_batches`）沿用早已存在的并发 embed 策略。`_chat_text` 像 `_chat_json` 一样带了一次重试。并发线程共享同一个 OpenAI SDK client（经测试线程安全）；并发 embed batch 时每个 worker 用独立 client，避免 keep-alive 连接复用引入的阻塞。
+
+典型单文件 ingest（5 个新页面 + 12 个 fact 批次）的理论提速：LLM 生成阶段约 3× 左右，向量索引阶段约 2×，整体端到端约 2–3×；实际增益取决于 LLM 端承载能力——如遇 429 可把 `INGEST_LLM_CONCURRENCY` 调小。
 
 ### 8.4 Markdown 渲染增强
 

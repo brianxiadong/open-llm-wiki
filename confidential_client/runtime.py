@@ -53,6 +53,8 @@ class ConfidentialRuntime:
             retriever=retriever,
             retrieval_config=retrieval_cfg,
             enable_hyde=False,
+            ingest_llm_concurrency=4,
+            ingest_index_concurrency=4,
         )
 
     def _build_qdrant(self, workspace) -> ConfidentialQdrantService:

@@ -610,6 +610,8 @@ def create_app() -> Flask:
         enable_hyde=Config.RAG_ENABLE_HYDE,
         context_chunk_chars=Config.RAG_CONTEXT_CHUNK_CHARS,
         context_expand_neighbors=Config.RAG_CONTEXT_EXPAND_NEIGHBORS,
+        ingest_llm_concurrency=Config.INGEST_LLM_CONCURRENCY,
+        ingest_index_concurrency=Config.INGEST_INDEX_CONCURRENCY,
     )
 
     # Query trace logger: daily JSONL files under DATA_DIR/logs/

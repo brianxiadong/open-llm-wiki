@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Generator
 
@@ -106,6 +108,8 @@ class WikiEngine:
         enable_hyde: bool = False,
         context_chunk_chars: int = 700,
         context_expand_neighbors: int = 1,
+        ingest_llm_concurrency: int = 1,
+        ingest_index_concurrency: int = 1,
     ) -> None:
         self._llm = llm_client
         self._qdrant = qdrant_service
@@ -119,6 +123,8 @@ class WikiEngine:
         self._enable_hyde = bool(enable_hyde)
         self._context_chunk_chars = max(200, int(context_chunk_chars))
         self._context_expand_neighbors = max(0, int(context_expand_neighbors))
+        self._ingest_llm_concurrency = max(1, int(ingest_llm_concurrency))
+        self._ingest_index_concurrency = max(1, int(ingest_index_concurrency))
 
     # -- path helpers -------------------------------------------------------
 
@@ -175,16 +181,165 @@ class WikiEngine:
             return default
         return {}
 
-    def _chat_text(self, system: str, user: str) -> str:
+    def _chat_text(
+        self,
+        system: str,
+        user: str,
+        *,
+        retries: int = 1,
+        temperature: float = 0.5,
+    ) -> str:
+        """Call LLM expecting free text. Retry on transient failure."""
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
+        last_error: Exception | None = None
+        for attempt in range(1 + max(0, retries)):
+            try:
+                return self._llm.chat(messages, temperature=temperature)
+            except LLMClientError as exc:
+                last_error = exc
+                logger.warning(
+                    "chat_text attempt=%s failed: %s", attempt + 1, exc,
+                )
+        logger.error("chat_text gave up after %s attempts: %s", 1 + retries, last_error)
+        return ""
+
+    # -- INGEST concurrency helpers ----------------------------------------
+
+    def _generate_page_task(
+        self,
+        *,
+        kind: str,
+        spec: dict,
+        system_base: str,
+        analysis: dict,
+        truncated_source: str,
+        wiki_dir: str,
+    ) -> dict:
+        """在工作线程里生成/更新单个 wiki 页面；捕获所有异常返回结构化结果。"""
+        filename = spec.get("filename", "")
         try:
-            return self._llm.chat(messages, temperature=0.5)
-        except LLMClientError as exc:
-            logger.error("chat_text failed: %s", exc)
-            return ""
+            if kind == "create":
+                return self._create_single_page(
+                    spec=spec,
+                    system_base=system_base,
+                    analysis=analysis,
+                    truncated_source=truncated_source,
+                    wiki_dir=wiki_dir,
+                )
+            return self._update_single_page(
+                spec=spec,
+                system_base=system_base,
+                analysis=analysis,
+                wiki_dir=wiki_dir,
+            )
+        except Exception as exc:
+            logger.exception("Page %s (%s) task failed: %s", filename, kind, exc)
+            return {"ok": False, "kind": kind, "filename": filename, "error": str(exc)}
+
+    def _create_single_page(
+        self,
+        *,
+        spec: dict,
+        system_base: str,
+        analysis: dict,
+        truncated_source: str,
+        wiki_dir: str,
+    ) -> dict:
+        filename = spec.get("filename", "")
+        title = spec.get("title", filename.replace(".md", ""))
+        page_type = spec.get("type", "concept")
+        page_md = self._chat_text(
+            system=system_base,
+            user=(
+                f"请为以下主题生成完整的 Wiki 页面（Markdown 格式，包含 YAML frontmatter）。\n"
+                f"文件名: {filename}\n标题: {title}\n类型: {page_type}\n"
+                f"原因: {spec.get('reason', '')}\n\n"
+                f"--- 原始资料摘要 ---\n{json.dumps(analysis, ensure_ascii=False)}\n\n"
+                f"--- 原始资料节选 ---\n{truncated_source[:8000]}\n\n"
+                "请确保：\n"
+                "1. 以 YAML frontmatter 开头 (title, type, tags, source, updated)\n"
+                "2. 内容准确、结构清晰\n"
+                "3. 适当添加对其他页面的交叉引用链接 [Title](other-page.md)"
+            ),
+        )
+        if not page_md:
+            return {"ok": False, "kind": "create", "filename": filename, "error": "empty LLM output"}
+        _write_file(os.path.join(wiki_dir, filename), page_md)
+        logger.info("Created wiki page: %s", filename)
+        return {"ok": True, "kind": "create", "filename": filename}
+
+    def _update_single_page(
+        self,
+        *,
+        spec: dict,
+        system_base: str,
+        analysis: dict,
+        wiki_dir: str,
+    ) -> dict:
+        filename = spec.get("filename", "")
+        existing_path = os.path.join(wiki_dir, filename)
+        existing_content = _read_file(existing_path)
+        if not existing_content:
+            logger.warning("Page to update not found: %s", filename)
+            return {"ok": False, "kind": "update", "filename": filename, "error": "file not found"}
+        updated_md = self._chat_text(
+            system=system_base,
+            user=(
+                f"请更新以下 Wiki 页面。\n"
+                f"更新原因: {spec.get('reason', '')}\n"
+                f"需要添加的内容: {spec.get('what_to_add', '')}\n\n"
+                f"--- 当前页面内容 ({filename}) ---\n{existing_content}\n\n"
+                f"--- 原始资料摘要 ---\n{json.dumps(analysis, ensure_ascii=False)}\n\n"
+                "请返回更新后的完整页面（保留 frontmatter，更新 updated 日期）。"
+            ),
+        )
+        if not updated_md:
+            return {"ok": False, "kind": "update", "filename": filename, "error": "empty LLM output"}
+        _write_file(existing_path, updated_md)
+        logger.info("Updated wiki page: %s", filename)
+        return {"ok": True, "kind": "update", "filename": filename}
+
+    def _index_single_page(
+        self,
+        *,
+        repo_id: int,
+        wiki_dir: str,
+        filename: str,
+    ) -> dict:
+        """并发 upsert_page + upsert_page_chunks 单页的工作函数。"""
+        filepath = os.path.join(wiki_dir, filename)
+        content = _read_file(filepath)
+        if not content:
+            return {"ok": False, "filename": filename, "error": "empty content"}
+        fm, _ = render_markdown(content)
+        title = fm.get("title", filename.replace(".md", ""))
+        page_type = fm.get("type", "unknown")
+        try:
+            self._qdrant.upsert_page(
+                repo_id=repo_id,
+                filename=filename,
+                title=title,
+                page_type=page_type,
+                content=content,
+            )
+        except QdrantServiceError as exc:
+            logger.error("Vector upsert failed for %s: %s", filename, exc)
+            return {"ok": False, "filename": filename, "error": f"page: {exc}"}
+        try:
+            self._qdrant.upsert_page_chunks(
+                repo_id=repo_id,
+                filename=filename,
+                title=title,
+                page_type=page_type,
+                content=content,
+            )
+        except QdrantServiceError as exc:
+            logger.error("Chunk upsert failed for %s: %s", filename, exc)
+            return {"ok": False, "filename": filename, "error": f"chunk: {exc}"}
+        return {"ok": True, "filename": filename}
 
     # -----------------------------------------------------------------------
     # CONFIDENCE SCORING
@@ -518,119 +673,111 @@ class WikiEngine:
             plan=plan,
         )
 
-        # -- 4. Execute: create pages ---------------------------------------
+        # -- 4 & 5. Execute: create + update pages （并发生成） ------------
         created_files: list[str] = []
         updated_files: list[str] = []
 
-        for idx, page_spec in enumerate(pages_to_create):
-            filename = page_spec.get("filename", f"page-{idx}.md")
-            title = page_spec.get("title", filename.replace(".md", ""))
-            page_type = page_spec.get("type", "concept")
-            pct = 40 + int(30 * (idx + 1) / max(total_pages, 1))
-
-            yield _progress("execute", pct, f"Creating {filename} …")
-
-            try:
-                page_md = self._chat_text(
-                    system=system_base,
-                    user=(
-                        f"请为以下主题生成完整的 Wiki 页面（Markdown 格式，包含 YAML frontmatter）。\n"
-                        f"文件名: {filename}\n标题: {title}\n类型: {page_type}\n"
-                        f"原因: {page_spec.get('reason', '')}\n\n"
-                        f"--- 原始资料摘要 ---\n{json.dumps(analysis, ensure_ascii=False)}\n\n"
-                        f"--- 原始资料节选 ---\n{truncated_source[:8000]}\n\n"
-                        "请确保：\n"
-                        "1. 以 YAML frontmatter 开头 (title, type, tags, source, updated)\n"
-                        "2. 内容准确、结构清晰\n"
-                        "3. 适当添加对其他页面的交叉引用链接 [Title](other-page.md)"
-                    ),
-                )
-                if page_md:
-                    _write_file(os.path.join(wiki_dir, filename), page_md)
-                    created_files.append(filename)
-                    logger.info("Created wiki page: %s", filename)
-                else:
-                    logger.warning("LLM returned empty content for %s", filename)
-            except Exception as exc:
-                logger.exception("Failed to create page %s: %s", filename, exc)
-                yield _progress("execute", pct, f"Failed to create {filename}: {exc}")
-
-        # -- 5. Execute: update pages ---------------------------------------
-        for idx, page_spec in enumerate(pages_to_update):
-            filename = page_spec.get("filename", "")
-            if not filename:
+        generation_tasks: list[tuple[str, dict]] = []
+        for idx, spec in enumerate(pages_to_create):
+            spec_with_default = dict(spec)
+            if not spec_with_default.get("filename"):
+                spec_with_default["filename"] = f"page-{idx}.md"
+            generation_tasks.append(("create", spec_with_default))
+        for spec in pages_to_update:
+            if not spec.get("filename"):
                 continue
-            pct = 40 + int(30 * (len(pages_to_create) + idx + 1) / max(total_pages, 1))
+            generation_tasks.append(("update", spec))
 
-            yield _progress("execute", pct, f"Updating {filename} …")
+        total_gen = len(generation_tasks)
+        if total_gen:
+            yield _progress(
+                "execute", 40,
+                f"Generating {total_gen} pages with concurrency={self._ingest_llm_concurrency} …",
+            )
 
-            existing_path = os.path.join(wiki_dir, filename)
-            existing_content = _read_file(existing_path)
-            if not existing_content:
-                logger.warning("Page to update not found: %s", filename)
-                yield _progress("execute", pct, f"Skipped {filename} (not found)")
-                continue
+            max_workers = min(self._ingest_llm_concurrency, total_gen)
+            files_lock = threading.Lock()
+            done = 0
+            with ThreadPoolExecutor(
+                max_workers=max_workers, thread_name_prefix="ingest-gen",
+            ) as pool:
+                future_to_task = {
+                    pool.submit(
+                        self._generate_page_task,
+                        kind=kind,
+                        spec=spec,
+                        system_base=system_base,
+                        analysis=analysis,
+                        truncated_source=truncated_source,
+                        wiki_dir=wiki_dir,
+                    ): (kind, spec)
+                    for kind, spec in generation_tasks
+                }
+                for fut in as_completed(future_to_task):
+                    kind, spec = future_to_task[fut]
+                    filename = spec.get("filename", "")
+                    try:
+                        result = fut.result()
+                    except Exception as exc:
+                        logger.exception("Page %s task crashed: %s", filename, exc)
+                        result = {"ok": False, "kind": kind, "filename": filename, "error": str(exc)}
 
-            try:
-                updated_md = self._chat_text(
-                    system=system_base,
-                    user=(
-                        f"请更新以下 Wiki 页面。\n"
-                        f"更新原因: {page_spec.get('reason', '')}\n"
-                        f"需要添加的内容: {page_spec.get('what_to_add', '')}\n\n"
-                        f"--- 当前页面内容 ({filename}) ---\n{existing_content}\n\n"
-                        f"--- 原始资料摘要 ---\n{json.dumps(analysis, ensure_ascii=False)}\n\n"
-                        "请返回更新后的完整页面（保留 frontmatter，更新 updated 日期）。"
-                    ),
-                )
-                if updated_md:
-                    _write_file(existing_path, updated_md)
-                    updated_files.append(filename)
-                    logger.info("Updated wiki page: %s", filename)
-                else:
-                    logger.warning("LLM returned empty update for %s", filename)
-            except Exception as exc:
-                logger.exception("Failed to update page %s: %s", filename, exc)
-                yield _progress("execute", pct, f"Failed to update {filename}: {exc}")
+                    done += 1
+                    pct = 40 + int(30 * done / total_gen)
 
-        yield _progress("execute", 70, f"Done writing pages (created={len(created_files)}, updated={len(updated_files)})")
+                    if result.get("ok"):
+                        with files_lock:
+                            if kind == "create":
+                                created_files.append(filename)
+                            else:
+                                updated_files.append(filename)
+                        msg = f"{kind.capitalize()}d {filename} [{done}/{total_gen}]"
+                    else:
+                        err = result.get("error") or "empty output"
+                        msg = f"Failed to {kind} {filename}: {err} [{done}/{total_gen}]"
+                    yield _progress("execute", pct, msg)
 
-        # -- 6. Vector index ------------------------------------------------
+        yield _progress(
+            "execute", 70,
+            f"Done writing pages (created={len(created_files)}, updated={len(updated_files)})",
+        )
+
+        # -- 6. Vector index （多页并发） -----------------------------------
         all_changed = created_files + updated_files
-        for idx, filename in enumerate(all_changed):
-            pct = 70 + int(15 * (idx + 1) / max(len(all_changed), 1))
-            yield _progress("index", pct, f"Indexing {filename} …")
-
-            filepath = os.path.join(wiki_dir, filename)
-            content = _read_file(filepath)
-            if not content:
-                continue
-            fm, _ = render_markdown(content)
-            title = fm.get("title", filename.replace(".md", ""))
-            page_type = fm.get("type", "unknown")
-
-            try:
-                self._qdrant.upsert_page(
-                    repo_id=repo_id,
-                    filename=filename,
-                    title=title,
-                    page_type=page_type,
-                    content=content,
-                )
-            except QdrantServiceError as exc:
-                logger.error("Vector upsert failed for %s: %s", filename, exc)
-                yield _progress("index", pct, f"Vector index failed for {filename}: {exc}")
-
-            try:
-                self._qdrant.upsert_page_chunks(
-                    repo_id=repo_id,
-                    filename=filename,
-                    title=title,
-                    page_type=page_type,
-                    content=content,
-                )
-            except QdrantServiceError as exc:
-                logger.error("Chunk upsert failed for %s: %s", filename, exc)
+        if all_changed:
+            total_idx = len(all_changed)
+            yield _progress(
+                "index", 70,
+                f"Indexing {total_idx} pages with concurrency={self._ingest_index_concurrency} …",
+            )
+            max_idx_workers = min(self._ingest_index_concurrency, total_idx)
+            done_idx = 0
+            with ThreadPoolExecutor(
+                max_workers=max_idx_workers, thread_name_prefix="ingest-index",
+            ) as pool:
+                future_to_fn = {
+                    pool.submit(
+                        self._index_single_page,
+                        repo_id=repo_id,
+                        wiki_dir=wiki_dir,
+                        filename=fn,
+                    ): fn
+                    for fn in all_changed
+                }
+                for fut in as_completed(future_to_fn):
+                    fn = future_to_fn[fut]
+                    try:
+                        result = fut.result()
+                    except Exception as exc:
+                        logger.exception("Index %s crashed: %s", fn, exc)
+                        result = {"ok": False, "filename": fn, "error": str(exc)}
+                    done_idx += 1
+                    pct = 70 + int(14 * done_idx / total_idx)
+                    if result.get("ok"):
+                        msg = f"Indexed {fn} [{done_idx}/{total_idx}]"
+                    else:
+                        msg = f"Index failed for {fn}: {result.get('error','')} [{done_idx}/{total_idx}]"
+                    yield _progress("index", pct, msg)
 
         fact_records = read_jsonl(self._fact_records_path(username, repo_slug, source_filename))
         if fact_records and self._qdrant:
