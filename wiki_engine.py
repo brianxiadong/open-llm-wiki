@@ -15,6 +15,14 @@ from llm_client import LLMClient
 from llmwiki_core import HybridRetriever, RetrievalConfig
 from qdrant_service import QdrantService
 from utils import classify_query_mode, list_wiki_pages, read_jsonl, render_markdown
+from wiki_prompts import (
+    apply_citation_penalty,
+    build_comparison_user_prompt,
+    build_generic_user_prompt,
+    classify_intent,
+    compose_system_prompt,
+    validate_citations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +118,11 @@ class WikiEngine:
         context_expand_neighbors: int = 1,
         ingest_llm_concurrency: int = 1,
         ingest_index_concurrency: int = 1,
+        enable_prompt_guard: bool = True,
+        enable_comparison_template: bool = True,
+        comparison_min_dimensions: int = 3,
+        citation_postcheck: bool = True,
+        citation_penalty: float = 0.25,
     ) -> None:
         self._llm = llm_client
         self._qdrant = qdrant_service
@@ -125,6 +138,11 @@ class WikiEngine:
         self._context_expand_neighbors = max(0, int(context_expand_neighbors))
         self._ingest_llm_concurrency = max(1, int(ingest_llm_concurrency))
         self._ingest_index_concurrency = max(1, int(ingest_index_concurrency))
+        self._enable_prompt_guard = bool(enable_prompt_guard)
+        self._enable_comparison_template = bool(enable_comparison_template)
+        self._comparison_min_dimensions = max(2, int(comparison_min_dimensions))
+        self._citation_postcheck = bool(citation_postcheck)
+        self._citation_penalty = max(0.0, float(citation_penalty))
 
     # -- path helpers -------------------------------------------------------
 
@@ -407,6 +425,41 @@ class WikiEngine:
                 reasons.append("证据不足")
 
         return {"level": level, "score": round(score, 2), "reasons": reasons}
+
+    def _collect_allowed_sources(
+        self,
+        *,
+        wiki_evidence: list[dict],
+        chunk_evidence: list[dict],
+        fact_evidence: list[dict],
+    ) -> list[dict]:
+        """返回本次回答允许引用的文件名集合（去重，保持召回顺序）。
+
+        用于 guard prompt 的『可引用的来源列表』与事后引用合法性校验。
+        包含：wiki 证据命中的 filename、chunk 证据命中的 filename、
+        以及 fact 证据的 source_file / source_markdown_filename。
+        """
+        seen: set[str] = set()
+        out: list[str] = []
+        for ev in wiki_evidence or []:
+            fn = ev.get("filename") if isinstance(ev, dict) else None
+            if fn and fn not in seen:
+                seen.add(fn)
+                out.append(fn)
+        for ev in chunk_evidence or []:
+            fn = ev.get("filename") if isinstance(ev, dict) else None
+            if fn and fn not in seen:
+                seen.add(fn)
+                out.append(fn)
+        for ev in fact_evidence or []:
+            if not isinstance(ev, dict):
+                continue
+            for key in ("source_file", "source_markdown_filename"):
+                fn = ev.get(key)
+                if fn and fn not in seen:
+                    seen.add(fn)
+                    out.append(fn)
+        return out
 
     def _build_fact_evidence(
         self,
@@ -1081,16 +1134,45 @@ class WikiEngine:
 
         yield {"event": "progress", "data": {"message": "正在生成回答…", "percent": 60}}
 
+        stream_allowed_sources = list(
+            dict.fromkeys(
+                list(wiki_filenames)
+                + [h.get("filename") for h in chunk_hits if h.get("filename")]
+                + [h.get("source_file") for h in fact_hits if h.get("source_file")]
+                + [
+                    h.get("source_markdown_filename")
+                    for h in fact_hits
+                    if h.get("source_markdown_filename")
+                ]
+            )
+        )
+        stream_allowed_sources = [s for s in stream_allowed_sources if s]
+        stream_sys = compose_system_prompt(
+            system_base,
+            enable_guard=self._enable_prompt_guard,
+            has_context=bool(context_block),
+        )
+        stream_intent = (
+            classify_intent(question) if self._enable_comparison_template else "generic"
+        )
+        if stream_intent == "comparison" and context_block:
+            stream_user = build_comparison_user_prompt(
+                question=question,
+                context_block=context_block,
+                allowed_sources=stream_allowed_sources,
+                query_mode=query_mode,
+                min_dimensions=self._comparison_min_dimensions,
+            )
+        else:
+            stream_user = build_generic_user_prompt(
+                question=question,
+                context_block=context_block,
+                allowed_sources=stream_allowed_sources,
+                query_mode=query_mode,
+            )
         messages = [
-            {"role": "system", "content": system_base},
-            {"role": "user", "content": (
-                "根据以下 Wiki 页面和结构化事实回答用户问题。使用 Markdown 格式。\n"
-                f"问题类型: {query_mode}。\n"
-                "当命中结构化事实时，优先给出精确字段值、表名和行号；"
-                "若资料中没有直接证据，不要编造。\n\n"
-                f"--- 问题 ---\n{question}\n\n"
-                f"--- 检索上下文 ---\n{context_block}"
-            )},
+            {"role": "system", "content": stream_sys},
+            {"role": "user", "content": stream_user},
         ]
 
         answer_chunks: list[str] = []
@@ -1148,6 +1230,10 @@ class WikiEngine:
             f"本回答基于 {len(wiki_ev)} 个 Wiki 页面、{len(chunk_ev)} 个原文片段"
             f"和 {len(fact_ev)} 条结构化事实生成。"
         )
+        stream_validation = {"cited": [], "unknown": [], "ok": True}
+        if self._citation_postcheck:
+            stream_validation = validate_citations(answer_text, set(stream_allowed_sources))
+            apply_citation_penalty(confidence, stream_validation, self._citation_penalty)
         yield {"event": "done", "data": {
             "answer": answer_text,
             "markdown": answer_text,
@@ -1156,6 +1242,8 @@ class WikiEngine:
             "chunk_evidence": chunk_ev,
             "fact_evidence": fact_ev,
             "evidence_summary": evidence_summary,
+            "intent": stream_intent,
+            "citation_validation": stream_validation,
             "wiki_sources": [f for f in wiki_filenames if f in loaded],
             "qdrant_sources": list({h["filename"] for h in chunk_hits}),
             "referenced_pages": list(loaded),
@@ -1285,19 +1373,39 @@ class WikiEngine:
             context_parts.append(fact_context)
         context_block = "\n\n".join(context_parts)
 
-        answer = self._chat_text(
-            system=system_base,
-            user=(
-                "根据以下 Wiki 页面、原文片段和结构化事实回答用户问题，使用 Markdown 格式。\n"
-                f"问题类型: {query_mode}。\n"
-                "若命中结构化事实，优先输出精确值、表名和行号；"
-                "如果没有直接证据，请使用指定提示语。\n"
-                "若证据不足，请使用指定提示语。\n\n"
-                + (_build_history_block(history) if history else "")
-                + f"--- 问题 ---\n{question}\n\n"
-                f"--- 检索上下文 ---\n{context_block}"
-            ),
+        allowed_sources = self._collect_allowed_sources(
+            wiki_evidence=wiki_evidence,
+            chunk_evidence=chunk_evidence,
+            fact_evidence=fact_evidence,
         )
+        history_block = _build_history_block(history) if history else ""
+        has_context = bool(context_block)
+        sys_prompt = compose_system_prompt(
+            system_base,
+            enable_guard=self._enable_prompt_guard,
+            has_context=has_context,
+        )
+        intent = (
+            classify_intent(question) if self._enable_comparison_template else "generic"
+        )
+        if intent == "comparison" and has_context:
+            user_prompt = build_comparison_user_prompt(
+                question=question,
+                context_block=context_block,
+                history_block=history_block,
+                allowed_sources=allowed_sources,
+                query_mode=query_mode,
+                min_dimensions=self._comparison_min_dimensions,
+            )
+        else:
+            user_prompt = build_generic_user_prompt(
+                question=question,
+                context_block=context_block,
+                history_block=history_block,
+                allowed_sources=allowed_sources,
+                query_mode=query_mode,
+            )
+        answer = self._chat_text(system=sys_prompt, user=user_prompt)
 
         # -- Confidence ------------------------------------------------
         top_score = chunk_hits[0]["score"] if chunk_hits else 0.0
@@ -1315,6 +1423,10 @@ class WikiEngine:
             fact_channel=bool(fact_hits),
         )
 
+        citation_validation = {"cited": [], "unknown": [], "ok": True}
+        if self._citation_postcheck:
+            citation_validation = validate_citations(answer, set(allowed_sources))
+            apply_citation_penalty(confidence, citation_validation, self._citation_penalty)
         loaded = set(page_contents.keys())
         evidence_summary = (
             f"本回答基于 {len(wiki_evidence)} 个 Wiki 页面、{len(chunk_evidence)} 个原文片段"
@@ -1329,6 +1441,8 @@ class WikiEngine:
             "fact_evidence": fact_evidence,
             "evidence_summary": evidence_summary,
             "query_mode": query_mode,
+            "intent": intent,
+            "citation_validation": citation_validation,
             "referenced_pages": list(loaded),
             "wiki_sources": [e["filename"] for e in wiki_evidence],
             "qdrant_sources": list(chunk_fns),

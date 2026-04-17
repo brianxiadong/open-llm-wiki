@@ -687,3 +687,214 @@ def test_apply_fixes_route(sample_repo, app):
         follow_redirects=True,
     )
     assert resp.status_code == 200
+
+
+
+# ---------------------------------------------------------------------------
+# Prompt guard / comparison template / citation postcheck integration tests
+# ---------------------------------------------------------------------------
+
+
+def _build_engine_with_guard(tmp_data_dir, mock_llm, mock_qdrant, **overrides):
+    """Helper: 构造开启 guard / 对比模板 / 引用校验的 WikiEngine。"""
+    kwargs = dict(
+        enable_prompt_guard=True,
+        enable_comparison_template=True,
+        comparison_min_dimensions=3,
+        citation_postcheck=True,
+        citation_penalty=0.25,
+    )
+    kwargs.update(overrides)
+    return WikiEngine(mock_llm, mock_qdrant, tmp_data_dir, **kwargs)
+
+
+def _make_ae_repo(tmp_data_dir, slug="guard-repo"):
+    wiki_dir = os.path.join(tmp_data_dir, "alice", slug, "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "index.md"), "w") as f:
+        f.write("---\ntitle: 首页\ntype: index\n---\n\n- [AE350](ae350-overview.md)\n- [AE650](ae650-overview.md)\n")
+    with open(os.path.join(wiki_dir, "ae350-overview.md"), "w") as f:
+        f.write("---\ntitle: AE350\ntype: product\n---\n\n# AE350\n\n拾音距离 5 米。\n")
+    with open(os.path.join(wiki_dir, "ae650-overview.md"), "w") as f:
+        f.write("---\ntitle: AE650\ntype: product\n---\n\n# AE650\n\n拾音距离 8 米。\n")
+    repo = MagicMock()
+    repo.slug = slug
+    repo.id = 1
+    return repo
+
+
+def test_query_with_evidence_injects_guard_when_context_present(tmp_data_dir):
+    """有 context 时，system prompt 必须包含 guard 核心规则。"""
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": ["ae350-overview.md", "ae650-overview.md"]}
+    mock_llm.chat.return_value = "回答。依据：ae350-overview.md。"
+
+    mock_qdrant = MagicMock()
+    mock_qdrant.search_chunks.return_value = [
+        {"chunk_id": "ae350-overview.md#0", "filename": "ae350-overview.md",
+         "page_title": "AE350", "heading": "", "chunk_text": "拾音 5 米", "position": 0, "score": 0.88},
+        {"chunk_id": "ae650-overview.md#0", "filename": "ae650-overview.md",
+         "page_title": "AE650", "heading": "", "chunk_text": "拾音 8 米", "position": 0, "score": 0.85},
+    ]
+
+    engine = _build_engine_with_guard(tmp_data_dir, mock_llm, mock_qdrant)
+    repo = _make_ae_repo(tmp_data_dir)
+
+    engine.query_with_evidence(repo, "alice", "AE350 和 AE650 的区别")
+
+    # _chat_text -> llm.chat(messages=...)
+    calls = mock_llm.chat.call_args_list
+    assert calls, "LLM chat should have been called"
+    # 取最后一次（生成答案那次）的 messages
+    messages = calls[-1].args[0] if calls[-1].args else calls[-1].kwargs["messages"]
+    system_content = messages[0]["content"]
+    user_content = messages[1]["content"]
+    assert "字段级严格" in system_content
+    assert "不跨实体传染" in system_content
+    assert "可引用的来源列表" in user_content
+    assert "ae350-overview.md" in user_content
+    assert "ae650-overview.md" in user_content
+
+
+def test_query_with_evidence_comparison_intent_uses_comparison_template(tmp_data_dir):
+    """对比问题应走对比模板（包含『维度对比表』『资料缺口』等段）。"""
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": ["ae350-overview.md", "ae650-overview.md"]}
+    mock_llm.chat.return_value = "对比回答"
+
+    mock_qdrant = MagicMock()
+    mock_qdrant.search_chunks.return_value = [
+        {"chunk_id": "ae350-overview.md#0", "filename": "ae350-overview.md",
+         "page_title": "AE350", "heading": "", "chunk_text": "5 米", "position": 0, "score": 0.80},
+    ]
+    engine = _build_engine_with_guard(tmp_data_dir, mock_llm, mock_qdrant)
+    repo = _make_ae_repo(tmp_data_dir, slug="guard-cmp")
+
+    result = engine.query_with_evidence(repo, "alice", "AE350 和 AE650 哪款更适合大会议室")
+
+    assert result.get("intent") == "comparison"
+    calls = mock_llm.chat.call_args_list
+    messages = calls[-1].args[0] if calls[-1].args else calls[-1].kwargs["messages"]
+    user_content = messages[1]["content"]
+    assert "维度对比表" in user_content
+    assert "资料缺口" in user_content
+    assert "退化规则" in user_content
+
+
+def test_query_with_evidence_generic_intent_skips_comparison_template(tmp_data_dir):
+    """非对比问题走通用模板，不应出现『维度对比表』段。"""
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": ["ae350-overview.md"]}
+    mock_llm.chat.return_value = "这是答案"
+
+    mock_qdrant = MagicMock()
+    mock_qdrant.search_chunks.return_value = [
+        {"chunk_id": "ae350-overview.md#0", "filename": "ae350-overview.md",
+         "page_title": "AE350", "heading": "", "chunk_text": "5 米", "position": 0, "score": 0.80},
+    ]
+    engine = _build_engine_with_guard(tmp_data_dir, mock_llm, mock_qdrant)
+    repo = _make_ae_repo(tmp_data_dir, slug="guard-gen")
+
+    result = engine.query_with_evidence(repo, "alice", "AE350 的拾音距离是多少")
+
+    assert result.get("intent") == "generic"
+    calls = mock_llm.chat.call_args_list
+    messages = calls[-1].args[0] if calls[-1].args else calls[-1].kwargs["messages"]
+    user_content = messages[1]["content"]
+    assert "维度对比表" not in user_content
+
+
+def test_query_with_evidence_citation_postcheck_downgrades_confidence(tmp_data_dir):
+    """LLM 编造文件名时，citation_postcheck 应扣分并写入 validation 字段。"""
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": ["ae350-overview.md"]}
+    # 答案里引用了一个根本不存在的 fake-manual.md
+    mock_llm.chat.return_value = "详见 ae350-overview.md 和 fake-manual.md 中描述。"
+
+    mock_qdrant = MagicMock()
+    mock_qdrant.search_chunks.return_value = [
+        {"chunk_id": "ae350-overview.md#0", "filename": "ae350-overview.md",
+         "page_title": "AE350", "heading": "", "chunk_text": "拾音 5 米", "position": 0, "score": 0.90},
+    ]
+    engine = _build_engine_with_guard(tmp_data_dir, mock_llm, mock_qdrant)
+    repo = _make_ae_repo(tmp_data_dir, slug="guard-cite")
+
+    result = engine.query_with_evidence(repo, "alice", "AE350 的拾音距离")
+
+    validation = result.get("citation_validation")
+    assert validation is not None
+    assert validation["ok"] is False
+    assert "fake-manual.md" in validation["unknown"]
+    # reasons 里应该提到疑似编造
+    assert any("疑似编造" in r for r in result["confidence"]["reasons"])
+
+
+def test_query_with_evidence_guard_skipped_when_context_empty(tmp_data_dir):
+    """完全无命中时走空 context 分支，不应注入 guard（也不会调用 LLM）。"""
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": []}
+    mock_llm.chat.return_value = "应当不被调用"
+
+    mock_qdrant = MagicMock()
+    mock_qdrant.search_chunks.return_value = []
+    mock_qdrant.search_facts.return_value = []
+
+    engine = _build_engine_with_guard(tmp_data_dir, mock_llm, mock_qdrant)
+    wiki_dir = os.path.join(tmp_data_dir, "alice", "empty-guard", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "index.md"), "w") as f:
+        f.write("---\ntitle: 首页\ntype: index\n---\n\n(空)\n")
+    repo = MagicMock()
+    repo.slug = "empty-guard"
+    repo.id = 99
+
+    result = engine.query_with_evidence(repo, "alice", "随便问点什么")
+    assert "缺少相关" in result["markdown"] or "缺少" in result["markdown"] or "暂无相关" in result["markdown"]
+
+
+def test_comparison_template_disabled_by_flag(tmp_data_dir):
+    """关闭 enable_comparison_template 后，对比类问题也走通用模板。"""
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": ["ae350-overview.md"]}
+    mock_llm.chat.return_value = "answer"
+    mock_qdrant = MagicMock()
+    mock_qdrant.search_chunks.return_value = [
+        {"chunk_id": "ae350-overview.md#0", "filename": "ae350-overview.md",
+         "page_title": "AE350", "heading": "", "chunk_text": "x", "position": 0, "score": 0.80},
+    ]
+    engine = _build_engine_with_guard(
+        tmp_data_dir, mock_llm, mock_qdrant, enable_comparison_template=False,
+    )
+    repo = _make_ae_repo(tmp_data_dir, slug="guard-disabled-cmp")
+
+    result = engine.query_with_evidence(repo, "alice", "AE350 vs AE650 哪个好")
+
+    assert result["intent"] == "generic"
+    calls = mock_llm.chat.call_args_list
+    messages = calls[-1].args[0] if calls[-1].args else calls[-1].kwargs["messages"]
+    user_content = messages[1]["content"]
+    assert "维度对比表" not in user_content
+
+
+def test_prompt_guard_disabled_by_flag(tmp_data_dir):
+    """关闭 enable_prompt_guard 后，system prompt 不包含 guard 规则。"""
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": ["ae350-overview.md"]}
+    mock_llm.chat.return_value = "answer"
+    mock_qdrant = MagicMock()
+    mock_qdrant.search_chunks.return_value = [
+        {"chunk_id": "ae350-overview.md#0", "filename": "ae350-overview.md",
+         "page_title": "AE350", "heading": "", "chunk_text": "x", "position": 0, "score": 0.80},
+    ]
+    engine = _build_engine_with_guard(
+        tmp_data_dir, mock_llm, mock_qdrant, enable_prompt_guard=False,
+    )
+    repo = _make_ae_repo(tmp_data_dir, slug="guard-disabled")
+
+    engine.query_with_evidence(repo, "alice", "什么是 AE350")
+
+    calls = mock_llm.chat.call_args_list
+    messages = calls[-1].args[0] if calls[-1].args else calls[-1].kwargs["messages"]
+    system_content = messages[0]["content"]
+    assert "字段级严格" not in system_content
+    assert "不跨实体传染" not in system_content

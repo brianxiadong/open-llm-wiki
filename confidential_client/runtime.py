@@ -55,6 +55,11 @@ class ConfidentialRuntime:
             enable_hyde=False,
             ingest_llm_concurrency=4,
             ingest_index_concurrency=4,
+            enable_prompt_guard=True,
+            enable_comparison_template=True,
+            comparison_min_dimensions=3,
+            citation_postcheck=True,
+            citation_penalty=0.25,
         )
 
     def _build_qdrant(self, workspace) -> ConfidentialQdrantService:

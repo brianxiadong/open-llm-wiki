@@ -36,29 +36,30 @@ class Config:
 
     QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 
-    # ── RAG 检索参数 ────────────────────────────────────────────────────
-    # Chunk 切分
+    # RAG 检索参数
     RAG_CHUNK_MIN = int(os.environ.get("RAG_CHUNK_MIN", "400"))
     RAG_CHUNK_MAX = int(os.environ.get("RAG_CHUNK_MAX", "1200"))
     RAG_CHUNK_OVERLAP = int(os.environ.get("RAG_CHUNK_OVERLAP", "80"))
-    # 召回参数
     RAG_CHUNK_TOP_K = int(os.environ.get("RAG_CHUNK_TOP_K", "12"))
     RAG_FACT_TOP_K = int(os.environ.get("RAG_FACT_TOP_K", "12"))
     RAG_CHUNK_SCORE_THRESHOLD = float(os.environ.get("RAG_CHUNK_SCORE_THRESHOLD", "0.35"))
     RAG_FACT_SCORE_THRESHOLD = float(os.environ.get("RAG_FACT_SCORE_THRESHOLD", "0.40"))
     RAG_MAX_CHUNKS_PER_FILE = int(os.environ.get("RAG_MAX_CHUNKS_PER_FILE", "2"))
-    # 融合与重写
     RAG_RRF_K = int(os.environ.get("RAG_RRF_K", "60"))
     RAG_ENABLE_BM25 = os.environ.get("RAG_ENABLE_BM25", "true").lower() == "true"
     RAG_ENABLE_HYDE = os.environ.get("RAG_ENABLE_HYDE", "false").lower() == "true"
-    # Context 组装
     RAG_CONTEXT_CHUNK_CHARS = int(os.environ.get("RAG_CONTEXT_CHUNK_CHARS", "700"))
     RAG_CONTEXT_EXPAND_NEIGHBORS = int(os.environ.get("RAG_CONTEXT_EXPAND_NEIGHBORS", "1"))
 
-    # ── 摄入并发 ─────────────────────────────────────────────────────────
-    # 单文件 ingest 内 LLM 并发度（pages_to_create / pages_to_update 生成）
+    # 生成层保护 (prompt guard / 对比模板 / 引用合法性后校验)
+    RAG_ENABLE_PROMPT_GUARD = os.environ.get("RAG_ENABLE_PROMPT_GUARD", "true").lower() == "true"
+    RAG_ENABLE_COMPARISON_TEMPLATE = os.environ.get("RAG_ENABLE_COMPARISON_TEMPLATE", "true").lower() == "true"
+    RAG_COMPARISON_MIN_DIMENSIONS = int(os.environ.get("RAG_COMPARISON_MIN_DIMENSIONS", "3"))
+    RAG_CITATION_POSTCHECK = os.environ.get("RAG_CITATION_POSTCHECK", "true").lower() == "true"
+    RAG_CITATION_PENALTY = float(os.environ.get("RAG_CITATION_PENALTY", "0.25"))
+
+    # 摄入并发
     INGEST_LLM_CONCURRENCY = int(os.environ.get("INGEST_LLM_CONCURRENCY", "4"))
-    # 单文件 ingest 内 Qdrant 索引并发度（upsert_page + upsert_page_chunks）
     INGEST_INDEX_CONCURRENCY = int(os.environ.get("INGEST_INDEX_CONCURRENCY", "4"))
 
     MINERU_API_URL = os.environ.get("MINERU_API_URL", "http://localhost:8000")

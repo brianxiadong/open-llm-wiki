@@ -612,6 +612,11 @@ def create_app() -> Flask:
         context_expand_neighbors=Config.RAG_CONTEXT_EXPAND_NEIGHBORS,
         ingest_llm_concurrency=Config.INGEST_LLM_CONCURRENCY,
         ingest_index_concurrency=Config.INGEST_INDEX_CONCURRENCY,
+        enable_prompt_guard=Config.RAG_ENABLE_PROMPT_GUARD,
+        enable_comparison_template=Config.RAG_ENABLE_COMPARISON_TEMPLATE,
+        comparison_min_dimensions=Config.RAG_COMPARISON_MIN_DIMENSIONS,
+        citation_postcheck=Config.RAG_CITATION_POSTCHECK,
+        citation_penalty=Config.RAG_CITATION_PENALTY,
     )
 
     # Query trace logger: daily JSONL files under DATA_DIR/logs/

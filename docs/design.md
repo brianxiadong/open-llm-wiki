@@ -619,6 +619,13 @@ QDRANT_URL=http://localhost:6333
 INGEST_LLM_CONCURRENCY=4       # 页面生成阶段 LLM 并发
 INGEST_INDEX_CONCURRENCY=4     # 向量索引阶段页面并发
 
+# 生成层保护（prompt guard / 对比模板 / 引用合法性后校验）
+RAG_ENABLE_PROMPT_GUARD=true        # 有 context 时注入 guard 系统指令
+RAG_ENABLE_COMPARISON_TEMPLATE=true # 对比/选型类问题改用对比模板
+RAG_COMPARISON_MIN_DIMENSIONS=3     # 对比模板退化阈值（维度不足回退）
+RAG_CITATION_POSTCHECK=true         # 答案中引用的文件名必须在命中来源集合内
+RAG_CITATION_PENALTY=0.25           # 发现非法来源时 confidence 扣分
+
 # MinerU 文档解析服务
 MINERU_API_URL=http://172.36.237.175:8000
 MINERU_TIMEOUT=300
@@ -651,6 +658,31 @@ ADMIN_USERNAME=admin
 ```
 
 ### 7.2 Prompt 构造
+
+### 7.2.1 生成层保护（跨域通用）
+
+为了抑制 RAG 常见的三类误差——**跨实体传染**（把 A 产品的字段当成 B 的）、**编造来源**（引用了根本不在命中集合里的文件名）、**对比类结构塌陷**（维度不全、选型建议缺失）——查询层引入以下三件默认启用的保护机制。
+所有机制均为纯函数 / 规则，不依赖任何领域词汇，对其他知识库同样生效。
+
+| 机制 | 触发条件 | 作用 | 开关 |
+|------|---------|------|------|
+| **Prompt guard**（`compose_system_prompt`） | 有 context 且 `RAG_ENABLE_PROMPT_GUARD=true` | 注入 6 条通用规则：字段级严格、推理级允许、来源合法、未知即未知、不跨实体传染、空上下文坦率 | `RAG_ENABLE_PROMPT_GUARD` |
+| **对比模板**（`build_comparison_user_prompt`） | 关键词命中 comparison 且 context 非空 | 动态归纳 ≥ N 个维度 + 维度对比表 + 可选选型建议 + 资料缺口；维度不足时 LLM 自动退化为要点回答 | `RAG_ENABLE_COMPARISON_TEMPLATE`、`RAG_COMPARISON_MIN_DIMENSIONS` |
+| **引用合法性后校验**（`validate_citations` + `apply_citation_penalty`） | `RAG_CITATION_POSTCHECK=true` | 扫描答案里的 `xxx.md/docx/pdf` 等文件名，若不在`wiki_evidence ∪ chunk_evidence ∪ fact_evidence.source_file/source_markdown_filename` 中，对 confidence 扣 `RAG_CITATION_PENALTY` 并写入 `confidence.reasons` | `RAG_CITATION_POSTCHECK`、`RAG_CITATION_PENALTY` |
+
+实现位置：`wiki_prompts.py`（纯函数）+ `wiki_engine.py` 的 `query_with_evidence` / `query_stream` 分支。返回体额外包含 `intent` 与 `citation_validation` 两个字段以便前端展示。
+
+设计约束：
+
+1. **跨域零耦合**：guard 文本中不包含任何领域词汇（产品名、字段名），对比模板要求 LLM 从 context 中**动态归纳**维度而非硬编码；因此可直接套用到任意知识库。
+2. **零负向兜底**：
+   - 对比模板只在意图被分类为 comparison 且 context 非空时生效；否则回退通用模板，**不改变原行为**。
+   - guard 在 context 为空时不注入，避免压抑纯生成任务（例如"写一段示例代码"）。
+   - 对比模板内置**退化规则**：LLM 归纳不出 `RAG_COMPARISON_MIN_DIMENSIONS` 个维度时自动回退到要点回答。
+3. **可独立灰度**：5 个开关互相正交，可单独关闭某一项观察效果。
+
+单测覆盖见 `tests/test_wiki_prompts.py`（15 用例，纯函数级别）与 `tests/test_wiki_engine.py` 的集成用例（注入、对比分支、引用校验、关闭开关回退、空 context 不注入 guard 等 7 条）。
+
 
 每次 LLM 调用都遵循统一结构：
 
