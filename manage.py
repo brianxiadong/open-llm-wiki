@@ -25,9 +25,77 @@ def init_db():
     click.echo("数据库初始化完成。")
 
 
+def _parse_migration_version(filename: str) -> int:
+    """从 `004_foo.sql` 里提取 4；非法文件名抛 ValueError。"""
+    return int(filename.split("_", 1)[0])
+
+
+def list_migration_files(migrations_dir: str) -> list[str]:
+    """按文件名字典序返回 migrations 目录下的 `.sql` 文件。"""
+    if not os.path.isdir(migrations_dir):
+        return []
+    return sorted(f for f in os.listdir(migrations_dir) if f.endswith(".sql"))
+
+
+def plan_migrations(
+    *,
+    on_disk: list[str],
+    applied_filenames: set[str],
+    legacy_applied_versions: set[int],
+) -> tuple[list[str], list[str]]:
+    """计算迁移计划（纯函数，方便单测）。
+
+    返回 ``(to_backfill, to_run)``：
+    - ``to_backfill``：磁盘上存在、filename 集合里没有、但 version 号已在
+      ``legacy_applied_versions``（老 schema 只记 version）的文件；
+      这些被认作『历史已跑』，只写记录不执行 SQL。
+    - ``to_run``：磁盘上存在、且既不在 applied_filenames、也不在 legacy
+      version 集合里的文件；真正需要执行的新迁移。
+    """
+    to_backfill: list[str] = []
+    to_run: list[str] = []
+    for filename in on_disk:
+        if filename in applied_filenames:
+            continue
+        try:
+            version = _parse_migration_version(filename)
+        except ValueError:
+            continue
+        if version in legacy_applied_versions:
+            to_backfill.append(filename)
+        else:
+            to_run.append(filename)
+    return to_backfill, to_run
+
+
+_SCHEMA_VERSION_MODERN_DDL = """
+    CREATE TABLE schema_version (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        version INT NOT NULL,
+        filename VARCHAR(255) NULL,
+        applied_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_schema_version_filename (filename),
+        INDEX idx_schema_version_version (version)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+def _detect_schema_shape(cursor) -> str:
+    """返回 'absent' / 'legacy' / 'modern'。
+
+    legacy = 表已存在但没有 filename 列（老版本 `version INT PRIMARY KEY`）。
+    modern = 表已有 filename 列（本次重构后的结构）。
+    """
+    cursor.execute("SHOW TABLES LIKE 'schema_version'")
+    if cursor.fetchone() is None:
+        return "absent"
+    cursor.execute("SHOW COLUMNS FROM schema_version LIKE 'filename'")
+    return "modern" if cursor.fetchone() is not None else "legacy"
+
+
 @cli.command()
 def migrate():
-    """执行数据库迁移"""
+    """执行数据库迁移（filename 为唯一键，兼容老的 version-only schema）。"""
     import pymysql
 
     host = os.environ.get("DB_HOST", "127.0.0.1")
@@ -36,47 +104,165 @@ def migrate():
     password = os.environ.get("DB_PASSWORD", "")
     database = os.environ.get("DB_NAME", "llmwiki")
 
-    conn = pymysql.connect(host=host, port=port, user=user, password=password, database=database, charset="utf8mb4")
+    conn = pymysql.connect(
+        host=host, port=port, user=user, password=password,
+        database=database, charset="utf8mb4",
+    )
     cursor = conn.cursor()
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS schema_version (
-            version INT PRIMARY KEY,
-            applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    """)
-    conn.commit()
+    shape = _detect_schema_shape(cursor)
 
-    cursor.execute("SELECT COALESCE(MAX(version), 0) FROM schema_version")
-    current_version = cursor.fetchone()[0]
+    if shape == "absent":
+        cursor.execute(_SCHEMA_VERSION_MODERN_DDL)
+        conn.commit()
+    elif shape == "legacy":
+        # 老结构：version 是 PK，无法保存多个同 version 记录。
+        # 通过 create_new + copy + rename 一次性升级到新结构（保留 applied_at）。
+        cursor.execute(
+            "SELECT version, applied_at FROM schema_version ORDER BY version"
+        )
+        legacy_rows = cursor.fetchall()
+        cursor.execute("DROP TABLE IF EXISTS schema_version_new")
+        cursor.execute(_SCHEMA_VERSION_MODERN_DDL.replace(
+            "CREATE TABLE schema_version",
+            "CREATE TABLE schema_version_new",
+        ))
+        for v, at in legacy_rows:
+            cursor.execute(
+                "INSERT INTO schema_version_new (version, filename, applied_at) "
+                "VALUES (%s, NULL, %s)",
+                (v, at),
+            )
+        cursor.execute("DROP TABLE schema_version")
+        cursor.execute("RENAME TABLE schema_version_new TO schema_version")
+        conn.commit()
+        click.echo(
+            f"schema_version 已从 version-only 结构升级为 filename 唯一键结构"
+            f"（保留 {len(legacy_rows)} 条历史记录作为 legacy-NULL 行）"
+        )
+
+    # 现在 schema 一定是 modern，读取当前状态
+    cursor.execute("SELECT filename FROM schema_version WHERE filename IS NOT NULL")
+    applied_filenames = {r[0] for r in cursor.fetchall()}
+    cursor.execute("SELECT DISTINCT version FROM schema_version WHERE filename IS NULL")
+    legacy_versions = {r[0] for r in cursor.fetchall()}
 
     migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
-    if not os.path.isdir(migrations_dir):
+    on_disk = list_migration_files(migrations_dir)
+    if not on_disk:
         click.echo("无迁移文件。")
         cursor.close()
         conn.close()
         return
 
-    migration_files = sorted(f for f in os.listdir(migrations_dir) if f.endswith(".sql"))
+    to_backfill, to_run = plan_migrations(
+        on_disk=on_disk,
+        applied_filenames=applied_filenames,
+        legacy_applied_versions=legacy_versions,
+    )
+
+    # 回填：同 version 的所有磁盘文件都标记为『历史已应用』，不执行 SQL
+    #      （生产要么真的跑过、要么业务表已含目标字段——避免重复 ALTER 报错）
+    for filename in to_backfill:
+        version = _parse_migration_version(filename)
+        cursor.execute(
+            "INSERT IGNORE INTO schema_version (version, filename) VALUES (%s, %s)",
+            (version, filename),
+        )
+        click.echo(f"回填历史迁移记录: {filename}")
+    if to_backfill:
+        # 清理 filename IS NULL 的占位行：它们已被具体 filename 行替代
+        cursor.execute("DELETE FROM schema_version WHERE filename IS NULL")
+        conn.commit()
+
     applied = 0
-    for filename in migration_files:
-        version = int(filename.split("_")[0])
-        if version <= current_version:
-            continue
+    for filename in to_run:
+        version = _parse_migration_version(filename)
         filepath = os.path.join(migrations_dir, filename)
         with open(filepath, "r", encoding="utf-8") as f:
             sql = f.read()
-        for statement in sql.split(";"):
-            statement = statement.strip()
-            if statement:
-                cursor.execute(statement)
-        cursor.execute("INSERT IGNORE INTO schema_version (version) VALUES (%s)", (version,))
-        conn.commit()
+        try:
+            for statement in sql.split(";"):
+                statement = statement.strip()
+                if statement:
+                    cursor.execute(statement)
+            cursor.execute(
+                "INSERT INTO schema_version (version, filename) VALUES (%s, %s)",
+                (version, filename),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            click.echo(f"迁移失败，已回滚: {filename}", err=True)
+            raise
         click.echo(f"已执行迁移: {filename}")
         applied += 1
 
-    if applied == 0:
+    if applied == 0 and not to_backfill:
         click.echo("数据库已是最新。")
+    cursor.close()
+    conn.close()
+
+
+@cli.command("show-migrations")
+def show_migrations():
+    """列出每条迁移脚本的应用状态（✓ 已执行 / ⨯ 待执行 / ? 文件缺失但已应用）。"""
+    import pymysql
+
+    host = os.environ.get("DB_HOST", "127.0.0.1")
+    port = int(os.environ.get("DB_PORT", "3306"))
+    user = os.environ.get("DB_USER", "root")
+    password = os.environ.get("DB_PASSWORD", "")
+    database = os.environ.get("DB_NAME", "llmwiki")
+
+    conn = pymysql.connect(
+        host=host, port=port, user=user, password=password,
+        database=database, charset="utf8mb4",
+    )
+    cursor = conn.cursor()
+
+    cursor.execute("SHOW TABLES LIKE 'schema_version'")
+    if cursor.fetchone() is None:
+        click.echo("(schema_version 表不存在，请先运行 `manage.py migrate`)")
+        cursor.close()
+        conn.close()
+        return
+
+    cursor.execute("SHOW COLUMNS FROM schema_version LIKE 'filename'")
+    has_filename = cursor.fetchone() is not None
+    if has_filename:
+        cursor.execute(
+            "SELECT filename, version, applied_at FROM schema_version ORDER BY filename"
+        )
+        rows = cursor.fetchall()
+        applied_filenames = {r[0] for r in rows if r[0] is not None}
+        legacy_rows = [r for r in rows if r[0] is None]
+    else:
+        cursor.execute("SELECT version, applied_at FROM schema_version ORDER BY version")
+        rows = [(None, r[0], r[1]) for r in cursor.fetchall()]
+        applied_filenames = set()
+        legacy_rows = rows
+
+    migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
+    on_disk = list_migration_files(migrations_dir)
+    on_disk_set = set(on_disk)
+
+    click.echo(f"磁盘迁移文件数: {len(on_disk)}")
+    for f in on_disk:
+        status = "✓" if f in applied_filenames else "⨯"
+        click.echo(f"  {status} {f}")
+
+    if legacy_rows:
+        click.echo("\n历史 version-only 记录（未绑定到具体 filename）：")
+        for _, version, at in legacy_rows:
+            click.echo(f"  version={version} applied_at={at}")
+
+    missing = applied_filenames - on_disk_set
+    if missing:
+        click.echo("\n已应用但磁盘上不存在的文件（可能被重命名/删除）：")
+        for f in sorted(missing):
+            click.echo(f"  ? {f}")
+
     cursor.close()
     conn.close()
 
