@@ -65,16 +65,26 @@
           创建
         </button>
       </form>
-      <p class="muted" style="font-size:0.82rem;margin:0.75rem 0 0;">
-        Token 格式：<code>ollw_xxxx...</code>；创建后只显示一次，请立即复制保存。
-        默认权限：<code>kb:search,kb:read</code>。
+      <p style="font-size:0.82rem;margin:0.75rem 0 0;color:#b45309;">
+        <i class="lucide-triangle-alert" aria-hidden="true"></i>
+        Token 明文格式 <code>ollw_xxxx...</code>（约 40+ 字符），<strong>仅在创建后弹出一次</strong>，
+        页面刷新后<strong>永远无法再次查看</strong>；数据库只存哈希，列表里仅展示前 11 位前缀用于识别。
+        如果丢了明文，请删除旧 token 重新创建。默认权限 <code>kb:search,kb:read</code>。
       </p>
     </header>
   </article>
 
   <article class="mb-2">
     <header>
-      <h3 style="margin:0 0 0.75rem;font-size:1.05rem">已有 Tokens（{{ tokens|length }}）</h3>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.5rem;">
+        <h3 style="margin:0;font-size:1.05rem">已有 Tokens（{{ tokens|length }}）</h3>
+        {% if tokens %}
+        <span class="muted" style="font-size:0.78rem;">
+          <i class="lucide-info" aria-hidden="true"></i>
+          列表不回显完整 token，仅展示前缀用于识别
+        </span>
+        {% endif %}
+      </div>
       {% if tokens %}
       <div class="table-scroll">
         <table>
@@ -100,8 +110,8 @@
                     <span>{{ t.token_prefix }}…</span>
                     <button type="button" class="copy-prefix-btn"
                             data-copy="{{ t.token_prefix }}"
-                            title="复制前缀到剪贴板"
-                            aria-label="复制前缀 {{ t.token_prefix }}"
+                            title="复制前缀（仅用于识别，不是完整 token；完整值仅创建时可见）"
+                            aria-label="复制前缀 {{ t.token_prefix }}（仅用于识别）"
                             style="background:none;border:1px solid var(--border-strong, #d1d5db);color:var(--text-muted);cursor:pointer;padding:0.15rem 0.35rem;border-radius:4px;font-size:0.75rem;line-height:1;">
                       <i class="lucide-copy" aria-hidden="true"></i>
                     </button>
@@ -222,12 +232,29 @@ curl -X POST https://your-domain/api/v1/search \
   }
   {% endif %}
 
+  function showToast(message, kind) {
+    var bar = document.createElement('div');
+    bar.className = 'token-toast' + (kind === 'warn' ? ' token-toast-warn' : '');
+    bar.textContent = message;
+    document.body.appendChild(bar);
+    requestAnimationFrame(function() { bar.classList.add('token-toast-show'); });
+    setTimeout(function() {
+      bar.classList.remove('token-toast-show');
+      setTimeout(function() { bar.remove(); }, 300);
+    }, 3200);
+  }
+
   document.querySelectorAll('.copy-prefix-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
       var text = btn.getAttribute('data-copy') || '';
       if (!text) return;
       copyText(text).then(function(ok) {
-        if (ok) flashLabel(btn, '<i class="lucide-check" aria-hidden="true"></i>');
+        if (!ok) {
+          showToast('复制失败，请手动选中前缀复制', 'warn');
+          return;
+        }
+        flashLabel(btn, '<i class="lucide-check" aria-hidden="true"></i>');
+        showToast('已复制前缀 ' + text + '（用于识别，不是完整 token）', 'warn');
       });
     });
   });

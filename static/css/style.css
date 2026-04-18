@@ -813,6 +813,33 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
   color: var(--brand) !important;
   border-color: var(--brand) !important;
 }
+
+/* 轻量 toast（目前仅 tokens 页复制前缀时使用） */
+.token-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 2rem;
+  transform: translate(-50%, 0.5rem);
+  background: #1f2937;
+  color: #fff;
+  padding: 0.55rem 1rem;
+  border-radius: 6px;
+  font-size: 0.88rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.25s ease;
+  z-index: 9999;
+  max-width: min(90vw, 560px);
+  line-height: 1.4;
+  pointer-events: none;
+}
+.token-toast-show {
+  opacity: 0.97;
+  transform: translate(-50%, 0);
+}
+.token-toast-warn {
+  background: #b45309;
+}
 .code-textarea {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.85rem; line-height: 1.5;
