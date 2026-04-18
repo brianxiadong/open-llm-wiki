@@ -30,6 +30,7 @@ from flask_login import current_user, login_required, login_user, logout_user
 
 from api_auth import api_token_required, generate_token, hash_token
 from api_router import preselect_candidates, route_to_repo
+from description_generator import generate_description as _generate_description
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import or_
 from werkzeug.utils import secure_filename
@@ -1436,6 +1437,81 @@ def _register_routes(app: Flask) -> None:
             repo_members=repo_members,
             repo_share_codes=repo_share_codes,
             role_labels=REPO_ROLE_LABELS,
+        )
+
+    # 每个 repo 的 description 建议节流：进程内内存，够用就行
+    _desc_suggest_history: dict[int, list[float]] = {}
+    _DESC_SUGGEST_WINDOW_SEC = 60
+    _DESC_SUGGEST_MAX_PER_WINDOW = 3
+
+    @repo_bp.route(
+        "/<username>/<repo_slug>/settings/description/suggest",
+        methods=["POST"],
+        endpoint="suggest_description",
+    )
+    @login_required
+    def suggest_description(username, repo_slug):
+        """基于 KB 内容让 LLM 给出一条 description 建议（不写库，仅返回 JSON）。"""
+        import time as _time
+
+        user, repo = _get_repo_or_404(username, repo_slug)
+        _require_owner(repo)
+
+        now = _time.time()
+        hist = [
+            t for t in _desc_suggest_history.get(repo.id, [])
+            if now - t < _DESC_SUGGEST_WINDOW_SEC
+        ]
+        if len(hist) >= _DESC_SUGGEST_MAX_PER_WINDOW:
+            retry_after = int(_DESC_SUGGEST_WINDOW_SEC - (now - hist[0])) + 1
+            return (
+                jsonify(
+                    ok=False,
+                    error="rate_limited",
+                    message=f"操作过于频繁，请 {retry_after} 秒后重试。",
+                ),
+                429,
+            )
+        hist.append(now)
+        _desc_suggest_history[repo.id] = hist
+
+        base = get_repo_path(Config.DATA_DIR, username, repo_slug)
+        wiki_dir = os.path.join(base, "wiki")
+        raw_dir = os.path.join(base, "raw")
+        result = _generate_description(
+            current_app.llm,
+            repo_name=repo.name,
+            wiki_dir=wiki_dir,
+            raw_dir=raw_dir,
+        )
+
+        if not result["ok"]:
+            error_messages = {
+                "empty_knowledge_base": "知识库尚无内容，无法生成描述。请先上传或解析文档。",
+                "llm_error": "LLM 调用失败，请稍后再试。",
+                "empty_response": "LLM 没有返回有效描述，请稍后再试。",
+            }
+            return (
+                jsonify(
+                    ok=False,
+                    error=result.get("error") or "generation_failed",
+                    message=error_messages.get(
+                        result.get("error"), "生成描述失败，请稍后再试。"
+                    ),
+                    source=result.get("source"),
+                ),
+                409 if result.get("error") == "empty_knowledge_base" else 502,
+            )
+
+        return jsonify(
+            ok=True,
+            suggestion=result["suggestion"],
+            source=result["source"],
+            source_pages_count=result["source_pages_count"],
+            source_raw_count=result["source_raw_count"],
+            total_pages=result["total_pages"],
+            total_raw=result["total_raw"],
+            truncated=result["truncated"],
         )
 
     @repo_bp.route("/<username>/<repo_slug>/members/<int:member_id>/delete", methods=["POST"])

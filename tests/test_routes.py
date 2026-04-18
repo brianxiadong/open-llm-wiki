@@ -2182,3 +2182,124 @@ def test_task_worker_runs_rebuild_index_task(app, sample_repo):
         assert "Rebuilt index" in (task.progress_msg or "")
     assert mock_upsert_page.called
     assert mock_upsert_chunks.called
+
+
+# ---------------------------------------------------------------------------
+# AI 生成描述建议 POST /{username}/{slug}/settings/description/suggest
+# ---------------------------------------------------------------------------
+
+
+def test_suggest_description_success_with_wiki_pages(sample_repo, app):
+    """成功路径：有 wiki 页时，mock LLM 返回建议，端点回 200 + 建议内容。"""
+    import os
+    from unittest.mock import patch
+
+    from config import Config
+
+    client, info = sample_repo
+    slug = info["slug"]
+    wiki_dir = os.path.join(Config.DATA_DIR, "alice", slug, "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "ae350.md"), "w", encoding="utf-8") as f:
+        f.write(
+            "---\ntitle: AE350 概览\ntype: concept\n---\n\n"
+            "# AE350 概览\n\nAE350 是小鱼的新一代会议终端，支持 PoE 与 4K。\n"
+        )
+
+    fake = {"description": "本知识库聚焦小鱼 AE350 会议终端的产品资料，涵盖硬件参数与使用说明。"}
+    with patch.object(app.llm, "chat_json", return_value=fake):
+        resp = client.post(f"/alice/{slug}/settings/description/suggest")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert "AE350" in data["suggestion"]
+    assert data["source"] == "wiki"
+    assert data["source_pages_count"] >= 1
+
+
+def test_suggest_description_empty_kb_returns_409_without_llm(sample_repo, app):
+    """空 KB：409 empty_knowledge_base，且不调用 LLM。"""
+    import os
+    import shutil
+    from unittest.mock import patch
+
+    from config import Config
+
+    client, info = sample_repo
+    slug = info["slug"]
+    # sample_repo 默认会生成核心 wiki 页；为测"空 KB"需清空 wiki + raw 目录
+    repo_root = os.path.join(Config.DATA_DIR, "alice", slug)
+    for sub in ("wiki", "raw"):
+        p = os.path.join(repo_root, sub)
+        if os.path.isdir(p):
+            shutil.rmtree(p)
+
+    with patch.object(app.llm, "chat_json") as mock_chat:
+        resp = client.post(f"/alice/{slug}/settings/description/suggest")
+        assert mock_chat.call_count == 0
+
+    assert resp.status_code == 409
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert data["error"] == "empty_knowledge_base"
+
+
+def test_suggest_description_rejects_non_owner(sample_repo, app, client):
+    """非 owner 用户调用 → 403（_require_owner）。"""
+    import os
+    from unittest.mock import patch
+
+    from config import Config
+    from models import User, db
+
+    _, info = sample_repo
+    slug = info["slug"]
+
+    # 准备一份 wiki 内容，保证不是 empty 导致提前返回
+    wiki_dir = os.path.join(Config.DATA_DIR, "alice", slug, "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "p.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntitle: P\ntype: concept\n---\n\n# P\n\n内容\n")
+
+    # 新建 bob 并以 bob 登录的 client 访问 alice 的 repo
+    with app.app_context():
+        bob = User(username="bob", email="bob@example.com", display_name="Bob")
+        bob.set_password("password123")
+        bob.email_verified = True
+        db.session.add(bob)
+        db.session.commit()
+
+    bob_client = app.test_client()
+    bob_client.post("/login", data={"username": "bob", "password": "password123"})
+
+    with patch.object(app.llm, "chat_json") as mock_chat:
+        resp = bob_client.post(f"/alice/{slug}/settings/description/suggest")
+        assert mock_chat.call_count == 0
+
+    assert resp.status_code == 403
+
+
+def test_suggest_description_rate_limited_on_4th_call(sample_repo, app):
+    """节流：60 秒窗口内连续 4 次 → 第 4 次 429 rate_limited。"""
+    import os
+    from unittest.mock import patch
+
+    from config import Config
+
+    client, info = sample_repo
+    slug = info["slug"]
+    wiki_dir = os.path.join(Config.DATA_DIR, "alice", slug, "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "p.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntitle: P\ntype: concept\n---\n\n# P\n\n内容\n")
+
+    fake = {"description": "简介内容。"}
+    with patch.object(app.llm, "chat_json", return_value=fake):
+        codes = []
+        for _ in range(4):
+            r = client.post(f"/alice/{slug}/settings/description/suggest")
+            codes.append(r.status_code)
+
+    assert codes[:3] == [200, 200, 200]
+    assert codes[3] == 429

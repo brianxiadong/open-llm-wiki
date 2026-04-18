@@ -1327,6 +1327,44 @@ QDRANT_URL=http://localhost:6333    # Qdrant 服务地址
 - 只选 1 个 KB，不 fan-out 多库 RAG（×3 成本已避免）
 - 粗筛阻止 KB 数量线性增长拖垮 LLM 上下文；最大喂 N=10 条极简 meta
 
+## 8.8 AI 生成知识库描述（Repo.description）
+
+**动机**：`Repo.description` 是 `/api/v1/search` 自动路由的关键判据（LLM 只看 name + description 选库），描述质量直接决定路由命中率；同时仓库列表、共享挂载页也依赖它做识别。让 owner 一键让 AI 基于实际内容生成描述，能显著降低"描述随手写一句"的情况。
+
+**交互（按钮式，不自动覆盖）**：
+- 设置页 description 文本框旁加「✨ AI 生成建议」按钮
+- 点按钮 → 后端返回 JSON 建议文本 → 前端填入输入框（用户可继续编辑）→ 用户点「保存修改」才真正入库
+- 若输入框已有内容，前端弹确认对话框避免误覆盖
+- 产出规格：80~200 字中文、客观第三人称、含主题 + 适用场景，不得嵌入文件名 / 章节号 / 来源标注；超过 260 字会被兜底截断
+
+**内容采样（`description_generator.sample_content`）**：
+1. 首选 wiki 页：过滤掉 `type ∈ {index, schema, log}` 的系统页，取正文前 400 字 / 页；总字数上限 ~8k 字符，超出或 > 25 页时标记 `truncated=True`
+2. 降级到 raw：wiki 为空时改用原始文件名清单（仅供 LLM 推断主题，prompt 明确禁止把文件名写进 description）
+3. 空 KB：不调 LLM，直接返回 `empty_knowledge_base`，前端展示明确提示
+
+**HTTP 接口**：
+
+```
+POST /{username}/{slug}/settings/description/suggest
+权限：仅 repo owner（或 admin）
+节流：每个 repo 每 60 秒最多 3 次，超限 429 rate_limited
+响应（成功）：
+{
+  "ok": true,
+  "suggestion": "……",
+  "source": "wiki" | "raw",
+  "source_pages_count": 12, "total_pages": 15,
+  "source_raw_count": 0,   "total_raw": 0,
+  "truncated": false
+}
+响应（失败）：409 empty_knowledge_base / 502 llm_error / 429 rate_limited
+```
+
+**防御性约束**：
+- Prompt 严格要求 JSON `{description: "…"}`；LLM 返回空 / 异常 → 统一返 `502 llm_error`
+- 不读也不写 DB 的旧 description（用户选择 `replace` 模式：重新生成不参考旧描述）
+- 只返回建议，不直接 commit，保留用户最后一次审阅机会
+
 ## 9. 默认 Schema 模板
 
 新建仓库时自动生成的 `schema.md`：

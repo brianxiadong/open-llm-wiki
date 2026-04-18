@@ -25,7 +25,14 @@
     <label for="name">知识库名称</label>
     <input type="text" id="name" name="name" value="{{ repo.name }}" required>
 
-    <label for="description">描述</label>
+    <div style="display:flex;align-items:baseline;gap:0.75rem;flex-wrap:wrap;">
+      <label for="description" style="margin-bottom:0;">描述</label>
+      <button type="button" id="ai-suggest-desc-btn"
+              class="action-btn" style="padding:0.2rem 0.6rem;font-size:0.85rem;">
+        ✨ AI 生成建议
+      </button>
+      <small id="ai-suggest-desc-hint" style="color:var(--pico-muted-color);font-size:0.8rem;"></small>
+    </div>
     <textarea id="description" name="description" rows="4" placeholder="简要描述该知识库的用途">{{ repo.description or '' }}</textarea>
 
     <fieldset>
@@ -187,4 +194,61 @@
     <button type="submit" class="outline contrast delete-btn">删除知识库</button>
   </form>
 </article>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const btn = document.getElementById("ai-suggest-desc-btn");
+  const textarea = document.getElementById("description");
+  const hint = document.getElementById("ai-suggest-desc-hint");
+  if (!btn || !textarea || !hint) return;
+
+  const endpoint = "{{ url_for('repo.suggest_description', username=username, repo_slug=repo.slug) }}";
+
+  btn.addEventListener("click", async () => {
+    if (btn.disabled) return;
+    const hasExisting = textarea.value.trim().length > 0;
+    if (hasExisting && !confirm("这将用 AI 生成的内容替换输入框中的当前描述（仍未保存）。继续吗？")) {
+      return;
+    }
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = "生成中…";
+    hint.textContent = "正在读取知识库内容并请求 LLM…";
+    hint.style.color = "var(--pico-muted-color)";
+    try {
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.ok) {
+        hint.textContent = data.message || `生成失败（HTTP ${resp.status}）`;
+        hint.style.color = "var(--pico-color-red-500, #c0392b)";
+        return;
+      }
+      textarea.value = data.suggestion;
+      textarea.focus();
+      let base;
+      if (data.source === "wiki") {
+        base = `已基于 ${data.source_pages_count} 份 wiki 页生成`;
+      } else if (data.source === "raw") {
+        base = `已基于 ${data.source_raw_count} 份原始文档文件名生成（建议生成 wiki 后重试更精准）`;
+      } else {
+        base = "已生成";
+      }
+      const truncNote = data.truncated ? "；内容较多已采样" : "";
+      hint.textContent = base + truncNote + "，请审阅后点「保存修改」。";
+      hint.style.color = "var(--pico-muted-color)";
+    } catch (e) {
+      hint.textContent = "网络错误，请稍后再试。";
+      hint.style.color = "var(--pico-color-red-500, #c0392b)";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  });
+})();
+</script>
 {% endblock %}
