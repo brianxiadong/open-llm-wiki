@@ -29,6 +29,7 @@ from flask import (
 from flask_login import current_user, login_required, login_user, logout_user
 
 from api_auth import api_token_required, generate_token, hash_token
+from api_router import preselect_candidates, route_to_repo
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import or_
 from werkzeug.utils import secure_filename
@@ -3368,21 +3369,57 @@ def _register_routes(app: Flask) -> None:
         import uuid as _uuid
         trace_id = _uuid.uuid4().hex[:8]
 
-        # 第一步暂只实现：显式 repo 检索；自动路由留给第二步（501 占位）
+        # 自动路由：未指定 repo 时，由 LLM 从当前用户可见 KB 中选 1 个
+        routing_mode = "explicit"
+        routing_confidence: float | None = None
+        routing_reason: str | None = None
         if not repo_ref:
-            candidates = _list_accessible_repos(g.api_user)
-            return (
-                jsonify(
-                    error="auto_route_not_implemented",
-                    message=(
-                        "自动路由尚未实现。请在 body 中传入 repo: \"owner/slug\"；"
-                        "或从 /api/v1/repos 列表中选择。"
+            visible = _list_accessible_repos(g.api_user)
+            if not visible:
+                return (
+                    jsonify(
+                        error="no_matching_repo",
+                        message="当前 token 没有可见的知识库，无法自动路由。",
+                        trace_id=trace_id,
+                        candidates=[],
                     ),
-                    trace_id=trace_id,
-                    candidates=[_api_repo_payload(r) for r in candidates[:20]],
-                ),
-                501,
+                    422,
+                )
+            candidate_payloads = [_api_repo_payload(r) for r in visible]
+            preselected = preselect_candidates(
+                query,
+                candidate_payloads,
+                limit=Config.RAG_ROUTE_PRESELECT_LIMIT,
             )
+            routing = route_to_repo(
+                current_app.llm,
+                query,
+                preselected,
+                min_confidence=Config.RAG_ROUTE_MIN_CONFIDENCE,
+            )
+            if not routing["ok"]:
+                return (
+                    jsonify(
+                        error="no_matching_repo",
+                        message=(
+                            routing.get("reason")
+                            or "未找到匹配的知识库，请在 body 里传 repo 字段手动指定。"
+                        ),
+                        trace_id=trace_id,
+                        routing={
+                            "mode": "auto",
+                            "confidence": routing.get("confidence", 0.0),
+                            "reason": routing.get("reason"),
+                            "error": routing.get("error"),
+                        },
+                        candidates=preselected,
+                    ),
+                    422,
+                )
+            repo_ref = routing["selected_full_name"]
+            routing_mode = "auto"
+            routing_confidence = routing.get("confidence")
+            routing_reason = routing.get("reason")
 
         repo, err = _resolve_repo_ref(repo_ref)
         if err == "bad_repo_ref":
@@ -3438,8 +3475,11 @@ def _register_routes(app: Flask) -> None:
         latency_ms = int((_time.monotonic() - _t0) * 1000)
 
         body = _format_search_response(
-            repo=repo, result=result, routing_mode="explicit"
+            repo=repo, result=result, routing_mode=routing_mode
         )
+        if routing_mode == "auto":
+            body["routing"]["confidence"] = routing_confidence
+            body["routing"]["reason"] = routing_reason
         body["trace_id"] = trace_id
         body["latency_ms"] = latency_ms
 

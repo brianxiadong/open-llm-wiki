@@ -58,6 +58,10 @@ class Config:
     RAG_CITATION_POSTCHECK = os.environ.get("RAG_CITATION_POSTCHECK", "true").lower() == "true"
     RAG_CITATION_PENALTY = float(os.environ.get("RAG_CITATION_PENALTY", "0.25"))
 
+    # /api/v1/search 自动路由（未指定 repo 时 LLM 在可见 KB 中选 1 个）
+    RAG_ROUTE_MIN_CONFIDENCE = float(os.environ.get("RAG_ROUTE_MIN_CONFIDENCE", "0.5"))
+    RAG_ROUTE_PRESELECT_LIMIT = int(os.environ.get("RAG_ROUTE_PRESELECT_LIMIT", "10"))
+
     # 摄入并发
     INGEST_LLM_CONCURRENCY = int(os.environ.get("INGEST_LLM_CONCURRENCY", "4"))
     INGEST_INDEX_CONCURRENCY = int(os.environ.get("INGEST_INDEX_CONCURRENCY", "4"))

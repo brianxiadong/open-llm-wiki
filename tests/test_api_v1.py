@@ -335,20 +335,97 @@ def test_api_search_bad_repo_ref_returns_400(app):
     assert resp.get_json()["error"] == "bad_repo_ref"
 
 
-def test_api_search_no_repo_returns_501_with_candidates(app):
-    """自动路由未实现：应返回 501 并附带候选 KB 列表。"""
+def test_api_search_auto_route_hits_high_confidence_repo(app):
+    """自动路由：LLM 以高置信度选中某 KB → 正常返回检索结果 + routing.mode=auto。"""
     plaintext, _, user_id = _create_user_with_token(app, username="alice_s6")
-    _create_repo(app, owner_id=user_id, name="My", slug="my")
-    resp = app.test_client().post(
-        "/api/v1/search",
-        json={"query": "随便问问"},
-        headers=_h(plaintext),
+    _create_repo(
+        app,
+        owner_id=user_id,
+        name="AE350 产品资料",
+        slug="ae350-kb",
+        description="小鱼 AE350 一体机规格与参数手册",
     )
-    assert resp.status_code == 501
+    _create_repo(app, owner_id=user_id, name="个人笔记", slug="notes", description="")
+
+    fake_llm_route = {
+        "selected": "alice_s6/ae350-kb",
+        "confidence": 0.92,
+        "reason": "name/description 都命中 AE350",
+    }
+    with patch.object(app.llm, "chat_json", return_value=fake_llm_route), \
+         patch.object(app.wiki_engine, "query_with_evidence", return_value=_FAKE_QUERY_RESULT):
+        resp = app.test_client().post(
+            "/api/v1/search",
+            json={"query": "帮我查 AE350 的产品参数"},
+            headers=_h(plaintext),
+        )
+    assert resp.status_code == 200
     data = resp.get_json()
-    assert data["error"] == "auto_route_not_implemented"
-    assert data["trace_id"]
-    assert any(c["slug"] == "my" for c in data["candidates"])
+    assert data["routing"]["mode"] == "auto"
+    assert data["routing"]["selected_repo"]["slug"] == "ae350-kb"
+    assert data["routing"]["confidence"] == pytest.approx(0.92)
+    assert "AE350" in data["routing"]["reason"]
+    assert data["answer"].startswith("## 答案")
+
+
+def test_api_search_auto_route_low_confidence_returns_422(app):
+    """自动路由：LLM 给出低置信度 → 返回 422 + candidates + 不触发真正检索。"""
+    plaintext, _, user_id = _create_user_with_token(app, username="alice_s6b")
+    _create_repo(app, owner_id=user_id, name="KB A", slug="kb-a", description="")
+    _create_repo(app, owner_id=user_id, name="KB B", slug="kb-b", description="")
+
+    fake_llm_route = {"selected": None, "confidence": 0.1, "reason": "无明显匹配"}
+    with patch.object(app.llm, "chat_json", return_value=fake_llm_route), \
+         patch.object(app.wiki_engine, "query_with_evidence") as mock_query:
+        resp = app.test_client().post(
+            "/api/v1/search",
+            json={"query": "不相关的问题"},
+            headers=_h(plaintext),
+        )
+        assert mock_query.call_count == 0  # 低置信度不应触发检索
+    assert resp.status_code == 422
+    data = resp.get_json()
+    assert data["error"] == "no_matching_repo"
+    assert data["routing"]["mode"] == "auto"
+    assert data["routing"]["error"] in ("low_confidence", "selected_not_in_candidates")
+    assert len(data["candidates"]) == 2
+
+
+def test_api_search_auto_route_no_visible_repo_returns_422(app):
+    """自动路由：token 持有人没有任何可见 KB → 422 empty_candidates，不调用 LLM。"""
+    plaintext, _, _ = _create_user_with_token(app, username="alice_s6c")
+    with patch.object(app.llm, "chat_json") as mock_chat:
+        resp = app.test_client().post(
+            "/api/v1/search",
+            json={"query": "任何问题"},
+            headers=_h(plaintext),
+        )
+        assert mock_chat.call_count == 0
+    assert resp.status_code == 422
+    assert resp.get_json()["error"] == "no_matching_repo"
+    assert resp.get_json()["candidates"] == []
+
+
+def test_api_search_auto_route_llm_hallucinated_repo_rejected(app):
+    """自动路由：LLM 返回候选之外的 owner/slug → 当作未命中，422。"""
+    plaintext, _, user_id = _create_user_with_token(app, username="alice_s6d")
+    _create_repo(app, owner_id=user_id, name="Real KB", slug="real-kb")
+
+    fake_llm_route = {
+        "selected": "alice_s6d/ghost-kb",  # 不在候选里
+        "confidence": 0.95,
+        "reason": "瞎猜的",
+    }
+    with patch.object(app.llm, "chat_json", return_value=fake_llm_route):
+        resp = app.test_client().post(
+            "/api/v1/search",
+            json={"query": "q"},
+            headers=_h(plaintext),
+        )
+    assert resp.status_code == 422
+    data = resp.get_json()
+    assert data["error"] == "no_matching_repo"
+    assert data["routing"]["error"] == "selected_not_in_candidates"
 
 
 def test_api_search_explicit_repo_public_accessible_by_other_user(app):

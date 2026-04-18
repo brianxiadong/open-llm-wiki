@@ -1285,7 +1285,7 @@ QDRANT_URL=http://localhost:6333    # Qdrant 服务地址
 ### 8.7.3 `/search` 语义（第一步：显式路由）
 
 - 传入 `repo="owner/slug"`：解析 → `_can_user_access_repo(repo, api_user)` 鉴权 → 调 `wiki_engine.query_with_evidence` → 返回与 Web 端一致的答案 + 证据 + 置信度 + `trace_id`
-- 未传 `repo`：返回 `501 auto_route_not_implemented`，`candidates` 字段附带可见 KB 候选列表（最多 20 个，含 `description`），便于 OpenClaw 端交互式补全或自行再试
+- 未传 `repo`：走自动路由（见 §8.7.4），命中则正常返回 + `routing.mode="auto"`，未命中返 `422 no_matching_repo` + `candidates`
 - 响应体结构：
   ```json
   {
@@ -1306,11 +1306,26 @@ QDRANT_URL=http://localhost:6333    # Qdrant 服务地址
   ```
 - 每次调用都写一条 `QueryLog`（`user_id` 为 token 持有者），与 Web 查询共享审计链路
 
-### 8.7.4 下一步：自动路由（规划）
+### 8.7.4 自动路由（已实现）
 
-- 无 `repo` 时：构造「候选 KB 清单」prompt（仅 `name + description`），让 LLM 选出 1 个最匹配；低于置信度阈值则返回 `no_matching_repo` + candidates
-- 风险控制：只选 1 个 KB（避免 ×3 成本）；KB 过多时先用倒排关键字粗筛到 top-10 再喂 LLM
-- 入口签名保持不变：OpenClaw 传不传 `repo` 对应显式/自动两种模式
+落在 `api_router.py`，纯函数两阶段：
+
+1. **粗筛 `preselect_candidates`**：候选 KB > `RAG_ROUTE_PRESELECT_LIMIT`（默认 10）时，按 query 与 (name + description) 的分词重合度打分取 top-N；name 命中权重 2.0，description 命中权重 1.0；分词支持 CJK（jieba.cut_for_search）与 ASCII，带停用词过滤；全 0 分则回退到原列表前 N 个让 LLM 自己选
+2. **LLM 路由 `route_to_repo`**：拿粗筛后的候选喂一条极小 prompt（仅含 `owner/slug` + `name` + `description`），让 LLM 返回严格 JSON `{selected, confidence, reason}`，温度低、输出稳定
+
+防御性约束：
+- `selected` 必须精确等于候选中某个 `owner/slug`，防 LLM 自造幻觉
+- `confidence < RAG_ROUTE_MIN_CONFIDENCE`（默认 0.5）降级为未命中
+- LLM 调用失败 / JSON 损坏 → 返回 `llm_error`，调用方统一当未命中处理（返 422）
+- 候选为空（用户 token 无任何可见 KB） → 直接 `empty_candidates`，不触发 LLM
+
+与 `/api/v1/search` 的接线：
+- 未命中时响应体含 `routing: {mode: "auto", confidence, reason, error}` 与 `candidates`（给粗筛后的可见 KB 列表），便于 OpenClaw 回退为追问或手动选择
+- 命中时响应体 `routing: {mode: "auto", selected_repo, confidence, reason}`，下游检索链路与显式路由完全一致（同一个 `wiki_engine.query_with_evidence` 入口）
+
+成本与 latency：
+- 只选 1 个 KB，不 fan-out 多库 RAG（×3 成本已避免）
+- 粗筛阻止 KB 数量线性增长拖垮 LLM 上下文；最大喂 N=10 条极简 meta
 
 ## 9. 默认 Schema 模板
 
