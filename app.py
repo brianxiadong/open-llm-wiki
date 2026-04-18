@@ -1017,6 +1017,7 @@ def _register_routes(app: Flask) -> None:
     @login_required
     def list_tokens():
         from models import ApiToken
+        from token_crypto import encryption_enabled as _enc_enabled
         tokens = (
             ApiToken.query.filter_by(user_id=current_user.id)
             .order_by(ApiToken.created_at.desc())
@@ -1030,6 +1031,7 @@ def _register_routes(app: Flask) -> None:
             tokens=tokens,
             new_token_plaintext=new_token_plaintext,
             new_token_id=new_token_id,
+            encryption_enabled=_enc_enabled(),
         )
 
     @user_bp.route("/settings/tokens/create", methods=["POST"])
@@ -1054,10 +1056,19 @@ def _register_routes(app: Flask) -> None:
             expires_at = datetime.now(timezone.utc) + timedelta(days=days)
         scopes = (request.form.get("scopes") or "kb:search,kb:read").strip()
         plaintext, token_hash_hex, token_prefix = generate_token()
+        # 尝试加密保存，以便列表页可以"一键复制完整 token"；
+        # 密钥未配置时 cipher=None，列表仍能显示前缀但不支持回显明文。
+        try:
+            from token_crypto import encrypt_token
+            cipher_text = encrypt_token(plaintext)
+        except Exception as exc:  # 密钥格式非法等
+            app.logger.error("token 加密失败：%s", exc)
+            cipher_text = None
         t = ApiToken(
             user_id=current_user.id,
             name=name,
             token_hash=token_hash_hex,
+            token_cipher=cipher_text,
             token_prefix=token_prefix,
             scopes=scopes or "kb:search,kb:read",
             expires_at=expires_at,
@@ -1079,6 +1090,39 @@ def _register_routes(app: Flask) -> None:
         _audit("revoke_api_token", "api_token", token_id)
         flash("Token 已吊销", "success")
         return redirect(url_for("user.list_tokens"))
+
+    @user_bp.route("/settings/tokens/<int:token_id>/reveal", methods=["POST"])
+    @login_required
+    def reveal_token(token_id):
+        """解密并返回指定 token 的完整明文。
+
+        仅 token 归属人可调用；需 DB 里有 cipher、且当前进程配置了加密密钥。
+        每次调用都会写审计日志，便于追溯"谁在何时复制过 token 明文"。
+        """
+        from models import ApiToken
+        from token_crypto import decrypt_token, encryption_enabled, TokenCryptoError
+
+        t = ApiToken.query.filter_by(id=token_id, user_id=current_user.id).first()
+        if not t:
+            return {"error": "not_found", "message": "token 不存在或无权访问"}, 404
+        if not t.token_cipher:
+            return {
+                "error": "no_cipher",
+                "message": "此 token 创建时未保存加密明文（可能是在启用加密前创建的），"
+                           "请删除后重新创建。",
+            }, 410
+        if not encryption_enabled():
+            return {
+                "error": "encryption_disabled",
+                "message": "当前环境未配置 API_TOKEN_ENC_KEY，无法解密 token 明文。",
+            }, 503
+        try:
+            plaintext = decrypt_token(t.token_cipher)
+        except TokenCryptoError as exc:
+            app.logger.error("token %s 解密失败：%s", token_id, exc)
+            return {"error": "decrypt_failed", "message": str(exc)}, 500
+        _audit("reveal_api_token", "api_token", token_id, t.name)
+        return {"token": plaintext, "prefix": t.token_prefix}, 200
 
     @user_bp.route("/settings/tokens/<int:token_id>/delete", methods=["POST"])
     @login_required

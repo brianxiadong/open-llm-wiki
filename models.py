@@ -176,6 +176,9 @@ class ApiToken(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     name = db.Column(db.String(128), nullable=False)
     token_hash = db.Column(db.String(256), nullable=False, unique=True)
+    # token_cipher 为 Fernet 对称加密后的明文，让列表页能"一键复制完整 token"；
+    # 密钥在 .env 的 API_TOKEN_ENC_KEY，DB 本身不知道。未配置密钥或老记录为 NULL。
+    token_cipher = db.Column(db.Text, nullable=True)
     token_prefix = db.Column(db.String(16), nullable=False, default="")
     scopes = db.Column(db.String(255), nullable=False, default="kb:search,kb:read")
     expires_at = db.Column(db.DateTime, nullable=True)

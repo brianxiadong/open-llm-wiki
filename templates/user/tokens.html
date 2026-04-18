@@ -65,26 +65,21 @@
           创建
         </button>
       </form>
-      <p style="font-size:0.82rem;margin:0.75rem 0 0;color:#b45309;">
-        <i class="lucide-triangle-alert" aria-hidden="true"></i>
-        Token 明文格式 <code>ollw_xxxx...</code>（约 40+ 字符），<strong>仅在创建后弹出一次</strong>，
-        页面刷新后<strong>永远无法再次查看</strong>；数据库只存哈希，列表里仅展示前 11 位前缀用于识别。
-        如果丢了明文，请删除旧 token 重新创建。默认权限 <code>kb:search,kb:read</code>。
+      <p class="muted" style="font-size:0.82rem;margin:0.75rem 0 0;">
+        Token 格式：<code>ollw_xxxx...</code>（约 40+ 字符）。
+        {% if encryption_enabled %}
+        列表里可随时"显示并复制"完整 token（明文经 Fernet 对称加密存放在 DB）。
+        {% else %}
+        当前未配置 <code>API_TOKEN_ENC_KEY</code>，创建后明文仅一次性显示，请立即复制。
+        {% endif %}
+        默认权限：<code>kb:search,kb:read</code>。
       </p>
     </header>
   </article>
 
   <article class="mb-2">
     <header>
-      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.5rem;">
-        <h3 style="margin:0;font-size:1.05rem">已有 Tokens（{{ tokens|length }}）</h3>
-        {% if tokens %}
-        <span class="muted" style="font-size:0.78rem;">
-          <i class="lucide-info" aria-hidden="true"></i>
-          列表不回显完整 token，仅展示前缀用于识别
-        </span>
-        {% endif %}
-      </div>
+      <h3 style="margin:0 0 0.75rem;font-size:1.05rem">已有 Tokens（{{ tokens|length }}）</h3>
       {% if tokens %}
       <div class="table-scroll">
         <table>
@@ -108,13 +103,17 @@
                 {% if t.token_prefix %}
                   <span style="display:inline-flex;align-items:center;gap:0.35rem;">
                     <span>{{ t.token_prefix }}…</span>
-                    <button type="button" class="copy-prefix-btn"
-                            data-copy="{{ t.token_prefix }}"
-                            title="复制前缀（仅用于识别，不是完整 token；完整值仅创建时可见）"
-                            aria-label="复制前缀 {{ t.token_prefix }}（仅用于识别）"
+                    {% if encryption_enabled and t.token_cipher %}
+                    <button type="button" class="reveal-token-btn"
+                            data-token-id="{{ t.id }}"
+                            title="复制完整 token 到剪贴板"
+                            aria-label="复制完整 token（{{ t.token_prefix }} 开头）"
                             style="background:none;border:1px solid var(--border-strong, #d1d5db);color:var(--text-muted);cursor:pointer;padding:0.15rem 0.35rem;border-radius:4px;font-size:0.75rem;line-height:1;">
                       <i class="lucide-copy" aria-hidden="true"></i>
                     </button>
+                    {% else %}
+                    <span class="muted" title="未配置 API_TOKEN_ENC_KEY 或该记录无密文，无法回显完整 token" style="font-size:0.72rem;">仅前缀</span>
+                    {% endif %}
                   </span>
                 {% else %}—{% endif %}
               </td>
@@ -244,17 +243,45 @@ curl -X POST https://your-domain/api/v1/search \
     }, 3200);
   }
 
-  document.querySelectorAll('.copy-prefix-btn').forEach(function(btn) {
+  document.querySelectorAll('.reveal-token-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
-      var text = btn.getAttribute('data-copy') || '';
-      if (!text) return;
-      copyText(text).then(function(ok) {
-        if (!ok) {
-          showToast('复制失败，请手动选中前缀复制', 'warn');
+      var tokenId = btn.getAttribute('data-token-id');
+      if (!tokenId || btn.disabled) return;
+      btn.disabled = true;
+      var original = btn.innerHTML;
+      btn.innerHTML = '<i class="lucide-loader" aria-hidden="true"></i>';
+      var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+      var csrf = csrfMeta ? csrfMeta.getAttribute('content') : '';
+      fetch('/user/settings/tokens/' + encodeURIComponent(tokenId) + '/reveal', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Accept': 'application/json',
+          'X-CSRFToken': csrf
+        }
+      }).then(function(resp) {
+        return resp.json().then(function(body) { return { ok: resp.ok, body: body, status: resp.status }; });
+      }).then(function(result) {
+        if (!result.ok) {
+          showToast('无法获取明文：' + (result.body && result.body.message ? result.body.message : ('HTTP ' + result.status)), 'warn');
+          btn.innerHTML = original;
+          btn.disabled = false;
           return;
         }
-        flashLabel(btn, '<i class="lucide-check" aria-hidden="true"></i>');
-        showToast('已复制前缀 ' + text + '（用于识别，不是完整 token）', 'warn');
+        var plaintext = (result.body && result.body.token) || '';
+        copyText(plaintext).then(function(copied) {
+          if (copied) {
+            showToast('已复制完整 token 到剪贴板（' + plaintext.slice(0, 11) + '…）');
+          } else {
+            showToast('已解密，但浏览器拒绝写入剪贴板；请手动选中复制：\n' + plaintext, 'warn');
+          }
+          btn.innerHTML = '<i class="lucide-check" aria-hidden="true"></i>';
+          setTimeout(function() { btn.innerHTML = original; btn.disabled = false; }, 1500);
+        });
+      }).catch(function(err) {
+        showToast('请求失败：' + (err && err.message ? err.message : err), 'warn');
+        btn.innerHTML = original;
+        btn.disabled = false;
       });
     });
   });

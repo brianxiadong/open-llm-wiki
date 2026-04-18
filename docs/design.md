@@ -1266,13 +1266,16 @@ QDRANT_URL=http://localhost:6333    # Qdrant 服务地址
 
 ### 8.7.1 Token 机制
 
-- 存储：`api_tokens` 表（`user_id / name / token_hash / token_prefix / scopes / expires_at / last_used_at / is_active`）
-- 生成：`ollw_<base64url(32B)>`，DB 只保存 `sha256` 哈希与前 12 位 prefix（用于列表识别）
+- 存储：`api_tokens` 表（`user_id / name / token_hash / token_prefix / token_cipher / scopes / expires_at / last_used_at / is_active`）
+- 生成：`ollw_<base64url(32B)>`；DB 始终保存 `sha256` 哈希与前 12 位 `token_prefix`（列表识别）；鉴权只比对哈希，不依赖密文
+- **明文回显（可选）**：若配置了环境变量 `API_TOKEN_ENC_KEY`（Fernet 32 字节 URL-safe base64），创建时会把完整明文经 Fernet 加密写入 `token_cipher`；未配置密钥时 `token_cipher` 为空，创建成功但列表无法再次复制全文
+- **解密与复制**：已登录用户对本账号记录可 `POST /user/settings/tokens/<id>/reveal`（带会话 CSRF），返回 JSON `token` + `prefix`，供列表「复制完整 token」；无密文或密钥不可用则相应 410/503；操作记审计 `reveal_api_token`
 - 鉴权：HTTP 头 `Authorization: Bearer ollw_...`，装饰器 `api_token_required(*scopes)` 统一校验
 - 失效路径：被吊销（`is_active=False`）或 `expires_at` 到期 → 401
 - Scopes：默认 `kb:search,kb:read`，后续写类 API 另开 scope，避免 token 跨能力泄漏
 - 节流：`last_used_at` 以 1 分钟为粒度更新，降低写压力
-- 入口：`/user/settings/tokens` 可创建/吊销 token；有效期下拉提供「永不过期 / 30 / 90 / 180 / 365」；创建后弹出明文 + 复制按钮，刷新即消失
+- 入口：`/user/settings/tokens` 可创建/吊销 token；有效期下拉提供「永不过期 / 30 / 90 / 180 / 365」；创建后弹出明文 + 复制按钮，刷新即消失；若已启用密文存储，列表可复制完整 token，否则仅前缀展示
+- **迁移**：若执行 `migrations/011_api_tokens_cipher.sql`，会清空旧 `api_tokens` 行并新增 `token_cipher` 列；部署前需在 `.env` 写入 `API_TOKEN_ENC_KEY`（可用 `manage.py generate-token-key` 生成），用户需重新创建 token
 
 ### 8.7.2 HTTP 端点
 

@@ -25,6 +25,20 @@ def init_db():
     click.echo("数据库初始化完成。")
 
 
+@cli.command("generate-token-key")
+def generate_token_key():
+    """生成一个 Fernet 密钥，放入 .env 的 API_TOKEN_ENC_KEY=<值>。"""
+    from token_crypto import generate_key
+
+    key = generate_key()
+    click.echo(key)
+    click.echo(
+        "↑ 把这行写入 .env 的 API_TOKEN_ENC_KEY=<...>；配置后重启应用，"
+        "用户就能在 /user/settings/tokens 列表里一键复制完整 token。",
+        err=True,
+    )
+
+
 def _parse_migration_version(filename: str) -> int:
     """从 `004_foo.sql` 里提取 4；非法文件名抛 ValueError。"""
     return int(filename.split("_", 1)[0])

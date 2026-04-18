@@ -1658,9 +1658,110 @@ def test_create_and_revoke_token(auth_client, app):
     )
     assert resp2.status_code == 200
     with app.app_context():
-        from models import ApiToken
-        t2 = ApiToken.query.get(token_id)
+        from models import ApiToken, db
+        t2 = db.session.get(ApiToken, token_id)
         assert t2.is_active is False
+
+
+def test_reveal_token_returns_plaintext_when_key_configured(auth_client, app, monkeypatch):
+    """配置了 API_TOKEN_ENC_KEY 后，创建→reveal 应能拿回原始明文。"""
+    import importlib
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("API_TOKEN_ENC_KEY", Fernet.generate_key().decode("ascii"))
+    import token_crypto
+    importlib.reload(token_crypto)
+
+    try:
+        resp = auth_client.post(
+            "/user/settings/tokens/create",
+            data={"name": "reveal-me"},
+            follow_redirects=False,
+        )
+        assert resp.status_code in (302, 303)
+        # 创建后 session 里应有明文（一次性显示用）
+        with auth_client.session_transaction() as sess:
+            plaintext = sess.get("_new_api_token_plaintext")
+            token_id = sess.get("_new_api_token_id")
+        assert plaintext and plaintext.startswith("ollw_")
+        assert token_id
+
+        # reveal 应解密成同一个值
+        resp2 = auth_client.post(f"/user/settings/tokens/{token_id}/reveal")
+        assert resp2.status_code == 200
+        body = resp2.get_json()
+        assert body["token"] == plaintext
+        assert body["prefix"] and plaintext.startswith(body["prefix"])
+    finally:
+        monkeypatch.delenv("API_TOKEN_ENC_KEY", raising=False)
+        importlib.reload(token_crypto)
+
+
+def test_reveal_token_returns_503_when_key_missing(auth_client, app, monkeypatch):
+    """密钥缺失时，创建仍成功（cipher=None），reveal 返回 410（no_cipher）。"""
+    import importlib
+    monkeypatch.delenv("API_TOKEN_ENC_KEY", raising=False)
+    import token_crypto
+    importlib.reload(token_crypto)
+
+    try:
+        auth_client.post(
+            "/user/settings/tokens/create",
+            data={"name": "nokey-token"},
+            follow_redirects=False,
+        )
+        with app.app_context():
+            from models import ApiToken
+            t = ApiToken.query.filter_by(name="nokey-token").first()
+            assert t is not None and t.token_cipher is None
+            token_id = t.id
+        resp = auth_client.post(f"/user/settings/tokens/{token_id}/reveal")
+        assert resp.status_code == 410
+        assert resp.get_json()["error"] == "no_cipher"
+    finally:
+        importlib.reload(token_crypto)
+
+
+def test_reveal_token_rejects_other_user(client, app, monkeypatch):
+    """用户 A 不能 reveal 用户 B 的 token。"""
+    import importlib
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("API_TOKEN_ENC_KEY", Fernet.generate_key().decode("ascii"))
+    import token_crypto
+    importlib.reload(token_crypto)
+
+    try:
+        # 创建两个用户
+        with app.app_context():
+            from models import User, db
+            for username in ("owner_user", "intruder_user"):
+                if User.query.filter_by(username=username).first() is None:
+                    u = User(username=username, email=f"{username}@ex.com")
+                    u.set_password("password123")
+                    u.email_verified = True
+                    db.session.add(u)
+            db.session.commit()
+
+        _login_as(client, "owner_user")
+        client.post(
+            "/user/settings/tokens/create",
+            data={"name": "owned"},
+            follow_redirects=False,
+        )
+        with app.app_context():
+            from models import ApiToken
+            owned = ApiToken.query.filter_by(name="owned").first()
+            owned_id = owned.id
+        # 切换到入侵者
+        client.get("/logout", follow_redirects=True)
+        _login_as(client, "intruder_user")
+        resp = client.post(f"/user/settings/tokens/{owned_id}/reveal")
+        assert resp.status_code == 404
+        assert resp.get_json()["error"] == "not_found"
+    finally:
+        monkeypatch.delenv("API_TOKEN_ENC_KEY", raising=False)
+        importlib.reload(token_crypto)
 
 
 def test_api_token_bearer_auth(app, sample_repo):
