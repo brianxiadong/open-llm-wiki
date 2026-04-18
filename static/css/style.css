@@ -762,6 +762,37 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
   display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.25rem;
 }
 .form-container .form-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1rem; }
+
+/* 宽版管理页容器：适用于 tokens、后台列表等多列表格页 */
+.page-container-wide { max-width: 1040px; margin: 0 auto; }
+
+/* 通用：表格横向滚动容器，用于列多的管理表格 */
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.table-scroll > table { margin: 0; }
+.table-scroll > table th { white-space: nowrap; }
+.table-scroll > table td { vertical-align: middle; }
+
+/* Token 管理页专用样式 */
+.token-create-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+.token-create-form > label { margin: 0; }
+.token-new-box {
+  display: flex; gap: 0.5rem; align-items: stretch; flex-wrap: wrap;
+}
+.token-new-box > input { flex: 1 1 260px; min-width: 0; }
+
+@media (max-width: 720px) {
+  .token-create-form { grid-template-columns: 1fr; }
+  .token-create-form > button { width: 100%; justify-content: center; }
+}
 .code-textarea {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.85rem; line-height: 1.5;
