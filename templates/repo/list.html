@@ -99,6 +99,43 @@
 </div>
 {% endif %}
 
+{% if page_is_self and public_repos %}
+<section style="margin-top:2rem;">
+  <header class="repo-section-header" style="display:flex;align-items:baseline;justify-content:space-between;gap:1rem;margin-bottom:0.85rem;">
+    <h3 style="margin:0;">公开知识库</h3>
+    <small class="repo-desc" style="color:var(--pico-muted-color);">
+      <i class="lucide-globe" aria-hidden="true"></i>
+      其他用户公开分享的知识库，可直接浏览与查询
+    </small>
+  </header>
+  <div class="repo-grid">
+    {% for repo in public_repos %}
+    <article class="repo-card">
+      <a href="{{ url_for('repo.dashboard', username=repo.owner_username, repo_slug=repo.slug) }}" class="repo-card-link">
+        <h3>
+          {{ repo.name }}
+          <span class="badge badge-public">公开</span>
+        </h3>
+        <p class="repo-desc">来自 {{ repo.owner_username }}{% if repo.description %} · {{ repo.description|truncate(88) }}{% endif %}</p>
+        <footer class="repo-card-footer">
+          <div class="repo-stats">
+            <span class="repo-stat" title="来源数量">
+              <i class="lucide-file-text" aria-hidden="true"></i>
+              {{ repo.source_count }}
+            </span>
+            <span class="repo-stat" title="页面数量">
+              <i class="lucide-book-open" aria-hidden="true"></i>
+              {{ repo.page_count }}
+            </span>
+          </div>
+        </footer>
+      </a>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 {% if page_is_self and shared_repos %}
 <section style="margin-top:2rem;">
   <h3 style="margin-bottom:0.85rem;">共享给我的知识库</h3>

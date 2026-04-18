@@ -1791,6 +1791,73 @@ def test_public_repo_query_no_login(app, sample_repo):
     assert resp.status_code == 200
 
 
+def test_public_repos_visible_on_other_users_home(app, sample_repo):
+    """user A 的公开知识库，应出现在 user B 自己首页的「公开知识库」分类。"""
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from models import Repo, User, db
+        alice_repo = Repo.query.filter_by(slug=slug).first()
+        alice_repo.is_public = True
+
+        bob = User(username="bob", email="bob@example.com", display_name="Bob")
+        bob.set_password("password123")
+        bob.email_verified = True
+        db.session.add(bob)
+        db.session.commit()
+
+        # bob 自己也有一个公开 repo：应当出现在「我的知识库」，
+        # 绝不应当出现在「公开知识库」分类里（避免自己刷自己）。
+        bob_repo = Repo(
+            user_id=bob.id,
+            name="Bob Own Public",
+            slug="bob-own",
+            description="bob's own public repo",
+            is_public=True,
+        )
+        db.session.add(bob_repo)
+        db.session.commit()
+
+    bob_client = app.test_client()
+    bob_client.post("/login", data={"username": "bob", "password": "password123"})
+    resp = bob_client.get("/bob")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "公开知识库" in body, "首页应有『公开知识库』分类标题"
+    # alice 的公开 repo 名称「Test KB」出现在页面
+    assert "Test KB" in body
+    # 卡片链接指向 alice/test-kb
+    assert f"/alice/{slug}" in body
+    # bob 自己的公开 repo 不应出现在「公开知识库」分区中重复展示
+    # （但它会出现在「我的知识库」里，所以至少总体要能找到）
+    assert "Bob Own Public" in body
+    # 粗略校验：Bob Own Public 只出现一次（即只在「我的知识库」，不在公开广场重复）
+    assert body.count("Bob Own Public") == 1
+
+
+def test_private_repos_not_in_public_discovery(app, sample_repo):
+    """设为私有的知识库不应出现在其他用户首页的公开广场。"""
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    with app.app_context():
+        from models import Repo, User, db
+        alice_repo = Repo.query.filter_by(slug=slug).first()
+        alice_repo.is_public = False
+        bob = User(username="bob2", email="bob2@example.com", display_name="Bob2")
+        bob.set_password("password123")
+        bob.email_verified = True
+        db.session.add(bob)
+        db.session.commit()
+    bob_client = app.test_client()
+    bob_client.post("/login", data={"username": "bob2", "password": "password123"})
+    resp = bob_client.get("/bob2")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    # 没有公开知识库可展示时，该 section 标题不应出现
+    assert "公开知识库" not in body
+    assert "Test KB" not in body
+
+
 def test_private_repo_query_no_login_returns_401(app, sample_repo):
     """私有仓库未登录访客不能 POST query"""
     client, repo_info = sample_repo

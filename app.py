@@ -1060,6 +1060,7 @@ def _register_routes(app: Flask) -> None:
             else [repo for repo in all_owned_repos if _can_access_repo(repo)]
         )
         shared_repos = []
+        public_repos: list = []
         if page_is_self:
             memberships = (
                 RepoMember.query.filter_by(user_id=current_user.id)
@@ -1075,6 +1076,35 @@ def _register_routes(app: Flask) -> None:
                 repo.owner_username = repo.user.username
                 repo.is_shared_repo = True
                 shared_repos.append(repo)
+
+            # 公开知识库广场：展示其他用户设为公开的知识库
+            # 排除：当前页面用户自己拥有的 + 已经通过共享加入的（避免重复）
+            already_known_ids = {r.id for r in shared_repos}
+            public_candidates = (
+                Repo.query.filter(
+                    Repo.is_public.is_(True),
+                    Repo.user_id != user.id,
+                )
+                .order_by(Repo.updated_at.desc())
+                .limit(48)
+                .all()
+            )
+            for repo in public_candidates:
+                if repo.id in already_known_ids:
+                    continue
+                public_repos.append(repo)
+                if len(public_repos) >= 24:
+                    break
+            for repo in public_repos:
+                repo.access_role = "viewer"
+                repo.access_role_label = "公开"
+                repo.owner_username = repo.user.username
+                repo.is_shared_repo = False
+                repo.is_public_discovery = True
+                repo.active_task_count = Task.query.filter(
+                    Task.repo_id == repo.id,
+                    Task.status.in_(["queued", "running"]),
+                ).count()
         # Attach active task count to each repo for the card UI
         for repo in repos:
             role = _get_repo_role(repo)
@@ -1100,6 +1130,7 @@ def _register_routes(app: Flask) -> None:
             username=username,
             repos=repos,
             shared_repos=shared_repos,
+            public_repos=public_repos,
             page_is_self=page_is_self,
         )
 
