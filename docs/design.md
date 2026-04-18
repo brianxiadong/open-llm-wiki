@@ -475,9 +475,14 @@ GET  /logout                             → 登出
 用户：
 GET  /user/settings                      → 个人设置页（显示名称、邮箱、密码）
 POST /user/settings                     → 更新个人资料 / 修改密码 / 删除当前账号
-GET  /user/settings/tokens               → API Token 管理页
-POST /user/settings/tokens/create        → 创建 API Token
+GET  /user/settings/tokens               → API Token 管理页（创建 / 吊销 / 有效期）
+POST /user/settings/tokens/create        → 创建 API Token（支持 expires_days / scopes）
 POST /user/settings/tokens/{id}/revoke   → 吊销 API Token
+
+OpenAPI v1（外部系统接入 · Bearer Token 鉴权）：
+GET  /api/v1/me                          → 验证 token + 返回用户/token 元数据
+GET  /api/v1/repos                       → 列出当前 token 可见的全部知识库
+POST /api/v1/search                      → 自然语言检索（显式或自动路由）
 
 仓库管理：
 GET  /                                   → 首页（已登录则跳转仓库列表）
@@ -1254,6 +1259,58 @@ QDRANT_URL=http://localhost:6333    # Qdrant 服务地址
 - 文档管理页提供删除动作；删除时会清理客户端 vault 中的文档状态、`raw/` 原始/转换文件、`facts/records/*.jsonl`、受该文档摄入影响的本地 Wiki 页面，以及 Qdrant 中对应的 page / chunk / fact 向量，并在删除后重建 `index.md` 与 `overview.md` 以避免继续引用已删除内容
 - 客户端测试除路由/状态流外，还需校验“渲染后的最终内联脚本”可被浏览器解析，避免 Python 模板字符串转义导致前端整段脚本失效
 - 机密客户端遇到老式 `.doc` 文件时，会优先尝试本地自动转换为 `.docx`（macOS `textutil` / LibreOffice），再交给 MinerU；若当前环境无可用转换器，则提示用户先转为 `.docx` 或 PDF
+
+## 8.7 OpenAPI v1（外部系统接入，面向 OpenClaw）
+
+给 OpenClaw 等外部自然语言前端提供基于 Bearer Token 的 HTTP 接口；所有端点位于 `/api/v1/**`，与 Web 会话鉴权完全隔离。
+
+### 8.7.1 Token 机制
+
+- 存储：`api_tokens` 表（`user_id / name / token_hash / token_prefix / scopes / expires_at / last_used_at / is_active`）
+- 生成：`ollw_<base64url(32B)>`，DB 只保存 `sha256` 哈希与前 12 位 prefix（用于列表识别）
+- 鉴权：HTTP 头 `Authorization: Bearer ollw_...`，装饰器 `api_token_required(*scopes)` 统一校验
+- 失效路径：被吊销（`is_active=False`）或 `expires_at` 到期 → 401
+- Scopes：默认 `kb:search,kb:read`，后续写类 API 另开 scope，避免 token 跨能力泄漏
+- 节流：`last_used_at` 以 1 分钟为粒度更新，降低写压力
+- 入口：`/user/settings/tokens` 可创建/吊销 token；有效期下拉提供「永不过期 / 30 / 90 / 180 / 365」；创建后弹出明文 + 复制按钮，刷新即消失
+
+### 8.7.2 HTTP 端点
+
+| 方法 | 路径 | Scope | 作用 |
+| --- | --- | --- | --- |
+| GET  | `/api/v1/me`    | `kb:read`   | 验证 token 归属；返回用户信息 + token 元数据（prefix / scopes / expires_at） |
+| GET  | `/api/v1/repos` | `kb:read`   | 列出当前 token 可见的全部知识库（owner + member + public 合集、去重、按 updated_at 降序）。`?include_public=false` 可屏蔽广场条目 |
+| POST | `/api/v1/search`| `kb:search` | 在指定 KB 内做自然语言检索；body：`{query, repo?: "owner/slug", top_k?, query_mode?}` |
+
+### 8.7.3 `/search` 语义（第一步：显式路由）
+
+- 传入 `repo="owner/slug"`：解析 → `_can_user_access_repo(repo, api_user)` 鉴权 → 调 `wiki_engine.query_with_evidence` → 返回与 Web 端一致的答案 + 证据 + 置信度 + `trace_id`
+- 未传 `repo`：返回 `501 auto_route_not_implemented`，`candidates` 字段附带可见 KB 候选列表（最多 20 个，含 `description`），便于 OpenClaw 端交互式补全或自行再试
+- 响应体结构：
+  ```json
+  {
+    "trace_id": "a3f9c12b",
+    "routing": {"mode": "explicit", "selected_repo": {...}},
+    "answer": "markdown...",
+    "confidence": {"level": "high", "score": 0.82, "reasons": [...]},
+    "query_mode": "hybrid",
+    "intent": "generic",
+    "citation_validation": {...},
+    "evidence": {
+      "wiki_pages": [{"filename": "...", "title": "...", "reason": "..."}],
+      "chunks":     [{"filename": "...", "score": 0.78, "snippet": "..."}],
+      "facts":      [{"source_file": "...", "score": 0.72, "fields": {...}}]
+    },
+    "latency_ms": 1840
+  }
+  ```
+- 每次调用都写一条 `QueryLog`（`user_id` 为 token 持有者），与 Web 查询共享审计链路
+
+### 8.7.4 下一步：自动路由（规划）
+
+- 无 `repo` 时：构造「候选 KB 清单」prompt（仅 `name + description`），让 LLM 选出 1 个最匹配；低于置信度阈值则返回 `no_matching_repo` + candidates
+- 风险控制：只选 1 个 KB（避免 ×3 成本）；KB 过多时先用倒排关键字粗筛到 top-10 再喂 LLM
+- 入口签名保持不变：OpenClaw 传不传 `repo` 对应显式/自动两种模式
 
 ## 9. 默认 Schema 模板
 

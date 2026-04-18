@@ -169,18 +169,41 @@ class AuditLog(db.Model):
 
 
 class ApiToken(db.Model):
-    """API Token 机器凭证"""
+    """API Token 机器凭证（供 OpenClaw / 脚本 / CI 等外部系统调用 /api/v1/**）。"""
     __tablename__ = "api_tokens"
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     name = db.Column(db.String(128), nullable=False)
     token_hash = db.Column(db.String(256), nullable=False, unique=True)
+    token_prefix = db.Column(db.String(16), nullable=False, default="")
+    scopes = db.Column(db.String(255), nullable=False, default="kb:search,kb:read")
+    expires_at = db.Column(db.DateTime, nullable=True)
     last_used_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=_utc_now)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
 
     user = db.relationship("User", backref="api_tokens")
+
+    def has_scope(self, scope: str) -> bool:
+        """检查 token 是否具备指定 scope。"""
+        parts = [s.strip() for s in (self.scopes or "").split(",") if s.strip()]
+        return scope in parts
+
+    def is_expired(self, now: datetime | None = None) -> bool:
+        """过期判断：expires_at=None 表示永不过期。"""
+        if self.expires_at is None:
+            return False
+        current = now or _utc_now()
+        reference = self.expires_at
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        return current >= reference
+
+    def is_usable(self, now: datetime | None = None) -> bool:
+        return self.is_active and not self.is_expired(now)
 
 
 class QueryFeedback(db.Model):

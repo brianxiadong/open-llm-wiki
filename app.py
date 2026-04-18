@@ -6,7 +6,7 @@ import os
 import re
 import secrets
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from flask import (
@@ -16,6 +16,7 @@ from flask import (
     abort,
     current_app,
     flash,
+    g,
     jsonify,
     redirect,
     render_template,
@@ -26,6 +27,8 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required, login_user, logout_user
+
+from api_auth import api_token_required, generate_token, hash_token
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import or_
 from werkzeug.utils import secure_filename
@@ -201,6 +204,21 @@ def _can_manage_sessions(repo: Repo) -> bool:
 
 def _can_access_repo(repo: Repo) -> bool:
     return repo.is_public or _get_repo_role(repo) is not None
+
+
+def _can_user_access_repo(repo: Repo, user: User | None) -> bool:
+    """``_can_access_repo`` 的用户显式版本；用于 API 场景（不依赖 current_user）。"""
+    if repo is None:
+        return False
+    if repo.is_public:
+        return True
+    if user is None:
+        return False
+    if user.id == repo.user_id:
+        return True
+    return (
+        RepoMember.query.filter_by(repo_id=repo.id, user_id=user.id).first() is not None
+    )
 
 
 def _require_editor(repo: Repo) -> None:
@@ -1002,25 +1020,51 @@ def _register_routes(app: Flask) -> None:
             .order_by(ApiToken.created_at.desc())
             .all()
         )
-        return render_template("user/tokens.html", tokens=tokens)
+        # 创建后 token 明文只在 session 里临时保存一次，展示后立刻弹出
+        new_token_plaintext = session.pop("_new_api_token_plaintext", None)
+        new_token_id = session.pop("_new_api_token_id", None)
+        return render_template(
+            "user/tokens.html",
+            tokens=tokens,
+            new_token_plaintext=new_token_plaintext,
+            new_token_id=new_token_id,
+        )
 
     @user_bp.route("/settings/tokens/create", methods=["POST"])
     @login_required
     def create_token():
-        import hashlib
-        import secrets
         from models import ApiToken
         name = request.form.get("name", "").strip()
         if not name:
             flash("Token 名称不能为空", "error")
             return redirect(url_for("user.list_tokens"))
-        raw = secrets.token_urlsafe(32)
-        h = hashlib.sha256(raw.encode()).hexdigest()
-        t = ApiToken(user_id=current_user.id, name=name, token_hash=h)
+        expires_raw = (request.form.get("expires_days") or "").strip()
+        expires_at = None
+        if expires_raw:
+            try:
+                days = int(expires_raw)
+            except ValueError:
+                flash("有效期必须是整数天数", "error")
+                return redirect(url_for("user.list_tokens"))
+            if days <= 0 or days > 3650:
+                flash("有效期应在 1~3650 天之间（留空表示永不过期）", "error")
+                return redirect(url_for("user.list_tokens"))
+            expires_at = datetime.now(timezone.utc) + timedelta(days=days)
+        scopes = (request.form.get("scopes") or "kb:search,kb:read").strip()
+        plaintext, token_hash_hex, token_prefix = generate_token()
+        t = ApiToken(
+            user_id=current_user.id,
+            name=name,
+            token_hash=token_hash_hex,
+            token_prefix=token_prefix,
+            scopes=scopes or "kb:search,kb:read",
+            expires_at=expires_at,
+        )
         db.session.add(t)
         db.session.commit()
         _audit("create_api_token", "api_token", t.id, name)
-        flash(f"Token 已创建（只显示一次，请立即复制）：{raw}", "success")
+        session["_new_api_token_plaintext"] = plaintext
+        session["_new_api_token_id"] = t.id
         return redirect(url_for("user.list_tokens"))
 
     @user_bp.route("/settings/tokens/<int:token_id>/revoke", methods=["POST"])
@@ -3173,6 +3217,282 @@ def _register_routes(app: Flask) -> None:
         return jsonify(ok=True)
 
     app.register_blueprint(ops_bp)
+
+    # ── OpenAPI (v1) — token-based external integration ────────────────
+
+    api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
+
+    def _api_repo_payload(repo: Repo, *, include_description: bool = True) -> dict:
+        owner_username = repo.user.username if repo.user else None
+        payload = {
+            "id": repo.id,
+            "owner": owner_username,
+            "slug": repo.slug,
+            "name": repo.name,
+            "is_public": bool(repo.is_public),
+            "source_count": repo.source_count,
+            "page_count": repo.page_count,
+            "updated_at": repo.updated_at.isoformat() if repo.updated_at else None,
+            "full_name": f"{owner_username}/{repo.slug}" if owner_username else repo.slug,
+        }
+        if include_description:
+            payload["description"] = repo.description or ""
+        return payload
+
+    def _list_accessible_repos(user: User, include_public: bool = True) -> list[Repo]:
+        """与 /{username} 首页口径一致：owner + member + public。"""
+        owned = Repo.query.filter_by(user_id=user.id).all()
+        member_rows = RepoMember.query.filter_by(user_id=user.id).all()
+        member_repo_ids = [m.repo_id for m in member_rows]
+        member_repos = (
+            Repo.query.filter(Repo.id.in_(member_repo_ids)).all()
+            if member_repo_ids
+            else []
+        )
+        public_repos: list[Repo] = []
+        if include_public:
+            public_repos = (
+                Repo.query.filter(Repo.is_public.is_(True), Repo.user_id != user.id).all()
+            )
+        seen: set[int] = set()
+        ordered: list[Repo] = []
+        for repo in owned + member_repos + public_repos:
+            if repo.id in seen:
+                continue
+            seen.add(repo.id)
+            ordered.append(repo)
+        ordered.sort(key=lambda r: r.updated_at or datetime.min, reverse=True)
+        return ordered
+
+    @api_v1_bp.route("/me", methods=["GET"])
+    @api_token_required("kb:read")
+    def api_me():
+        user = g.api_user
+        token = g.api_token
+        return jsonify(
+            username=user.username,
+            email=user.email,
+            display_name=user.display_name,
+            token={
+                "name": token.name,
+                "prefix": token.token_prefix,
+                "scopes": [s.strip() for s in (token.scopes or "").split(",") if s.strip()],
+                "expires_at": token.expires_at.isoformat() if token.expires_at else None,
+                "last_used_at": token.last_used_at.isoformat() if token.last_used_at else None,
+            },
+        )
+
+    @api_v1_bp.route("/repos", methods=["GET"])
+    @api_token_required("kb:read")
+    def api_list_repos():
+        include_public = request.args.get("include_public", "true").lower() != "false"
+        repos = _list_accessible_repos(g.api_user, include_public=include_public)
+        return jsonify(
+            total=len(repos),
+            repos=[_api_repo_payload(r) for r in repos],
+        )
+
+    def _resolve_repo_ref(ref: str) -> tuple[Repo | None, str | None]:
+        """解析 ``owner/slug`` 字符串，返回 (repo, error_code)。"""
+        if not ref or "/" not in ref:
+            return None, "bad_repo_ref"
+        owner_name, _, slug = ref.partition("/")
+        owner_name = owner_name.strip()
+        slug = slug.strip()
+        if not owner_name or not slug:
+            return None, "bad_repo_ref"
+        owner = User.query.filter_by(username=owner_name).first()
+        if owner is None:
+            return None, "owner_not_found"
+        repo = Repo.query.filter_by(user_id=owner.id, slug=slug).first()
+        if repo is None:
+            return None, "repo_not_found"
+        return repo, None
+
+    def _format_search_response(
+        *,
+        repo: Repo,
+        result: dict,
+        routing_mode: str,
+    ) -> dict:
+        wiki_ev = result.get("wiki_evidence") or []
+        chunk_ev = result.get("chunk_evidence") or []
+        fact_ev = result.get("fact_evidence") or []
+        return {
+            "routing": {
+                "mode": routing_mode,
+                "selected_repo": _api_repo_payload(repo, include_description=False),
+            },
+            "answer": result.get("markdown", "") or "",
+            "confidence": result.get("confidence", {}) or {},
+            "query_mode": result.get("query_mode", "") or "",
+            "intent": result.get("intent"),
+            "citation_validation": result.get("citation_validation"),
+            "evidence": {
+                "wiki_pages": [
+                    {
+                        "filename": e.get("filename", ""),
+                        "title": e.get("title", ""),
+                        "reason": e.get("reason", ""),
+                    }
+                    for e in wiki_ev
+                ],
+                "chunks": [
+                    {
+                        "filename": e.get("filename", ""),
+                        "score": e.get("score"),
+                        "snippet": (e.get("snippet") or "")[:300],
+                    }
+                    for e in chunk_ev
+                ],
+                "facts": [
+                    {
+                        "source_file": e.get("source_file", ""),
+                        "score": e.get("score"),
+                        "fields": e.get("fields", {}),
+                    }
+                    for e in fact_ev
+                ],
+            },
+        }
+
+    @api_v1_bp.route("/search", methods=["POST"])
+    @api_token_required("kb:search")
+    def api_search():
+        payload = request.get_json(silent=True) or {}
+        query = (payload.get("query") or "").strip()
+        repo_ref = (payload.get("repo") or "").strip() or None
+        if not query:
+            return jsonify(error="missing_query", message="必须提供 query 字段"), 400
+
+        import uuid as _uuid
+        trace_id = _uuid.uuid4().hex[:8]
+
+        # 第一步暂只实现：显式 repo 检索；自动路由留给第二步（501 占位）
+        if not repo_ref:
+            candidates = _list_accessible_repos(g.api_user)
+            return (
+                jsonify(
+                    error="auto_route_not_implemented",
+                    message=(
+                        "自动路由尚未实现。请在 body 中传入 repo: \"owner/slug\"；"
+                        "或从 /api/v1/repos 列表中选择。"
+                    ),
+                    trace_id=trace_id,
+                    candidates=[_api_repo_payload(r) for r in candidates[:20]],
+                ),
+                501,
+            )
+
+        repo, err = _resolve_repo_ref(repo_ref)
+        if err == "bad_repo_ref":
+            return (
+                jsonify(
+                    error="bad_repo_ref",
+                    message="repo 字段格式应为 \"owner/slug\"",
+                    trace_id=trace_id,
+                ),
+                400,
+            )
+        if err in ("owner_not_found", "repo_not_found") or repo is None:
+            return (
+                jsonify(
+                    error="repo_not_found",
+                    message="指定的知识库不存在或你无权访问",
+                    trace_id=trace_id,
+                ),
+                404,
+            )
+        if not _can_user_access_repo(repo, g.api_user):
+            return (
+                jsonify(
+                    error="repo_not_found",
+                    message="指定的知识库不存在或你无权访问",
+                    trace_id=trace_id,
+                ),
+                404,
+            )
+
+        owner_username = repo.user.username
+
+        import time as _time
+        _t0 = _time.monotonic()
+        try:
+            result = current_app.wiki_engine.query_with_evidence(
+                repo,
+                owner_username,
+                query,
+                _wiki_base_url(owner_username, repo.slug),
+                history=None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[api_v1] search failed repo=%s", repo.id)
+            return (
+                jsonify(
+                    error="internal_error",
+                    message=f"检索失败: {exc}",
+                    trace_id=trace_id,
+                ),
+                500,
+            )
+        latency_ms = int((_time.monotonic() - _t0) * 1000)
+
+        body = _format_search_response(
+            repo=repo, result=result, routing_mode="explicit"
+        )
+        body["trace_id"] = trace_id
+        body["latency_ms"] = latency_ms
+
+        # 持久化 QueryLog（与 web 查询一致的审计链路）
+        try:
+            from models import QueryLog
+            import json as _json
+
+            wiki_ev = result.get("wiki_evidence") or []
+            chunk_ev = result.get("chunk_evidence") or []
+            fact_ev = result.get("fact_evidence") or []
+            answer_text = result.get("markdown", "") or ""
+            conf = result.get("confidence", {}) or {}
+            retrieval = {
+                "wiki": [
+                    {"filename": e.get("filename", ""), "title": e.get("title", ""),
+                     "reason": e.get("reason", "")}
+                    for e in wiki_ev
+                ],
+                "chunks": [
+                    {"filename": e.get("filename", ""), "score": e.get("score"),
+                     "snippet": (e.get("snippet") or "")[:300]}
+                    for e in chunk_ev
+                ],
+                "facts": [
+                    {"source_file": e.get("source_file", ""), "score": e.get("score"),
+                     "fields": e.get("fields", {})}
+                    for e in fact_ev
+                ],
+            }
+            ql = QueryLog(
+                trace_id=trace_id,
+                repo_id=repo.id,
+                user_id=g.api_user.id,
+                question=query,
+                answer_preview=answer_text[:500],
+                full_answer=answer_text,
+                confidence=(conf.get("level") or "low"),
+                wiki_hit_count=len(wiki_ev),
+                chunk_hit_count=len(chunk_ev),
+                evidence_summary=result.get("evidence_summary") or "",
+                retrieval_json=_json.dumps(retrieval, ensure_ascii=False),
+                query_mode=result.get("query_mode", "") or "",
+                latency_ms=latency_ms,
+            )
+            db.session.add(ql)
+            db.session.commit()
+        except Exception as exc:  # noqa: BLE001
+            current_app.logger.warning("[api_v1] persist query log failed: %s", exc)
+
+        return jsonify(body)
+
+    app.register_blueprint(api_v1_bp)
 
     # ── Admin ─────────────────────────────────────────────────────────
 

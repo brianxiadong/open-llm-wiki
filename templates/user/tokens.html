@@ -19,15 +19,60 @@
 </div>
 
 <div class="form-container">
+  {% if new_token_plaintext %}
+  <article class="mb-2" style="border:1px solid var(--brand);background:rgba(59,130,246,0.06);">
+    <header style="padding:0.75rem 1rem 0;">
+      <h3 style="margin:0 0 0.4rem;font-size:1.05rem;color:var(--brand);">
+        <i class="lucide-check-circle" aria-hidden="true"></i>
+        新 Token 已创建
+      </h3>
+      <p class="muted" style="font-size:0.86rem;margin:0 0 0.5rem;">
+        请立即复制下面的明文 token 并妥善保存，<strong>关闭或刷新页面后将无法再次查看</strong>。
+      </p>
+    </header>
+    <div style="padding:0 1rem 1rem;">
+      <div style="display:flex;gap:0.5rem;align-items:stretch;">
+        <input type="text" readonly value="{{ new_token_plaintext }}"
+               id="new-token-input"
+               style="flex:1;font-family:var(--pico-font-family-monospace, monospace);font-size:0.85rem;">
+        <button type="button" class="action-btn action-btn-primary" id="copy-new-token-btn">
+          <i class="lucide-copy" aria-hidden="true"></i>
+          复制
+        </button>
+      </div>
+    </div>
+  </article>
+  {% endif %}
+
   <article class="mb-2">
     <header>
       <h3 style="margin:0 0 0.75rem;font-size:1.05rem">创建新 Token</h3>
     </header>
-    <form method="POST" action="{{ url_for('user.create_token') }}" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
-      <input type="text" name="name" placeholder="Token 名称（如 my-script、ci-bot）" required style="flex:1;min-width:200px;">
-      <button type="submit" class="action-btn action-btn-primary">创建</button>
+    <form method="POST" action="{{ url_for('user.create_token') }}"
+          style="display:grid;grid-template-columns:1fr 160px auto;gap:0.5rem;align-items:end;">
+      <label style="margin:0;">
+        <small class="muted">名称</small>
+        <input type="text" name="name" placeholder="如 OpenClaw 集成 / ci-bot / my-script" required>
+      </label>
+      <label style="margin:0;">
+        <small class="muted">有效期</small>
+        <select name="expires_days">
+          <option value="">永不过期</option>
+          <option value="30">30 天</option>
+          <option value="90" selected>90 天</option>
+          <option value="180">180 天</option>
+          <option value="365">365 天</option>
+        </select>
+      </label>
+      <button type="submit" class="action-btn action-btn-primary">
+        <i class="lucide-plus" aria-hidden="true"></i>
+        创建
+      </button>
     </form>
-    <p class="muted" style="font-size:0.82rem;margin-top:0.5rem;">Token 创建后只显示一次，请立即复制保存。</p>
+    <p class="muted" style="font-size:0.82rem;margin-top:0.5rem;">
+      Token 格式：<code>ollw_xxxx...</code>；创建后只显示一次，请立即复制保存。
+      默认权限：<code>kb:search,kb:read</code>。
+    </p>
   </article>
 
   <article style="padding:0 0 0.5rem;">
@@ -39,7 +84,10 @@
       <thead>
         <tr>
           <th>名称</th>
+          <th>前缀</th>
+          <th>权限</th>
           <th>创建时间</th>
+          <th>过期时间</th>
           <th>最后使用</th>
           <th>状态</th>
           <th>操作</th>
@@ -49,13 +97,26 @@
         {% for t in tokens %}
         <tr>
           <td><strong>{{ t.name }}</strong></td>
+          <td style="font-family:var(--pico-font-family-monospace, monospace);font-size:0.82rem;">
+            {% if t.token_prefix %}{{ t.token_prefix }}…{% else %}—{% endif %}
+          </td>
+          <td style="font-size:0.82rem;">{{ t.scopes or 'kb:search,kb:read' }}</td>
           <td style="font-size:0.85rem;">{{ t.created_at.strftime('%Y-%m-%d') }}</td>
+          <td style="font-size:0.85rem;">
+            {% if t.expires_at %}
+              {{ t.expires_at.strftime('%Y-%m-%d') }}
+            {% else %}
+              <span class="muted">永不过期</span>
+            {% endif %}
+          </td>
           <td style="font-size:0.85rem;">{{ t.last_used_at.strftime('%Y-%m-%d %H:%M') if t.last_used_at else '从未使用' }}</td>
           <td>
-            {% if t.is_active %}
-            <span class="badge badge-source">有效</span>
+            {% if not t.is_active %}
+              <span class="badge" style="background:var(--pico-muted-color);color:#fff;">已吊销</span>
+            {% elif t.is_expired() %}
+              <span class="badge" style="background:#d97706;color:#fff;">已过期</span>
             {% else %}
-            <span class="badge" style="background:var(--pico-muted-color);color:#fff;">已吊销</span>
+              <span class="badge badge-source">有效</span>
             {% endif %}
           </td>
           <td>
@@ -73,17 +134,61 @@
       </tbody>
     </table>
     {% else %}
-    <p style="color:var(--pico-muted-color);padding:1rem;">还没有 Token。创建一个以供脚本或 CI/CD 调用。</p>
+    <p style="color:var(--pico-muted-color);padding:1rem;">还没有 Token。创建一个以供脚本或 OpenClaw 等外部系统调用。</p>
     {% endif %}
   </article>
 
   <article>
     <header><h3 style="margin:0 0 0.5rem;font-size:1.05rem;">使用方法</h3></header>
-    <pre style="font-size:0.83rem;background:var(--pico-card-section-color,#f8f9fa);padding:0.75rem;border-radius:6px;overflow-x:auto;"># 查询接口示例
-curl -X POST https://your-domain/alice/my-repo/query \
+    <p style="margin:0 0 0.5rem;font-size:0.86rem;">所有 API 端点位于 <code>/api/v1/**</code>，使用 Bearer Token 鉴权。</p>
+    <pre style="font-size:0.83rem;background:var(--pico-card-section-color,#f8f9fa);padding:0.75rem;border-radius:6px;overflow-x:auto;"># 1. 验证 token / 查看账号信息
+curl -H "Authorization: Bearer &lt;your-token&gt;" \
+  https://your-domain/api/v1/me
+
+# 2. 列出当前 token 可见的全部知识库
+curl -H "Authorization: Bearer &lt;your-token&gt;" \
+  https://your-domain/api/v1/repos
+
+# 3. 在指定知识库检索（显式路由）
+curl -X POST https://your-domain/api/v1/search \
   -H "Authorization: Bearer &lt;your-token&gt;" \
   -H "Content-Type: application/json" \
-  -d '{"q":"你的问题"}'</pre>
+  -d '{"query":"AE350 的接口参数", "repo":"alice/ae350-kb"}'
+
+# 4. 自然语言自动选库（自动路由 · 规划中）
+# 暂返回 501 + candidates 候选列表，便于 OpenClaw 端做交互式选择
+curl -X POST https://your-domain/api/v1/search \
+  -H "Authorization: Bearer &lt;your-token&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"帮我查 AE350 的接口参数"}'</pre>
   </article>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% if new_token_plaintext %}
+<script>
+(function() {
+  var btn = document.getElementById('copy-new-token-btn');
+  var input = document.getElementById('new-token-input');
+  if (!btn || !input) return;
+  btn.addEventListener('click', function() {
+    input.select();
+    input.setSelectionRange(0, input.value.length);
+    var copied = false;
+    try {
+      copied = document.execCommand('copy');
+    } catch (e) { copied = false; }
+    if (!copied && navigator.clipboard) {
+      navigator.clipboard.writeText(input.value).then(function() {
+        btn.innerText = '已复制';
+      });
+    } else if (copied) {
+      btn.innerText = '已复制';
+    }
+    setTimeout(function() { btn.innerHTML = '<i class="lucide-copy" aria-hidden="true"></i> 复制'; }, 1500);
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}
