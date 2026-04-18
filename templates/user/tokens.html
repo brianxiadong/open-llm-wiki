@@ -95,7 +95,18 @@
             <tr>
               <td><strong>{{ t.name }}</strong></td>
               <td style="font-family:var(--pico-font-family-monospace, monospace);font-size:0.82rem;white-space:nowrap;">
-                {% if t.token_prefix %}{{ t.token_prefix }}…{% else %}—{% endif %}
+                {% if t.token_prefix %}
+                  <span style="display:inline-flex;align-items:center;gap:0.35rem;">
+                    <span>{{ t.token_prefix }}…</span>
+                    <button type="button" class="copy-prefix-btn"
+                            data-copy="{{ t.token_prefix }}"
+                            title="复制前缀到剪贴板"
+                            aria-label="复制前缀 {{ t.token_prefix }}"
+                            style="background:none;border:1px solid var(--border-strong, #d1d5db);color:var(--text-muted);cursor:pointer;padding:0.15rem 0.35rem;border-radius:4px;font-size:0.75rem;line-height:1;">
+                      <i class="lucide-copy" aria-hidden="true"></i>
+                    </button>
+                  </span>
+                {% else %}—{% endif %}
               </td>
               <td style="font-size:0.82rem;white-space:nowrap;">{{ t.scopes or 'kb:search,kb:read' }}</td>
               <td style="font-size:0.85rem;white-space:nowrap;">{{ t.created_at.strftime('%Y-%m-%d') }}</td>
@@ -116,15 +127,19 @@
                   <span class="badge badge-source">有效</span>
                 {% endif %}
               </td>
-              <td>
+              <td style="white-space:nowrap;">
                 {% if t.is_active %}
                 <form method="POST" action="{{ url_for('user.revoke_token', token_id=t.id) }}" style="display:inline;">
-                  <button type="submit" style="background:none;border:none;color:var(--error);cursor:pointer;font-size:0.85rem;padding:0.2rem 0.4rem;"
-                          onclick="return confirm('确认吊销此 Token？吊销后无法恢复。')">吊销</button>
+                  <button type="submit" class="token-action-btn"
+                          style="color:#d97706;"
+                          onclick="return confirm('确认吊销此 Token？吊销后该 token 立即失效，但记录仍保留在列表中以便审计。')">吊销</button>
                 </form>
-                {% else %}
-                <span style="color:var(--pico-muted-color);font-size:0.85rem;">—</span>
                 {% endif %}
+                <form method="POST" action="{{ url_for('user.delete_token', token_id=t.id) }}" style="display:inline;">
+                  <button type="submit" class="token-action-btn"
+                          style="color:var(--error);"
+                          onclick="return confirm('确认彻底删除此 Token？删除后记录将从列表中移除。')">删除</button>
+                </form>
               </td>
             </tr>
             {% endfor %}
@@ -168,29 +183,54 @@ curl -X POST https://your-domain/api/v1/search \
 {% endblock %}
 
 {% block scripts %}
-{% if new_token_plaintext %}
 <script>
 (function() {
-  var btn = document.getElementById('copy-new-token-btn');
-  var input = document.getElementById('new-token-input');
-  if (!btn || !input) return;
-  btn.addEventListener('click', function() {
-    input.select();
-    input.setSelectionRange(0, input.value.length);
-    var copied = false;
-    try {
-      copied = document.execCommand('copy');
-    } catch (e) { copied = false; }
-    if (!copied && navigator.clipboard) {
-      navigator.clipboard.writeText(input.value).then(function() {
-        btn.innerText = '已复制';
-      });
-    } else if (copied) {
-      btn.innerText = '已复制';
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).then(function() { return true; }).catch(function() { return legacyCopy(text); });
     }
-    setTimeout(function() { btn.innerHTML = '<i class="lucide-copy" aria-hidden="true"></i> 复制'; }, 1500);
+    return Promise.resolve(legacyCopy(text));
+  }
+  function legacyCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+  function flashLabel(btn, tempHtml) {
+    var original = btn.innerHTML;
+    btn.innerHTML = tempHtml;
+    setTimeout(function() { btn.innerHTML = original; }, 1500);
+  }
+
+  {% if new_token_plaintext %}
+  var newBtn = document.getElementById('copy-new-token-btn');
+  var newInput = document.getElementById('new-token-input');
+  if (newBtn && newInput) {
+    newBtn.addEventListener('click', function() {
+      copyText(newInput.value).then(function(ok) {
+        if (ok) flashLabel(newBtn, '<i class="lucide-check" aria-hidden="true"></i> 已复制');
+      });
+    });
+  }
+  {% endif %}
+
+  document.querySelectorAll('.copy-prefix-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var text = btn.getAttribute('data-copy') || '';
+      if (!text) return;
+      copyText(text).then(function(ok) {
+        if (ok) flashLabel(btn, '<i class="lucide-check" aria-hidden="true"></i>');
+      });
+    });
   });
 })();
 </script>
-{% endif %}
 {% endblock %}

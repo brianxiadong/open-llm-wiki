@@ -1080,6 +1080,20 @@ def _register_routes(app: Flask) -> None:
         flash("Token 已吊销", "success")
         return redirect(url_for("user.list_tokens"))
 
+    @user_bp.route("/settings/tokens/<int:token_id>/delete", methods=["POST"])
+    @login_required
+    def delete_token(token_id):
+        # 与 revoke（软删，is_active=False）并存：delete 是硬删，用于清理不再需要的行。
+        # 无外表外键依赖此 id（query_logs 只按 user_id 记账），可以直接删除。
+        from models import ApiToken
+        t = ApiToken.query.filter_by(id=token_id, user_id=current_user.id).first_or_404()
+        name = t.name
+        db.session.delete(t)
+        db.session.commit()
+        _audit("delete_api_token", "api_token", token_id, name)
+        flash("Token 已删除", "success")
+        return redirect(url_for("user.list_tokens"))
+
     app.register_blueprint(user_bp)
 
     # ── Repo ──────────────────────────────────────────────────────────

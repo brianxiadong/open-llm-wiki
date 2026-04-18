@@ -793,6 +793,26 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
   .token-create-form { grid-template-columns: 1fr; }
   .token-create-form > button { width: 100%; justify-content: center; }
 }
+
+.token-action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+}
+.token-action-btn:hover {
+  background: var(--surface-soft, #f3f4f6);
+}
+.token-action-btn + .token-action-btn {
+  margin-left: 0.25rem;
+}
+
+.copy-prefix-btn:hover {
+  color: var(--brand) !important;
+  border-color: var(--brand) !important;
+}
 .code-textarea {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.85rem; line-height: 1.5;
