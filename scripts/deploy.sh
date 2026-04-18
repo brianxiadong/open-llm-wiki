@@ -45,7 +45,7 @@ sshpass -p "$DEPLOY_PASSWORD" ssh -o StrictHostKeyChecking=no -p "$SERVER_PORT" 
     cd $SERVER_PATH
     tar xzf /tmp/llmwiki-deploy.tar.gz --exclude='**/._*' 2>/dev/null
     install -m 644 deploy/llmwiki.service /etc/systemd/system/llmwiki.service
-    .venv/bin/python manage.py migrate 2>&1 | grep -E '迁移|migration|error|Error' | head -10
+    .venv/bin/python manage.py migrate 2>&1 | tail -20
     systemctl daemon-reload
     systemctl restart llmwiki
     sleep 3
