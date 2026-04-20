@@ -339,8 +339,9 @@ def test_repo_settings_shows_share_invite_link(sample_repo):
     resp = client.get(f"/alice/{slug}/settings")
     assert resp.status_code == 200
     html = resp.data.decode("utf-8")
+    assert "邀请操作" in html
     assert "复制邀请链接" in html
-    assert "/repos/join/" in html
+    assert 'readonly value="' not in html
 
 
 def test_repo_settings_shows_new_share_copy_fallback_panel(sample_repo):
@@ -357,6 +358,7 @@ def test_repo_settings_shows_new_share_copy_fallback_panel(sample_repo):
     assert "正在尝试自动复制邀请链接" in html
     assert 'id="new-share-copy-btn"' in html
     assert "如果浏览器拦截了自动复制" in html
+    assert 'id="new-share-invite-link"' not in html
 
 
 def test_create_share_code_primes_auto_copy_invite_link(sample_repo):

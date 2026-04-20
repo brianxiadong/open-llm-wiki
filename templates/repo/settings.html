@@ -94,7 +94,7 @@
       <thead>
         <tr>
           <th>访问码</th>
-          <th>邀请链接</th>
+          <th>邀请操作</th>
           <th>角色</th>
           <th>使用次数</th>
           <th>状态</th>
@@ -117,12 +117,10 @@
               {% endif %}
             </div>
           </td>
-          <td style="min-width:260px;">
+          <td style="min-width:160px;">
             {% if item.is_active %}
             {% set invite_link = url_for('repo.join_by_link', access_code=item.code, _external=True) %}
-            <div style="display:flex;align-items:center;gap:0.4rem;">
-              <input type="text" readonly value="{{ invite_link }}"
-                     style="font-size:0.8rem;font-family:var(--pico-font-family-monospace, monospace);min-width:0;">
+            <div style="display:flex;align-items:center;gap:0.4rem;white-space:nowrap;">
               <button type="button" class="share-copy-btn action-btn"
                       data-copy-text="{{ invite_link }}"
                       style="padding:0.18rem 0.45rem;font-size:0.78rem;white-space:nowrap;">
