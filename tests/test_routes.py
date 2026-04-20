@@ -343,6 +343,22 @@ def test_repo_settings_shows_share_invite_link(sample_repo):
     assert "/repos/join/" in html
 
 
+def test_repo_settings_shows_new_share_copy_fallback_panel(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    with client.session_transaction() as sess:
+        sess["_new_share_code"] = "SHARE-CODE"
+        sess["_new_share_invite_link"] = "http://example.com/repos/join/SHARE-CODE"
+
+    resp = client.get(f"/alice/{slug}/settings")
+    assert resp.status_code == 200
+    html = resp.data.decode("utf-8")
+    assert "正在尝试自动复制邀请链接" in html
+    assert 'id="new-share-copy-btn"' in html
+    assert "如果浏览器拦截了自动复制" in html
+
+
 def test_create_share_code_primes_auto_copy_invite_link(sample_repo):
     client, repo_info = sample_repo
     slug = repo_info["slug"]

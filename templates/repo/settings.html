@@ -57,9 +57,20 @@
       <i class="lucide-check-circle" aria-hidden="true"></i>
       共享邀请已生成
     </div>
-    <p style="margin:0;color:var(--pico-color);font-size:0.92rem;">
-      邀请链接正在自动复制到剪贴板。复制成功后，直接发给相关同事即可；对方打开链接并登录后，就能把这个知识库加入到自己的列表中。
+    <p id="new-share-copy-status" style="margin:0 0 0.75rem;color:var(--pico-color);font-size:0.92rem;">
+      正在尝试自动复制邀请链接。复制成功后，直接发给相关同事即可；对方打开链接并登录后，就能把这个知识库加入到自己的列表中。
     </p>
+    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+      <button type="button" id="new-share-copy-btn" class="share-copy-btn action-btn action-btn-primary"
+              data-copy-text="{{ new_share_invite_link }}"
+              style="white-space:nowrap;">
+        <i class="lucide-copy" aria-hidden="true"></i>
+        复制邀请链接
+      </button>
+    </div>
+    <small id="new-share-copy-help" style="display:block;margin-top:0.55rem;color:var(--pico-muted-color);">
+      如果浏览器拦截了自动复制，点一下右侧按钮就能继续发送给同事。
+    </small>
   </div>
   {% endif %}
   <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
@@ -242,6 +253,9 @@
 (function () {
   const newShareInviteLink = {{ new_share_invite_link|tojson }};
   const newShareCode = {{ new_share_code|tojson }};
+  const newShareCopyStatus = document.getElementById('new-share-copy-status');
+  const newShareCopyHelp = document.getElementById('new-share-copy-help');
+  const newShareCopyBtn = document.getElementById('new-share-copy-btn');
 
   function flashCopyLabel(btn) {
     const original = btn.innerHTML;
@@ -286,23 +300,58 @@
     }, 3200);
   }
 
+  function setNewShareCopyState(state) {
+    if (!newShareCopyStatus) return;
+    if (state === 'success') {
+      newShareCopyStatus.textContent = '邀请链接已复制，直接发给相关同事即可；对方打开链接并登录后，就能把这个知识库加入到自己的列表中。';
+      if (newShareCopyHelp) {
+        newShareCopyHelp.textContent = '如果你还想再次发送，也可以随时点击右侧按钮重新复制。';
+      }
+      return;
+    }
+    if (state === 'fallback') {
+      newShareCopyStatus.textContent = '自动复制没有成功，请点击右侧“复制邀请链接”后再发给相关同事。';
+      if (newShareCopyHelp) {
+        newShareCopyHelp.textContent = '部分浏览器会拦截页面自动复制，手动点一下即可完成复制。';
+      }
+      return;
+    }
+    newShareCopyStatus.textContent = '正在尝试自动复制邀请链接。复制成功后，直接发给相关同事即可；对方打开链接并登录后，就能把这个知识库加入到自己的列表中。';
+    if (newShareCopyHelp) {
+      newShareCopyHelp.textContent = '如果浏览器拦截了自动复制，点一下右侧按钮就能继续发送给同事。';
+    }
+  }
+
   document.querySelectorAll('.share-copy-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
       const text = btn.getAttribute('data-copy-text') || '';
       if (!text) return;
       copyText(text).then(function (ok) {
-        if (ok) flashCopyLabel(btn);
+        if (ok) {
+          flashCopyLabel(btn);
+          if (btn === newShareCopyBtn) {
+            setNewShareCopyState('success');
+            showShareToast('邀请链接已复制，直接发给相关同事即可。');
+          }
+        } else if (btn === newShareCopyBtn) {
+          setNewShareCopyState('fallback');
+          showShareToast('浏览器仍未完成复制，请手动长按或选中链接后复制。', 'warn');
+        }
       });
     });
   });
 
   if (newShareInviteLink) {
+    setNewShareCopyState('pending');
     copyText(newShareInviteLink).then(function (ok) {
       if (ok) {
+        setNewShareCopyState('success');
         showShareToast('邀请链接已复制，直接发给相关同事即可。');
       } else if (newShareCode) {
+        setNewShareCopyState('fallback');
         showShareToast('邀请已生成，但浏览器未能自动复制；你也可以手动复制邀请链接或访问码：' + newShareCode, 'warn');
       } else {
+        setNewShareCopyState('fallback');
         showShareToast('邀请已生成，但浏览器未能自动复制，请手动复制邀请链接。', 'warn');
       }
     });

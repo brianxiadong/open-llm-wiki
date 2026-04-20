@@ -593,7 +593,7 @@ GET  /admin/feedbacks                        → 用户反馈列表（关联 que
 
 **个人设置页**（`templates/user/settings.html`、`templates/user/tokens.html`）：包含「基本信息」「修改密码」「危险操作」三个区域。删除账号时要求再次输入当前用户名和密码确认，提交后会同步清理名下知识库目录、向量索引、任务、会话、API Token 以及关联查询记录中的用户引用，并立即注销当前会话；E2E 测试脚本会复用这条删除流程自动回收 `e2e_*` 账号。
 
-**知识库设置页**（`templates/repo/settings.html`）：由「基本信息」「共享访问码」「共享成员」「Wiki Schema」「导入 Wiki（ZIP）」「README」「删除知识库」七个独立表单区块组成；owner 可在这里生成 viewer/editor 访问码、复制邀请链接、停用访问码以及移除共享成员。新生成共享邀请后，页面会自动尝试把邀请链接复制到剪贴板，并提示“直接发给相关同事即可”。每个表单都显式携带 `action` 隐藏字段，避免未启用 CSRF 模板变量时提交丢失操作类型。
+**知识库设置页**（`templates/repo/settings.html`）：由「基本信息」「共享访问码」「共享成员」「Wiki Schema」「导入 Wiki（ZIP）」「README」「删除知识库」七个独立表单区块组成；owner 可在这里生成 viewer/editor 访问码、复制邀请链接、停用访问码以及移除共享成员。新生成共享邀请后，页面会先自动尝试把邀请链接复制到剪贴板；若浏览器拦截自动复制，会在成功提示卡片内保留“复制邀请链接”按钮和明确说明，方便用户一键重试后直接发给同事，而不再额外展示完整邀请地址。每个表单都显式携带 `action` 隐藏字段，避免未启用 CSRF 模板变量时提交丢失操作类型。
 
 **基础壳层**（`templates/base.html` + `static/css/style.css`）：站点统一头部、页脚与全局设计令牌都在这里定义。为了适配内网和离线环境，正文不再依赖 Google Fonts，而是使用系统自带中文优先字体栈；Pico CSS、Lucide、EasyMDE、D3 也全部 vendoring 到 `static/vendor/` 由应用自身提供，避免 CDN 或外网不可达时页面样式、图标、编辑器和图谱功能失效。知识库聊天页注入给 `chat.js` 的配置对象必须使用 `tojson` 输出，避免 Jinja 自动转义把 URL 变成 `&#34;...&#34;` 从而导致会话栏和“新对话”初始化失效。
 
