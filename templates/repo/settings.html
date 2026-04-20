@@ -50,7 +50,7 @@
 
 <article>
   <header><h3>共享访问码</h3></header>
-  <p style="color:var(--pico-muted-color);font-size:0.9rem;">生成访问码后，其他用户可在自己的知识库页输入访问码，把这个知识库挂载到自己的列表中。访问码只负责“加入”，实际权限由成员关系控制。</p>
+  <p style="color:var(--pico-muted-color);font-size:0.9rem;">生成访问码后，其他用户既可以手动输入访问码，也可以直接打开邀请链接，把这个知识库挂载到自己的列表中。访问码只负责“加入”，实际权限由成员关系控制。</p>
   <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -72,6 +72,7 @@
       <thead>
         <tr>
           <th>访问码</th>
+          <th>邀请链接</th>
           <th>角色</th>
           <th>使用次数</th>
           <th>状态</th>
@@ -81,7 +82,36 @@
       <tbody>
         {% for item in repo_share_codes %}
         <tr>
-          <td><code>{{ item.code }}</code></td>
+          <td>
+            <div style="display:flex;align-items:center;gap:0.4rem;white-space:nowrap;">
+              <code>{{ item.code }}</code>
+              {% if item.is_active %}
+              <button type="button" class="share-copy-btn action-btn"
+                      data-copy-text="{{ item.code }}"
+                      style="padding:0.18rem 0.45rem;font-size:0.78rem;">
+                <i class="lucide-copy" aria-hidden="true"></i>
+                复制访问码
+              </button>
+              {% endif %}
+            </div>
+          </td>
+          <td style="min-width:260px;">
+            {% if item.is_active %}
+            {% set invite_link = url_for('repo.join_by_link', access_code=item.code, _external=True) %}
+            <div style="display:flex;align-items:center;gap:0.4rem;">
+              <input type="text" readonly value="{{ invite_link }}"
+                     style="font-size:0.8rem;font-family:var(--pico-font-family-monospace, monospace);min-width:0;">
+              <button type="button" class="share-copy-btn action-btn"
+                      data-copy-text="{{ invite_link }}"
+                      style="padding:0.18rem 0.45rem;font-size:0.78rem;white-space:nowrap;">
+                <i class="lucide-copy" aria-hidden="true"></i>
+                复制邀请链接
+              </button>
+            </div>
+            {% else %}
+            <span style="color:var(--pico-muted-color);">已停用</span>
+            {% endif %}
+          </td>
           <td>{{ role_labels.get(item.role, item.role) }}</td>
           <td>{{ item.use_count }}</td>
           <td>{{ '有效' if item.is_active else '已停用' }}</td>
@@ -199,6 +229,47 @@
 {% block scripts %}
 <script>
 (function () {
+  function flashCopyLabel(btn) {
+    const original = btn.innerHTML;
+    btn.innerHTML = '<i class="lucide-check" aria-hidden="true"></i> 已复制';
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+      window.lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
+    }
+    window.setTimeout(function () {
+      btn.innerHTML = original;
+      if (window.lucide && typeof window.lucide.createIcons === 'function') {
+        window.lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
+      }
+    }, 1400);
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }).catch(function () { return false; });
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return Promise.resolve(ok);
+  }
+
+  document.querySelectorAll('.share-copy-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const text = btn.getAttribute('data-copy-text') || '';
+      if (!text) return;
+      copyText(text).then(function (ok) {
+        if (ok) flashCopyLabel(btn);
+      });
+    });
+  });
+
   const btn = document.getElementById("ai-suggest-desc-btn");
   const textarea = document.getElementById("description");
   const hint = document.getElementById("ai-suggest-desc-hint");

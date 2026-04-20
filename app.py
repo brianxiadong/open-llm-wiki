@@ -266,6 +266,44 @@ def _is_valid_email(email: str) -> bool:
     return bool(EMAIL_RE.match(email))
 
 
+def _join_repo_with_share_code(raw_code: str, user: User) -> tuple[Repo | None, str, str]:
+    normalized_code = (raw_code or "").strip().upper()
+    if not normalized_code:
+        return None, "请输入访问码", "error"
+
+    share_code = RepoShareCode.query.filter_by(code=normalized_code).first()
+    if share_code is None or not share_code.is_active:
+        return None, "访问码无效或已停用", "error"
+
+    repo = db.session.get(Repo, share_code.repo_id)
+    if repo is None:
+        return None, "访问码关联的知识库不存在", "error"
+    if repo.user_id == user.id:
+        return repo, "这是你自己的知识库，无需加入", "info"
+
+    existing = RepoMember.query.filter_by(
+        repo_id=repo.id, user_id=user.id
+    ).first()
+    if existing:
+        return repo, "该共享知识库已在你的列表中", "info"
+
+    membership = RepoMember(
+        repo_id=repo.id,
+        user_id=user.id,
+        role=share_code.role,
+        granted_by_user_id=share_code.created_by_user_id,
+        share_code_id=share_code.id,
+    )
+    db.session.add(membership)
+    share_code.use_count += 1
+    db.session.commit()
+    return (
+        repo,
+        f"已加入共享知识库「{repo.name}」({REPO_ROLE_LABELS.get(share_code.role, share_code.role)})",
+        "success",
+    )
+
+
 def _reset_serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(Config.SECRET_KEY, salt="password-reset")
 
@@ -1241,45 +1279,28 @@ def _register_routes(app: Flask) -> None:
     @repo_bp.route("/repos/join", methods=["POST"])
     @login_required
     def join_by_code():
-        raw_code = request.form.get("access_code", "").strip().upper()
-        if not raw_code:
-            flash("请输入访问码", "error")
-            return redirect(url_for("repo.list_repos", username=current_user.username))
-
-        share_code = RepoShareCode.query.filter_by(code=raw_code).first()
-        if share_code is None or not share_code.is_active:
-            flash("访问码无效或已停用", "error")
-            return redirect(url_for("repo.list_repos", username=current_user.username))
-
-        repo = db.session.get(Repo, share_code.repo_id)
-        if repo is None:
-            flash("访问码关联的知识库不存在", "error")
-            return redirect(url_for("repo.list_repos", username=current_user.username))
-        if repo.user_id == current_user.id:
-            flash("这是你自己的知识库，无需加入", "info")
-            return redirect(url_for("repo.list_repos", username=current_user.username))
-
-        existing = RepoMember.query.filter_by(
-            repo_id=repo.id, user_id=current_user.id
-        ).first()
-        if existing:
-            flash("该共享知识库已在你的列表中", "info")
-            return redirect(url_for("repo.list_repos", username=current_user.username))
-
-        membership = RepoMember(
-            repo_id=repo.id,
-            user_id=current_user.id,
-            role=share_code.role,
-            granted_by_user_id=share_code.created_by_user_id,
-            share_code_id=share_code.id,
+        _repo, message, category = _join_repo_with_share_code(
+            request.form.get("access_code", ""),
+            current_user,
         )
-        db.session.add(membership)
-        share_code.use_count += 1
-        db.session.commit()
-        flash(
-            f"已加入共享知识库「{repo.name}」({REPO_ROLE_LABELS.get(share_code.role, share_code.role)})",
-            "success",
-        )
+        flash(message, category)
+        return redirect(url_for("repo.list_repos", username=current_user.username))
+
+    @repo_bp.route("/repos/join/<access_code>", methods=["GET"])
+    def join_by_link(access_code):
+        if not current_user.is_authenticated:
+            return redirect(url_for("auth.login", next=request.url))
+
+        repo, message, category = _join_repo_with_share_code(access_code, current_user)
+        flash(message, category)
+        if repo is not None:
+            return redirect(
+                url_for(
+                    "repo.dashboard",
+                    username=repo.user.username,
+                    repo_slug=repo.slug,
+                )
+            )
         return redirect(url_for("repo.list_repos", username=current_user.username))
 
     @repo_bp.route("/shared-repos/<int:repo_id>/leave", methods=["POST"])

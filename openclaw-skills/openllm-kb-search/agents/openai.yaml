@@ -1,0 +1,7 @@
+interface:
+  display_name: "Open LLM Wiki Query"
+  short_description: "为 OpenClaw 查询内部知识库并处理 token。"
+  default_prompt: "Use $openllm-kb-search to save an Open LLM Wiki token and answer an internal knowledge base question."
+
+policy:
+  allow_implicit_invocation: true

@@ -267,6 +267,82 @@ def test_join_repo_by_access_code_mounts_shared_repo(sample_repo, app):
         assert share_code.use_count == 1
 
 
+def test_join_repo_by_invite_link_mounts_and_redirects_dashboard(sample_repo, app):
+    owner_client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    owner_client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "create_share_code", "share_role": "viewer"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        from models import RepoMember, RepoShareCode
+
+        share_code = RepoShareCode.query.filter_by(repo_id=repo_info["id"]).first()
+        assert share_code is not None
+        code = share_code.code
+        assert RepoMember.query.count() == 0
+
+    share_client = app.test_client()
+    _create_verified_user(app, "carol", "carol@example.com")
+    _login_as(share_client, "carol")
+    resp = share_client.get(f"/repos/join/{code}", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith(f"/alice/{slug}")
+
+    with app.app_context():
+        from models import RepoMember, RepoShareCode
+
+        member = RepoMember.query.filter_by(repo_id=repo_info["id"]).first()
+        share_code = RepoShareCode.query.filter_by(repo_id=repo_info["id"]).first()
+        assert member is not None
+        assert member.role == "viewer"
+        assert share_code.use_count == 1
+
+
+def test_join_repo_by_invite_link_redirects_guest_to_login(sample_repo, app):
+    owner_client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    owner_client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "create_share_code", "share_role": "viewer"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        from models import RepoShareCode
+
+        share_code = RepoShareCode.query.filter_by(repo_id=repo_info["id"]).first()
+        assert share_code is not None
+        code = share_code.code
+
+    guest = app.test_client()
+    resp = guest.get(f"/repos/join/{code}", follow_redirects=False)
+    assert resp.status_code == 302
+    location = resp.headers["Location"]
+    assert "/login?next=" in location
+    assert f"/repos/join/{code}" in location
+
+
+def test_repo_settings_shows_share_invite_link(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "create_share_code", "share_role": "viewer"},
+        follow_redirects=True,
+    )
+    resp = client.get(f"/alice/{slug}/settings")
+    assert resp.status_code == 200
+    html = resp.data.decode("utf-8")
+    assert "复制邀请链接" in html
+    assert "/repos/join/" in html
+
+
 def test_repo_list_redirects_guest_to_login(sample_repo):
     owner_client, repo_info = sample_repo
     resp = owner_client.get("/logout", follow_redirects=True)
