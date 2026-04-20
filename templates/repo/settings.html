@@ -105,17 +105,7 @@
         {% for item in repo_share_codes %}
         <tr>
           <td>
-            <div style="display:flex;align-items:center;gap:0.4rem;white-space:nowrap;">
-              <code>{{ item.code }}</code>
-              {% if item.is_active %}
-              <button type="button" class="share-copy-btn action-btn"
-                      data-copy-text="{{ item.code }}"
-                      style="padding:0.18rem 0.45rem;font-size:0.78rem;">
-                <i class="lucide-copy" aria-hidden="true"></i>
-                复制访问码
-              </button>
-              {% endif %}
-            </div>
+            <code>{{ item.code }}</code>
           </td>
           <td style="min-width:160px;">
             {% if item.is_active %}

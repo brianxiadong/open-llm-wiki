@@ -341,6 +341,7 @@ def test_repo_settings_shows_share_invite_link(sample_repo):
     html = resp.data.decode("utf-8")
     assert "邀请操作" in html
     assert "复制邀请链接" in html
+    assert "复制访问码" not in html
     assert 'readonly value="' not in html
 
 
