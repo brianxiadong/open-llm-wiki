@@ -343,6 +343,24 @@ def test_repo_settings_shows_share_invite_link(sample_repo):
     assert "/repos/join/" in html
 
 
+def test_create_share_code_primes_auto_copy_invite_link(sample_repo):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+
+    resp = client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "create_share_code", "share_role": "viewer"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+    with client.session_transaction() as sess:
+        assert sess.get("_new_share_code")
+        invite_link = sess.get("_new_share_invite_link")
+        assert invite_link
+        assert "/repos/join/" in invite_link
+
+
 def test_repo_list_redirects_guest_to_login(sample_repo):
     owner_client, repo_info = sample_repo
     resp = owner_client.get("/logout", follow_redirects=True)

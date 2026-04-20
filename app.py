@@ -1477,8 +1477,15 @@ def _register_routes(app: Flask) -> None:
                     )
                     db.session.add(share_code)
                     db.session.commit()
+                    invite_link = url_for(
+                        "repo.join_by_link",
+                        access_code=share_code.code,
+                        _external=True,
+                    )
+                    session["_new_share_code"] = share_code.code
+                    session["_new_share_invite_link"] = invite_link
                     flash(
-                        f"已生成访问码：{share_code.code}（{REPO_ROLE_LABELS.get(role, role)}）",
+                        f"已生成共享邀请（{REPO_ROLE_LABELS.get(role, role)}）。邀请链接会自动复制，直接发给相关同事即可。",
                         "success",
                     )
             return redirect(
@@ -1506,6 +1513,8 @@ def _register_routes(app: Flask) -> None:
             .order_by(RepoShareCode.created_at.desc())
             .all()
         )
+        new_share_code = session.pop("_new_share_code", None)
+        new_share_invite_link = session.pop("_new_share_invite_link", None)
 
         return render_template(
             "repo/settings.html",
@@ -1516,6 +1525,8 @@ def _register_routes(app: Flask) -> None:
             repo_members=repo_members,
             repo_share_codes=repo_share_codes,
             role_labels=REPO_ROLE_LABELS,
+            new_share_code=new_share_code,
+            new_share_invite_link=new_share_invite_link,
         )
 
     # 每个 repo 的 description 建议节流：进程内内存，够用就行

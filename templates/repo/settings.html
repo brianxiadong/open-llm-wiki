@@ -51,6 +51,17 @@
 <article>
   <header><h3>共享访问码</h3></header>
   <p style="color:var(--pico-muted-color);font-size:0.9rem;">生成访问码后，其他用户既可以手动输入访问码，也可以直接打开邀请链接，把这个知识库挂载到自己的列表中。访问码只负责“加入”，实际权限由成员关系控制。</p>
+  {% if new_share_invite_link %}
+  <div style="margin:0 0 1rem;padding:0.85rem 1rem;border:1px solid rgba(34,197,94,0.28);border-radius:10px;background:rgba(34,197,94,0.08);">
+    <div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.35rem;color:#15803d;font-weight:600;">
+      <i class="lucide-check-circle" aria-hidden="true"></i>
+      共享邀请已生成
+    </div>
+    <p style="margin:0;color:var(--pico-color);font-size:0.92rem;">
+      邀请链接正在自动复制到剪贴板。复制成功后，直接发给相关同事即可；对方打开链接并登录后，就能把这个知识库加入到自己的列表中。
+    </p>
+  </div>
+  {% endif %}
   <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -229,6 +240,9 @@
 {% block scripts %}
 <script>
 (function () {
+  const newShareInviteLink = {{ new_share_invite_link|tojson }};
+  const newShareCode = {{ new_share_code|tojson }};
+
   function flashCopyLabel(btn) {
     const original = btn.innerHTML;
     btn.innerHTML = '<i class="lucide-check" aria-hidden="true"></i> 已复制';
@@ -260,6 +274,18 @@
     return Promise.resolve(ok);
   }
 
+  function showShareToast(message, kind) {
+    const bar = document.createElement('div');
+    bar.className = 'token-toast' + (kind === 'warn' ? ' token-toast-warn' : '');
+    bar.textContent = message;
+    document.body.appendChild(bar);
+    requestAnimationFrame(function () { bar.classList.add('token-toast-show'); });
+    window.setTimeout(function () {
+      bar.classList.remove('token-toast-show');
+      window.setTimeout(function () { bar.remove(); }, 300);
+    }, 3200);
+  }
+
   document.querySelectorAll('.share-copy-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
       const text = btn.getAttribute('data-copy-text') || '';
@@ -269,6 +295,18 @@
       });
     });
   });
+
+  if (newShareInviteLink) {
+    copyText(newShareInviteLink).then(function (ok) {
+      if (ok) {
+        showShareToast('邀请链接已复制，直接发给相关同事即可。');
+      } else if (newShareCode) {
+        showShareToast('邀请已生成，但浏览器未能自动复制；你也可以手动复制邀请链接或访问码：' + newShareCode, 'warn');
+      } else {
+        showShareToast('邀请已生成，但浏览器未能自动复制，请手动复制邀请链接。', 'warn');
+      }
+    });
+  }
 
   const btn = document.getElementById("ai-suggest-desc-btn");
   const textarea = document.getElementById("description");
