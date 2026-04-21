@@ -117,3 +117,11 @@ class LLMClient:
             delta = chunk.choices[0].delta.content if chunk.choices else None
             if delta:
                 yield delta
+
+    def health_check(self) -> tuple[bool, str]:
+        try:
+            self._client.models.list()
+        except OpenAIError as e:
+            logger.warning("LLM health_check failed model=%s: %s", self._model, e)
+            return False, str(e)
+        return True, "ok"

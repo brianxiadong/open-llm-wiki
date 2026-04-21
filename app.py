@@ -6,7 +6,9 @@ import os
 import re
 import secrets
 import shutil
+import time
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 from urllib.parse import urlparse
 
 from flask import (
@@ -680,6 +682,8 @@ def create_app() -> Flask:
     # Query trace logger: daily JSONL files under DATA_DIR/logs/
     from utils import QueryTraceLogger
     app.query_trace_logger = QueryTraceLogger(os.path.join(Config.DATA_DIR, "logs"))
+    app._llm_status_cache = {"checked_at": 0.0, "payload": None}
+    app._llm_status_lock = Lock()
 
     @app.context_processor
     def inject_admin():
@@ -761,6 +765,38 @@ def _register_error_handlers(app: Flask) -> None:
 
 
 def _register_routes(app: Flask) -> None:
+    def _probe_llm_status(force: bool = False) -> dict[str, object]:
+        ttl_seconds = 0 if app.config.get("TESTING") else 20
+        now = time.monotonic()
+        cache = app._llm_status_cache
+        payload = cache.get("payload")
+        checked_at = cache.get("checked_at", 0.0)
+        if not force and payload and (now - checked_at < ttl_seconds):
+            cached_payload = dict(payload)
+            cached_payload["cached"] = True
+            return cached_payload
+
+        with app._llm_status_lock:
+            cache = app._llm_status_cache
+            payload = cache.get("payload")
+            checked_at = cache.get("checked_at", 0.0)
+            if not force and payload and (now - checked_at < ttl_seconds):
+                cached_payload = dict(payload)
+                cached_payload["cached"] = True
+                return cached_payload
+
+            ok, message = app.llm.health_check()
+            status_payload = {
+                "ok": ok,
+                "status": "ok" if ok else "error",
+                "label": "大模型正常" if ok else "大模型异常",
+                "message": message,
+                "model": Config.LLM_MODEL,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "cached": False,
+            }
+            app._llm_status_cache = {"checked_at": now, "payload": status_payload}
+            return status_payload
 
     # ── Root ──────────────────────────────────────────────────────────
 
@@ -814,6 +850,11 @@ def _register_routes(app: Flask) -> None:
             jsonify(status="ok" if all_ok else "degraded", checks=checks),
             200 if all_ok else 503,
         )
+
+    @app.route("/api/system/llm-status")
+    def llm_status():
+        payload = _probe_llm_status()
+        return jsonify(payload), 200 if payload["ok"] else 503
 
     # ── Auth ──────────────────────────────────────────────────────────
 
@@ -1477,10 +1518,9 @@ def _register_routes(app: Flask) -> None:
                     )
                     db.session.add(share_code)
                     db.session.commit()
-                    invite_link = url_for(
+                    invite_link = _external_url(
                         "repo.join_by_link",
                         access_code=share_code.code,
-                        _external=True,
                     )
                     session["_new_share_code"] = share_code.code
                     session["_new_share_invite_link"] = invite_link

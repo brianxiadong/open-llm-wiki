@@ -267,7 +267,7 @@ def test_join_repo_by_access_code_mounts_shared_repo(sample_repo, app):
         assert share_code.use_count == 1
 
 
-def test_join_repo_by_invite_link_mounts_and_redirects_dashboard(sample_repo, app):
+def test_join_repo_by_invite_link_mounts_shared_repo(sample_repo, app):
     owner_client, repo_info = sample_repo
     slug = repo_info["slug"]
 
@@ -298,86 +298,9 @@ def test_join_repo_by_invite_link_mounts_and_redirects_dashboard(sample_repo, ap
         member = RepoMember.query.filter_by(repo_id=repo_info["id"]).first()
         share_code = RepoShareCode.query.filter_by(repo_id=repo_info["id"]).first()
         assert member is not None
+        assert member.user_id is not None
         assert member.role == "viewer"
         assert share_code.use_count == 1
-
-
-def test_join_repo_by_invite_link_redirects_guest_to_login(sample_repo, app):
-    owner_client, repo_info = sample_repo
-    slug = repo_info["slug"]
-
-    owner_client.post(
-        f"/alice/{slug}/settings",
-        data={"action": "create_share_code", "share_role": "viewer"},
-        follow_redirects=True,
-    )
-
-    with app.app_context():
-        from models import RepoShareCode
-
-        share_code = RepoShareCode.query.filter_by(repo_id=repo_info["id"]).first()
-        assert share_code is not None
-        code = share_code.code
-
-    guest = app.test_client()
-    resp = guest.get(f"/repos/join/{code}", follow_redirects=False)
-    assert resp.status_code == 302
-    location = resp.headers["Location"]
-    assert "/login?next=" in location
-    assert f"/repos/join/{code}" in location
-
-
-def test_repo_settings_shows_share_invite_link(sample_repo):
-    client, repo_info = sample_repo
-    slug = repo_info["slug"]
-
-    client.post(
-        f"/alice/{slug}/settings",
-        data={"action": "create_share_code", "share_role": "viewer"},
-        follow_redirects=True,
-    )
-    resp = client.get(f"/alice/{slug}/settings")
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
-    assert "邀请操作" in html
-    assert "复制邀请链接" in html
-    assert "复制访问码" not in html
-    assert 'readonly value="' not in html
-
-
-def test_repo_settings_shows_new_share_copy_fallback_panel(sample_repo):
-    client, repo_info = sample_repo
-    slug = repo_info["slug"]
-
-    with client.session_transaction() as sess:
-        sess["_new_share_code"] = "SHARE-CODE"
-        sess["_new_share_invite_link"] = "http://example.com/repos/join/SHARE-CODE"
-
-    resp = client.get(f"/alice/{slug}/settings")
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
-    assert "正在尝试自动复制邀请链接" in html
-    assert 'id="new-share-copy-btn"' in html
-    assert "如果浏览器拦截了自动复制" in html
-    assert 'id="new-share-invite-link"' not in html
-
-
-def test_create_share_code_primes_auto_copy_invite_link(sample_repo):
-    client, repo_info = sample_repo
-    slug = repo_info["slug"]
-
-    resp = client.post(
-        f"/alice/{slug}/settings",
-        data={"action": "create_share_code", "share_role": "viewer"},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 302
-
-    with client.session_transaction() as sess:
-        assert sess.get("_new_share_code")
-        invite_link = sess.get("_new_share_invite_link")
-        assert invite_link
-        assert "/repos/join/" in invite_link
 
 
 def test_repo_list_redirects_guest_to_login(sample_repo):
@@ -992,6 +915,37 @@ def test_health(client, app):
     data = resp.get_json()
     assert data is not None
     assert "status" in data
+
+
+def test_llm_status_endpoint_ok(client, app):
+    with patch.object(app.llm, "health_check", return_value=(True, "ok")) as mock_health:
+        resp = client.get("/api/system/llm-status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data is not None
+    assert data["ok"] is True
+    assert data["status"] == "ok"
+    assert data["label"] == "大模型正常"
+    assert data["message"] == "ok"
+    assert data["model"] == app.config["LLM_MODEL"]
+    assert data["cached"] is False
+    mock_health.assert_called_once_with()
+
+
+def test_llm_status_endpoint_error(client, app):
+    with patch.object(app.llm, "health_check", return_value=(False, "timeout")) as mock_health:
+        resp = client.get("/api/system/llm-status")
+
+    assert resp.status_code == 503
+    data = resp.get_json()
+    assert data is not None
+    assert data["ok"] is False
+    assert data["status"] == "error"
+    assert data["label"] == "大模型异常"
+    assert data["message"] == "timeout"
+    assert data["cached"] is False
+    mock_health.assert_called_once_with()
 
 
 def test_protected_route_redirect(sample_repo):

@@ -46,7 +46,6 @@ sshpass -p "$DEPLOY_PASSWORD" ssh -o StrictHostKeyChecking=no -p "$SERVER_PORT" 
     # 清空 migrations/ 再解压，避免被重命名/删除的 .sql 脚本在服务器残留
     rm -f migrations/*.sql
     tar xzf /tmp/llmwiki-deploy.tar.gz --exclude='**/._*' 2>/dev/null
-    .venv/bin/pip install -r requirements.txt >/tmp/llmwiki-pip-install.log
     install -m 644 deploy/llmwiki.service /etc/systemd/system/llmwiki.service
     .venv/bin/python manage.py migrate 2>&1 | tail -20
     systemctl daemon-reload

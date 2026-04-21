@@ -21,6 +21,18 @@
             <span>{{ site_name }}</span>
           </a>
         </li>
+        <li>
+          <div
+            id="llm-status-pill"
+            class="llm-status-pill is-loading"
+            data-status-url="{{ url_for('llm_status') }}"
+            aria-live="polite"
+            title="正在检查大模型服务状态"
+          >
+            <span class="llm-status-dot" aria-hidden="true"></span>
+            <span class="llm-status-text">大模型检测中</span>
+          </div>
+        </li>
       </ul>
       <ul>
         <li>

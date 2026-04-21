@@ -64,6 +64,7 @@ def test_guard_system_prompt_contains_core_rules():
         "无正文来源标注",
         "未知即未知",
         "不跨实体传染",
+        "行级原子性",
     ):
         assert key in GUARD_SYSTEM_PROMPT, f"guard 缺失规则：{key}"
 
@@ -136,6 +137,8 @@ def test_build_generic_user_prompt_basic():
     assert "narrative" in prompt
     # guard 指令要求 LLM 不在正文写文件名
     assert "请勿" in prompt and "文件名" in prompt
+    assert "逐行记录" in prompt
+    assert "不能跨行拼接" in prompt
 
 
 # ---------------------------------------------------------------------------

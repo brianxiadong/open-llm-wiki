@@ -90,6 +90,26 @@ def test_llm_chat_json_parse_error():
         assert client.chat_json([]) == {}
 
 
+def test_llm_health_check_success():
+    with patch("llm_client.OpenAI") as mock_openai_cls:
+        client = LLMClient("http://x", "k", "m", 100)
+        ok, message = client.health_check()
+
+    assert ok is True
+    assert message == "ok"
+    mock_openai_cls.return_value.models.list.assert_called_once_with()
+
+
+def test_llm_health_check_failure():
+    with patch("llm_client.OpenAI") as mock_openai_cls:
+        mock_openai_cls.return_value.models.list.side_effect = OpenAIError("llm down")
+        client = LLMClient("http://x", "k", "m", 100)
+        ok, message = client.health_check()
+
+    assert ok is False
+    assert "llm down" in message
+
+
 # --- MineruClient helpers ---
 
 

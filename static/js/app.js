@@ -158,4 +158,46 @@
     };
     return source;
   };
+
+  /* --- LLM status polling for header indicator --- */
+  var llmStatusPill = document.getElementById('llm-status-pill');
+  if (llmStatusPill && window.fetch) {
+    var llmStatusText = llmStatusPill.querySelector('.llm-status-text');
+    var llmStatusUrl = llmStatusPill.getAttribute('data-status-url');
+    var llmStatusTimer = null;
+
+    function setLlmStatus(state, text, title) {
+      llmStatusPill.classList.remove('is-loading', 'is-ok', 'is-error');
+      llmStatusPill.classList.add(state);
+      if (llmStatusText) llmStatusText.textContent = text;
+      if (title) llmStatusPill.setAttribute('title', title);
+    }
+
+    function refreshLlmStatus() {
+      if (!llmStatusUrl) return;
+      fetch(llmStatusUrl, { headers: { Accept: 'application/json' } })
+        .then(function (resp) {
+          return resp.json().catch(function () { return {}; }).then(function (data) {
+            return { ok: resp.ok, data: data || {} };
+          });
+        })
+        .then(function (result) {
+          var data = result.data || {};
+          var text = data.label || (result.ok ? '大模型正常' : '大模型异常');
+          var title = '模型：' + (data.model || 'unknown');
+          if (data.checked_at) title += ' · 检查时间：' + data.checked_at;
+          if (data.message && data.message !== 'ok') title += ' · ' + data.message;
+          setLlmStatus(result.ok ? 'is-ok' : 'is-error', text, title);
+        })
+        .catch(function () {
+          setLlmStatus('is-error', '大模型异常', '无法获取大模型状态');
+        })
+        .finally(function () {
+          window.clearTimeout(llmStatusTimer);
+          llmStatusTimer = window.setTimeout(refreshLlmStatus, 30000);
+        });
+    }
+
+    refreshLlmStatus();
+  }
 })();

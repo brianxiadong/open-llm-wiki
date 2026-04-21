@@ -341,6 +341,19 @@ def test_repo_settings_has_share_code_and_members_sections(client, app):
     assert "共享成员" in html
 
 
+def test_repo_settings_shows_invite_link_copy_button_without_access_code_copy(client, app):
+    _login(client, app)
+    _create_repo(client)
+    client.post(
+        "/fe_alice/fe-test/settings",
+        data={"action": "create_share_code", "share_role": "viewer"},
+        follow_redirects=True,
+    )
+    html = _html(client.get("/fe_alice/fe-test/settings"))
+    assert "复制邀请链接" in html
+    assert "复制访问码" not in html
+
+
 def test_user_settings_has_display_name(client, app):
     _login(client, app)
     html = _html(client.get("/user/settings"))
@@ -392,6 +405,12 @@ def test_health_returns_json(client):
     resp = client.get("/health")
     assert resp.status_code in (200, 503), f"Unexpected status {resp.status_code}"
     assert "status" in _html(resp)
+
+
+def test_base_template_has_llm_status_pill(client):
+    html = _html(client.get("/login"))
+    assert 'id="llm-status-pill"' in html
+    assert "/api/system/llm-status" in html
 
 
 # ── Upload creates task ──────────────────────────────────────
