@@ -1,0 +1,7 @@
+interface:
+  display_name: "知识库快捷命令"
+  short_description: "短命令 `/kb`，固定走内部知识库检索技能。"
+  default_prompt: "使用 $kb 将 `/kb` 后面的内容作为内部知识库问题，并严格委托给 $openllm-kb-search 处理，不要自行猜域名或改走其他通用工具。`/kb` 属于快捷直返模式：接口拿到 `answer` 后，只允许输出该 `answer` 原文，最多加 1 行极短的命中/路由说明；不要扩写成长文，不要重写表格、名单、时间安排或参数表。"
+
+policy:
+  allow_implicit_invocation: false

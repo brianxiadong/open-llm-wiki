@@ -1,7 +1,7 @@
 interface:
-  display_name: "Open LLM Wiki Query"
-  short_description: "为 OpenClaw 查询内部知识库并处理 token。"
-  default_prompt: "Use $openllm-kb-search to save an Open LLM Wiki token and answer an internal knowledge base question."
+  display_name: "内部知识库检索"
+  short_description: "通过 Open LLM Wiki 查询内部知识库 / 公司知识库 / 文档库，并仅把 token 保存到用户私有工作区。"
+  default_prompt: "使用 $openllm-kb-search 处理内部知识库、公司知识库、文档库、资料库相关问题；将用户的 Open LLM Wiki token 仅保存到该用户自己的 OpenClaw 子工作区，不要写到共享根目录。调用 `/api/v1/search` 后如果接口已经返回 `answer`，最终回复默认直接返回该 `answer` 原文，只允许补一行极短的命中/路由说明，不要二次改写、不要扩写长总结、不要重组表格或名单字段。"
 
 policy:
   allow_implicit_invocation: true
