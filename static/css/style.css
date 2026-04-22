@@ -150,7 +150,14 @@ textarea:focus-visible {
 }
 .brand i { font-size: 1.25rem; color: var(--brand); }
 
-.llm-status-pill {
+.header-status-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.system-status-pill {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
@@ -166,7 +173,7 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
-.llm-status-dot {
+.system-status-dot {
   width: 0.55rem;
   height: 0.55rem;
   border-radius: 999px;
@@ -175,28 +182,28 @@ textarea:focus-visible {
   flex: 0 0 auto;
 }
 
-.llm-status-pill.is-loading {
+.system-status-pill.is-loading {
   color: var(--text-muted);
 }
 
-.llm-status-pill.is-ok {
+.system-status-pill.is-ok {
   border-color: #86efac;
   background: #f0fdf4;
   color: #166534;
 }
 
-.llm-status-pill.is-ok .llm-status-dot {
+.system-status-pill.is-ok .system-status-dot {
   background: #16a34a;
   box-shadow: 0 0 0 0.2rem rgba(22, 163, 74, 0.14);
 }
 
-.llm-status-pill.is-error {
+.system-status-pill.is-error {
   border-color: #fecaca;
   background: #fef2f2;
   color: #b91c1c;
 }
 
-.llm-status-pill.is-error .llm-status-dot {
+.system-status-pill.is-error .system-status-dot {
   background: #dc2626;
   box-shadow: 0 0 0 0.2rem rgba(220, 38, 38, 0.14);
 }
@@ -935,7 +942,11 @@ dialog .btn-sm, dialog .btn-sm-primary { width: auto !important; flex: 0 0 auto;
     flex-wrap: wrap;
     row-gap: 0.5rem;
   }
-  .llm-status-pill {
+  .header-status-group {
+    width: 100%;
+    justify-content: center;
+  }
+  .system-status-pill {
     font-size: 0.78rem;
     padding: 0.35rem 0.65rem;
   }

@@ -684,6 +684,8 @@ def create_app() -> Flask:
     app.query_trace_logger = QueryTraceLogger(os.path.join(Config.DATA_DIR, "logs"))
     app._llm_status_cache = {"checked_at": 0.0, "payload": None}
     app._llm_status_lock = Lock()
+    app._dependencies_status_cache = {"checked_at": 0.0, "payload": None}
+    app._dependencies_status_lock = Lock()
 
     @app.context_processor
     def inject_admin():
@@ -765,6 +767,27 @@ def _register_error_handlers(app: Flask) -> None:
 
 
 def _register_routes(app: Flask) -> None:
+    def _build_dependency_status_title(
+        services: dict[str, dict[str, str | bool]],
+        checked_at: str,
+    ) -> str:
+        labels = {
+            "embedding": "Embedding",
+            "mineru": "MinerU",
+            "qdrant": "Qdrant",
+        }
+        parts: list[str] = []
+        for key in ("embedding", "mineru", "qdrant"):
+            service = services.get(key, {})
+            status_label = "正常" if service.get("ok") else "异常"
+            message = str(service.get("message") or "")
+            segment = f"{labels[key]}：{status_label}"
+            if message and message not in {"ok", "unavailable", "health check failed"}:
+                segment += f"（{message}）"
+            parts.append(segment)
+        parts.append(f"检查时间：{checked_at}")
+        return " · ".join(parts)
+
     def _probe_llm_status(force: bool = False) -> dict[str, object]:
         ttl_seconds = 0 if app.config.get("TESTING") else 20
         now = time.monotonic()
@@ -793,9 +816,107 @@ def _register_routes(app: Flask) -> None:
                 "message": message,
                 "model": Config.LLM_MODEL,
                 "checked_at": datetime.now(timezone.utc).isoformat(),
+                "title": "",
                 "cached": False,
             }
+            status_payload["title"] = (
+                f"模型：{Config.LLM_MODEL} · 检查时间：{status_payload['checked_at']}"
+            )
+            if message and message != "ok":
+                status_payload["title"] += f" · {message}"
             app._llm_status_cache = {"checked_at": now, "payload": status_payload}
+            return status_payload
+
+    def _probe_dependencies_status(force: bool = False) -> dict[str, object]:
+        ttl_seconds = 0 if app.config.get("TESTING") else 20
+        now = time.monotonic()
+        cache = app._dependencies_status_cache
+        payload = cache.get("payload")
+        checked_at = cache.get("checked_at", 0.0)
+        if not force and payload and (now - checked_at < ttl_seconds):
+            cached_payload = dict(payload)
+            cached_payload["cached"] = True
+            return cached_payload
+
+        with app._dependencies_status_lock:
+            cache = app._dependencies_status_cache
+            payload = cache.get("payload")
+            checked_at = cache.get("checked_at", 0.0)
+            if not force and payload and (now - checked_at < ttl_seconds):
+                cached_payload = dict(payload)
+                cached_payload["cached"] = True
+                return cached_payload
+
+            services: dict[str, dict[str, str | bool]] = {}
+
+            if app.qdrant:
+                try:
+                    app.qdrant._qdrant.get_collections()
+                    services["qdrant"] = {"ok": True, "status": "ok", "message": "ok"}
+                except Exception as exc:
+                    services["qdrant"] = {
+                        "ok": False,
+                        "status": "error",
+                        "message": str(exc),
+                    }
+            else:
+                services["qdrant"] = {
+                    "ok": False,
+                    "status": "error",
+                    "message": "unavailable",
+                }
+
+            try:
+                mineru_ok = app.mineru.health_check()
+                services["mineru"] = {
+                    "ok": mineru_ok,
+                    "status": "ok" if mineru_ok else "error",
+                    "message": "ok" if mineru_ok else "health check failed",
+                }
+            except Exception as exc:
+                services["mineru"] = {
+                    "ok": False,
+                    "status": "error",
+                    "message": str(exc),
+                }
+
+            if app.qdrant:
+                try:
+                    app.qdrant._embed("health-check")
+                    services["embedding"] = {
+                        "ok": True,
+                        "status": "ok",
+                        "message": "ok",
+                    }
+                except Exception as exc:
+                    services["embedding"] = {
+                        "ok": False,
+                        "status": "error",
+                        "message": str(exc),
+                    }
+            else:
+                services["embedding"] = {
+                    "ok": False,
+                    "status": "error",
+                    "message": "unavailable",
+                }
+
+            checked_at_iso = datetime.now(timezone.utc).isoformat()
+            all_ok = all(bool(service.get("ok")) for service in services.values())
+            status_payload = {
+                "ok": all_ok,
+                "status": "ok" if all_ok else "error",
+                "label": "组件正常" if all_ok else "组件异常",
+                "message": "ok" if all_ok else "部分组件异常",
+                "services": services,
+                "checked_at": checked_at_iso,
+                "title": _build_dependency_status_title(services, checked_at_iso),
+                "cached": False,
+            }
+            app._dependencies_status_cache = {
+                "checked_at": now,
+                "payload": status_payload,
+            }
             return status_payload
 
     # ── Root ──────────────────────────────────────────────────────────
@@ -854,6 +975,11 @@ def _register_routes(app: Flask) -> None:
     @app.route("/api/system/llm-status")
     def llm_status():
         payload = _probe_llm_status()
+        return jsonify(payload), 200 if payload["ok"] else 503
+
+    @app.route("/api/system/dependencies-status")
+    def dependencies_status():
+        payload = _probe_dependencies_status()
         return jsonify(payload), 200 if payload["ok"] else 503
 
     # ── Auth ──────────────────────────────────────────────────────────

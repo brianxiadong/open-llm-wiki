@@ -159,45 +159,45 @@
     return source;
   };
 
-  /* --- LLM status polling for header indicator --- */
-  var llmStatusPill = document.getElementById('llm-status-pill');
-  if (llmStatusPill && window.fetch) {
-    var llmStatusText = llmStatusPill.querySelector('.llm-status-text');
-    var llmStatusUrl = llmStatusPill.getAttribute('data-status-url');
-    var llmStatusTimer = null;
+  /* --- Header system status polling --- */
+  if (window.fetch) {
+    document.querySelectorAll('.system-status-pill[data-status-url]').forEach(function (pill) {
+      var textEl = pill.querySelector('.system-status-text');
+      var statusUrl = pill.getAttribute('data-status-url');
+      var timer = null;
 
-    function setLlmStatus(state, text, title) {
-      llmStatusPill.classList.remove('is-loading', 'is-ok', 'is-error');
-      llmStatusPill.classList.add(state);
-      if (llmStatusText) llmStatusText.textContent = text;
-      if (title) llmStatusPill.setAttribute('title', title);
-    }
+      function setStatus(state, text, title) {
+        pill.classList.remove('is-loading', 'is-ok', 'is-error');
+        pill.classList.add(state);
+        if (textEl) textEl.textContent = text;
+        if (title) pill.setAttribute('title', title);
+      }
 
-    function refreshLlmStatus() {
-      if (!llmStatusUrl) return;
-      fetch(llmStatusUrl, { headers: { Accept: 'application/json' } })
-        .then(function (resp) {
-          return resp.json().catch(function () { return {}; }).then(function (data) {
-            return { ok: resp.ok, data: data || {} };
+      function refreshStatus() {
+        if (!statusUrl) return;
+        fetch(statusUrl, { headers: { Accept: 'application/json' } })
+          .then(function (resp) {
+            return resp.json().catch(function () { return {}; }).then(function (data) {
+              return { ok: resp.ok, data: data || {} };
+            });
+          })
+          .then(function (result) {
+            var data = result.data || {};
+            var text = data.label || (result.ok ? '状态正常' : '状态异常');
+            var title = data.title || data.message || text;
+            setStatus(result.ok ? 'is-ok' : 'is-error', text, title);
+          })
+          .catch(function () {
+            var fallbackText = pill.id === 'dependencies-status-pill' ? '组件异常' : '大模型异常';
+            setStatus('is-error', fallbackText, '无法获取系统状态');
+          })
+          .finally(function () {
+            window.clearTimeout(timer);
+            timer = window.setTimeout(refreshStatus, 30000);
           });
-        })
-        .then(function (result) {
-          var data = result.data || {};
-          var text = data.label || (result.ok ? '大模型正常' : '大模型异常');
-          var title = '模型：' + (data.model || 'unknown');
-          if (data.checked_at) title += ' · 检查时间：' + data.checked_at;
-          if (data.message && data.message !== 'ok') title += ' · ' + data.message;
-          setLlmStatus(result.ok ? 'is-ok' : 'is-error', text, title);
-        })
-        .catch(function () {
-          setLlmStatus('is-error', '大模型异常', '无法获取大模型状态');
-        })
-        .finally(function () {
-          window.clearTimeout(llmStatusTimer);
-          llmStatusTimer = window.setTimeout(refreshLlmStatus, 30000);
-        });
-    }
+      }
 
-    refreshLlmStatus();
+      refreshStatus();
+    });
   }
 })();

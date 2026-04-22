@@ -410,7 +410,9 @@ def test_health_returns_json(client):
 def test_base_template_has_llm_status_pill(client):
     html = _html(client.get("/login"))
     assert 'id="llm-status-pill"' in html
+    assert 'id="dependencies-status-pill"' in html
     assert "/api/system/llm-status" in html
+    assert "/api/system/dependencies-status" in html
 
 
 # ── Upload creates task ──────────────────────────────────────

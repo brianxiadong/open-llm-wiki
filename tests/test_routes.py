@@ -3,7 +3,7 @@
 import io
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -946,6 +946,55 @@ def test_llm_status_endpoint_error(client, app):
     assert data["message"] == "timeout"
     assert data["cached"] is False
     mock_health.assert_called_once_with()
+
+
+def test_dependencies_status_endpoint_ok(client, app):
+    mock_qdrant = MagicMock()
+    mock_qdrant.get_collections.return_value = MagicMock()
+    app.qdrant._qdrant = mock_qdrant
+
+    with patch.object(app.mineru, "health_check", return_value=True) as mock_mineru, \
+         patch.object(app.qdrant, "_embed", return_value=[0.1, 0.2]) as mock_embed:
+        resp = client.get("/api/system/dependencies-status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data is not None
+    assert data["ok"] is True
+    assert data["status"] == "ok"
+    assert data["label"] == "组件正常"
+    assert data["services"]["embedding"]["ok"] is True
+    assert data["services"]["mineru"]["ok"] is True
+    assert data["services"]["qdrant"]["ok"] is True
+    assert data["cached"] is False
+    mock_mineru.assert_called_once_with()
+    mock_embed.assert_called_once_with("health-check")
+    mock_qdrant.get_collections.assert_called_once_with()
+
+
+def test_dependencies_status_endpoint_error(client, app):
+    mock_qdrant = MagicMock()
+    mock_qdrant.get_collections.side_effect = RuntimeError("qdrant down")
+    app.qdrant._qdrant = mock_qdrant
+
+    with patch.object(app.mineru, "health_check", return_value=False) as mock_mineru, \
+         patch.object(app.qdrant, "_embed", side_effect=RuntimeError("embed down")) as mock_embed:
+        resp = client.get("/api/system/dependencies-status")
+
+    assert resp.status_code == 503
+    data = resp.get_json()
+    assert data is not None
+    assert data["ok"] is False
+    assert data["status"] == "error"
+    assert data["label"] == "组件异常"
+    assert data["message"] == "部分组件异常"
+    assert data["services"]["embedding"]["ok"] is False
+    assert data["services"]["mineru"]["ok"] is False
+    assert data["services"]["qdrant"]["ok"] is False
+    assert data["cached"] is False
+    mock_mineru.assert_called_once_with()
+    mock_embed.assert_called_once_with("health-check")
+    mock_qdrant.get_collections.assert_called_once_with()
 
 
 def test_protected_route_redirect(sample_repo):

@@ -22,15 +22,27 @@
           </a>
         </li>
         <li>
-          <div
-            id="llm-status-pill"
-            class="llm-status-pill is-loading"
-            data-status-url="{{ url_for('llm_status') }}"
-            aria-live="polite"
-            title="正在检查大模型服务状态"
-          >
-            <span class="llm-status-dot" aria-hidden="true"></span>
-            <span class="llm-status-text">大模型检测中</span>
+          <div class="header-status-group" aria-label="系统状态">
+            <div
+              id="llm-status-pill"
+              class="system-status-pill is-loading"
+              data-status-url="{{ url_for('llm_status') }}"
+              aria-live="polite"
+              title="正在检查大模型服务状态"
+            >
+              <span class="system-status-dot" aria-hidden="true"></span>
+              <span class="system-status-text">大模型检测中</span>
+            </div>
+            <div
+              id="dependencies-status-pill"
+              class="system-status-pill is-loading"
+              data-status-url="{{ url_for('dependencies_status') }}"
+              aria-live="polite"
+              title="正在检查 Embedding、MinerU、Qdrant 状态"
+            >
+              <span class="system-status-dot" aria-hidden="true"></span>
+              <span class="system-status-text">组件检测中</span>
+            </div>
           </div>
         </li>
       </ul>
