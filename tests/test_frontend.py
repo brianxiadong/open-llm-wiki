@@ -120,6 +120,16 @@ def test_dashboard_chat_tools_have_visible_labels(client, app):
     assert "清空对话" in html
 
 
+def test_dashboard_sidebar_uses_non_wrapping_titles_and_inner_scroll(client, app):
+    _login(client, app)
+    _create_repo(client)
+    html = _html(client.get("/fe_alice/fe-test"))
+    assert "kb-nav-heading-title" in html
+    assert "kb-nav-heading-count" in html
+    assert "kb-nav-scroll-sources" in html
+    assert "kb-nav-scroll-wiki" in html
+
+
 def test_dashboard_recovers_missing_overview_link(client, app):
     _login(client, app)
     _create_repo(client)
@@ -149,7 +159,9 @@ def test_dashboard_resyncs_stale_repo_counts(client, app):
         db.session.commit()
 
     html = _html(client.get("/fe_alice/fe-test"))
-    assert "Wiki (4)" in html
+    assert "kb-nav-heading-title" in html
+    assert "Wiki" in html
+    assert "(4)" in html
 
 
 def test_dashboard_chat_config_is_valid_json_script(client, app):

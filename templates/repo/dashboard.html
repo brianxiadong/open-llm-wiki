@@ -85,78 +85,94 @@
     {# Source Files #}
     <div class="kb-nav-section">
       <div class="kb-nav-heading">
-        <i class="lucide-files" aria-hidden="true"></i>
-        <span>文档 ({{ repo.source_count }})</span>
-        <a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}"
-           class="kb-nav-more" title="管理全部文档">
-          <i class="lucide-arrow-right" aria-hidden="true"></i>
-        </a>
+        <div class="kb-nav-heading-main">
+          <i class="lucide-files" aria-hidden="true"></i>
+          <span class="kb-nav-heading-title">
+            文档 <span class="kb-nav-heading-count">({{ repo.source_count }})</span>
+          </span>
+        </div>
+        <div class="kb-nav-heading-actions">
+          <a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}"
+             class="kb-nav-more" title="管理全部文档">
+            <i class="lucide-arrow-right" aria-hidden="true"></i>
+          </a>
+        </div>
       </div>
-      <ul class="kb-nav-list">
-        {% for src in sources[:8] %}
-        <li class="kb-source-item" {% if src.task_id %}data-task-id="{{ src.task_id }}"{% endif %}>
-          <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
-             title="{{ src.filename }}">
-            <i class="lucide-file" aria-hidden="true"></i>
-            {{ src.filename }}
-          </a>
-          {% if src.task_status == 'queued' %}
-          <span class="kb-status-badge kb-status-queued" title="排队中">排队</span>
-          {% elif src.task_status == 'running' %}
-          <span class="kb-status-badge kb-status-running" title="{{ src.task_progress_msg }}">{{ src.task_progress }}%</span>
-          {% elif src.ingested %}
-          <span class="kb-status-dot kb-status-done" title="已摄入"></span>
+      <div class="kb-nav-scroll kb-nav-scroll-sources">
+        <ul class="kb-nav-list">
+          {% for src in sources[:8] %}
+          <li class="kb-source-item" {% if src.task_id %}data-task-id="{{ src.task_id }}"{% endif %}>
+            <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
+               title="{{ src.filename }}">
+              <i class="lucide-file" aria-hidden="true"></i>
+              {{ src.filename }}
+            </a>
+            {% if src.task_status == 'queued' %}
+            <span class="kb-status-badge kb-status-queued" title="排队中">排队</span>
+            {% elif src.task_status == 'running' %}
+            <span class="kb-status-badge kb-status-running" title="{{ src.task_progress_msg }}">{{ src.task_progress }}%</span>
+            {% elif src.ingested %}
+            <span class="kb-status-dot kb-status-done" title="已摄入"></span>
+            {% endif %}
+          </li>
+          {% else %}
+          <li class="kb-nav-empty">暂无文档</li>
+          {% endfor %}
+          {% if sources|length > 8 %}
+          <li class="kb-nav-overflow">
+            <a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}">
+              查看全部 {{ sources|length }} 个文档 →
+            </a>
+          </li>
           {% endif %}
-        </li>
-        {% else %}
-        <li class="kb-nav-empty">暂无文档</li>
-        {% endfor %}
-        {% if sources|length > 8 %}
-        <li class="kb-nav-overflow">
-          <a href="{{ url_for('source.list_sources', username=username, repo_slug=repo.slug) }}">
-            查看全部 {{ sources|length }} 个文档 →
-          </a>
-        </li>
-        {% endif %}
-      </ul>
+        </ul>
+      </div>
     </div>
 
     {# Wiki Pages #}
     <div class="kb-nav-section">
       <div class="kb-nav-heading">
-        <i class="lucide-book-open" aria-hidden="true"></i>
-        <span>Wiki ({{ repo.page_count }})</span>
-        <a href="{{ url_for('wiki.wiki_pages', username=username, repo_slug=repo.slug) }}"
-           class="action-btn" style="font-size:0.75rem;padding:0.15rem 0.5rem;margin-left:auto;">
-          <i class="lucide-layout-list" aria-hidden="true"></i> 管理
-        </a>
-        <a href="{{ url_for('wiki.search', username=username, repo_slug=repo.slug) }}"
-           class="kb-nav-more" title="搜索 Wiki">
-          <i class="lucide-search" aria-hidden="true"></i>
-        </a>
-      </div>
-      {% for type_key, type_label, icon_class in type_groups %}
-      {% set typed_pages = pages|selectattr("type", "equalto", type_key)|list %}
-      {% if typed_pages %}
-      <div class="kb-nav-group">
-        <div class="kb-nav-group-title">
-          <i class="{{ icon_class }}" aria-hidden="true"></i> {{ type_label }}
+        <div class="kb-nav-heading-main">
+          <i class="lucide-book-open" aria-hidden="true"></i>
+          <span class="kb-nav-heading-title">
+            Wiki <span class="kb-nav-heading-count">({{ repo.page_count }})</span>
+          </span>
         </div>
-        <ul class="kb-nav-list">
-          {% for page in typed_pages %}
-          <li>
-            <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=page.slug) }}">
-              {{ page.title }}
-            </a>
-          </li>
-          {% endfor %}
-        </ul>
+        <div class="kb-nav-heading-actions">
+          <a href="{{ url_for('wiki.wiki_pages', username=username, repo_slug=repo.slug) }}"
+             class="action-btn kb-nav-action-btn">
+            <i class="lucide-layout-list" aria-hidden="true"></i> 管理
+          </a>
+          <a href="{{ url_for('wiki.search', username=username, repo_slug=repo.slug) }}"
+             class="kb-nav-more" title="搜索 Wiki">
+            <i class="lucide-search" aria-hidden="true"></i>
+          </a>
+        </div>
       </div>
-      {% endif %}
-      {% endfor %}
-      {% if repo.page_count == 0 %}
-      <p class="kb-nav-empty">上传文档后自动生成 Wiki</p>
-      {% endif %}
+      <div class="kb-nav-scroll kb-nav-scroll-wiki">
+        {% for type_key, type_label, icon_class in type_groups %}
+        {% set typed_pages = pages|selectattr("type", "equalto", type_key)|list %}
+        {% if typed_pages %}
+        <div class="kb-nav-group">
+          <div class="kb-nav-group-title">
+            <i class="{{ icon_class }}" aria-hidden="true"></i> {{ type_label }}
+          </div>
+          <ul class="kb-nav-list">
+            {% for page in typed_pages %}
+            <li>
+              <a href="{{ url_for('wiki.view_page', username=username, repo_slug=repo.slug, page_slug=page.slug) }}">
+                {{ page.title }}
+              </a>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        {% endfor %}
+        {% if repo.page_count == 0 %}
+        <p class="kb-nav-empty">上传文档后自动生成 Wiki</p>
+        {% endif %}
+      </div>
     </div>
   </aside>
 

@@ -114,25 +114,76 @@
 
 /* Nav sections */
 .kb-nav-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: linear-gradient(180deg, var(--surface-panel) 0%, #f7fbff 100%);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg); padding: 0.75rem;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), var(--shadow-sm);
 }
 .kb-nav-heading {
-  display: flex; align-items: center; gap: 0.35rem;
+  display: flex; align-items: center; gap: 0.5rem;
   font-size: 0.78rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.04em; color: var(--text-muted);
   padding: 0 0.25rem 0.4rem; border-bottom: 1px solid var(--border);
   margin-bottom: 0.4rem;
 }
 .kb-nav-heading i { color: var(--brand); }
-.kb-nav-heading span { flex: 1; }
+.kb-nav-heading-main {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1;
+}
+.kb-nav-heading-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2rem;
+  min-width: 0;
+  white-space: nowrap;
+}
+.kb-nav-heading-count {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.kb-nav-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.kb-nav-action-btn {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+}
 .kb-nav-more {
   color: var(--text-muted); font-size: 0.85rem;
   text-decoration: none; display: flex; align-items: center;
 }
 .kb-nav-more:hover { color: var(--brand); }
+.kb-nav-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.kb-nav-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.kb-nav-scroll::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.55);
+  border-radius: 999px;
+}
+.kb-nav-scroll-sources {
+  max-height: min(32vh, 16rem);
+}
+.kb-nav-scroll-wiki {
+  max-height: min(48vh, 26rem);
+}
 
 .kb-nav-group { margin-top: 0.4rem; }
 .kb-nav-group-title {
@@ -511,6 +562,11 @@
     padding-right: 0; padding-bottom: 0.5rem;
   }
   .kb-sidebar > * { min-width: 200px; flex-shrink: 0; }
+  .kb-nav-scroll-sources,
+  .kb-nav-scroll-wiki {
+    max-height: none;
+    overflow: visible;
+  }
   .kb-chat { min-height: 60vh; }
   .chat-msg { max-width: 95%; }
   .chat-utility-btn {
