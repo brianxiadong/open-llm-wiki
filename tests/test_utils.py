@@ -17,6 +17,7 @@ from utils import (
     get_repo_path,
     list_raw_sources,
     list_wiki_pages,
+    normalize_inline_bullet_markdown,
     render_markdown,
     safe_upload_basename,
     slugify,
@@ -64,6 +65,26 @@ def test_safe_upload_basename_strips_path_and_forbidden():
     assert safe_upload_basename("a/b:c*d?.txt") == "b_c_d_.txt"
     assert safe_upload_basename(None) == ""
     assert safe_upload_basename("..") == ""
+
+
+def test_normalize_inline_bullet_markdown_leaves_code_fences():
+    raw = "```\n* line in code\n```\n\n说明： * 日期: 1 * 区域: 东北"
+    norm = normalize_inline_bullet_markdown(raw)
+    assert "```\n* line in code\n```" in norm
+    assert "说明：\n\n* 日期:" in norm
+    assert "\n* 区域:" in norm
+
+
+def test_render_markdown_inline_star_bullets_become_list():
+    text = (
+        "该条记录的具体运营指标如下： * 日期: 2025/7/27 * 区域: 东北 "
+        "* 满意度: 91.3 * 是否故障: 否"
+    )
+    fm, html = render_markdown(text)
+    assert fm == {}
+    assert "<ul" in html
+    assert "<li" in html
+    assert "日期" in html and "东北" in html and "91.3" in html
 
 
 def test_render_markdown_basic():

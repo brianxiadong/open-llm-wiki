@@ -83,6 +83,31 @@ def safe_upload_basename(filename: str | None) -> str:
     return name
 
 
+def normalize_inline_bullet_markdown(text: str) -> str:
+    """把段落内连写的「* 列表项」拆成标准 Markdown 列表行。
+
+    模型常输出「如下： * 日期: … * 区域: …」单行；CommonMark 要求 ``*`` 位于行首，
+    否则不会解析为 ``<ul>``，页面上会显示为一串带星号的正文。
+    跳过 fenced code 块，避免误改示例代码。
+    """
+    if not text or "*" not in text:
+        return text
+    parts = re.split(r"(```[\s\S]*?```)", text)
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1:
+            out.append(part)
+            continue
+        part = re.sub(r"([：:])\s+\*", r"\1\n\n*", part)
+        part = re.sub(
+            r"(?<![\n*])[ \t]+\*\s+(?=[\u4e00-\u9fffA-Za-z0-9（(])",
+            "\n* ",
+            part,
+        )
+        out.append(part)
+    return "".join(out)
+
+
 def render_markdown(text: str, wiki_base_url: str = "") -> tuple[dict, str]:
     """Render markdown to HTML.
 
@@ -114,6 +139,8 @@ def render_markdown(text: str, wiki_base_url: str = "") -> tuple[dict, str]:
             lambda m: f"[{m.group(1)}]({wiki_base_url}/{m.group(2)})",
             content,
         )
+
+    content = normalize_inline_bullet_markdown(content)
 
     extensions = [
         CodeHiliteExtension(css_class="highlight"),
