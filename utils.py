@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import threading
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 import markdown as md_lib
 import yaml
@@ -16,12 +18,69 @@ from markdown.extensions.tables import TableExtension
 from markdown.extensions.toc import TocExtension
 
 
+def get_app_tz() -> ZoneInfo:
+    """应用展示用 IANA 时区（来自 ``Config.APP_TIMEZONE``，默认东八区）。"""
+    from config import Config
+
+    name = (getattr(Config, "APP_TIMEZONE", None) or "Asia/Shanghai").strip()
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return ZoneInfo("Asia/Shanghai")
+
+
+def utc_to_local(dt: datetime | None) -> datetime | None:
+    """将 UTC（含无 tz 的 naive，按 UTC 理解）转为应用本地时区。"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(get_app_tz())
+
+
+def local_now() -> datetime:
+    """当前时刻在应用本地时区下的带时区 datetime。"""
+    return datetime.now(timezone.utc).astimezone(get_app_tz())
+
+
+def local_today_date_str() -> str:
+    """应用本地时区的 ``YYYY-MM-DD``（日志分卷、Wiki frontmatter 等）。"""
+    return local_now().strftime("%Y-%m-%d")
+
+
 def slugify(text: str) -> str:
     """Convert text to URL-safe slug."""
     text = text.lower().strip()
     text = re.sub(r"[^\w\s-]", "", text)
     text = re.sub(r"[-\s]+", "-", text)
     return text.strip("-")
+
+
+def safe_upload_basename(filename: str | None) -> str:
+    """Sanitize an uploaded file name for local storage while preserving Unicode (e.g. CJK).
+
+    Werkzeug's ``secure_filename`` strips all non-ASCII characters; this replaces that
+    behavior for user-visible originals. Removes path components, NULs, and characters
+    unsafe on common filesystems (``/\\:*?"<>|`` and ASCII control chars). Trailing
+    spaces/dots (invalid on Windows) are stripped.
+    """
+    if not filename:
+        return ""
+    name = str(filename).replace("\x00", "")
+    # Normalize separators so basename strips any uploaded path tricks
+    name = os.path.basename(name.replace("\\", "/"))
+    if name in (".", ".."):
+        return ""
+    chars: list[str] = []
+    for ch in name:
+        o = ord(ch)
+        if ch in '/\\:*?"<>|' or o < 32:
+            chars.append("_")
+        else:
+            chars.append(ch)
+    name = "".join(chars).strip()
+    name = name.rstrip(" .")
+    return name
 
 
 def render_markdown(text: str, wiki_base_url: str = "") -> tuple[dict, str]:
@@ -517,7 +576,7 @@ class QueryTraceLogger:
         os.makedirs(log_dir, exist_ok=True)
 
     def _log_path(self) -> str:
-        today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+        today = local_today_date_str()
         return os.path.join(self.log_dir, f"query_trace_{today}.jsonl")
 
     def write(
@@ -535,7 +594,7 @@ class QueryTraceLogger:
         answer: str,
     ) -> None:
         record = {
-            "ts": datetime.now(tz=timezone.utc).isoformat(),
+            "ts": local_now().isoformat(),
             "repo": repo,
             "user": user or "anonymous",
             "question": question,
@@ -560,3 +619,51 @@ class QueryTraceLogger:
         with self._lock:
             with open(self._log_path(), "a", encoding="utf-8") as f:
                 f.write(line + "\n")
+
+
+def _format_deploy_revision_file(raw: str) -> str | None:
+    """Parse ``deploy/revision.txt``: line 1 = git short SHA, line 2 = deploy time (optional)."""
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    if len(lines) == 1:
+        return lines[0]
+    return f"{lines[0]} · {lines[1]}"
+
+
+def get_app_revision() -> str:
+    """Human-visible build/deployment revision (git short SHA when available).
+
+    Resolution order:
+    1. ``APP_REVISION`` environment variable (manual override)
+    2. ``deploy/revision.txt`` (written by ``scripts/deploy.sh``: SHA + deploy timestamp, Asia/Shanghai)
+    3. ``git rev-parse --short HEAD`` when ``.git`` exists (local dev, no timestamp)
+    4. ``unknown``
+    """
+    override = os.environ.get("APP_REVISION", "").strip()
+    if override:
+        return override
+    base = os.path.dirname(os.path.abspath(__file__))
+    rev_file = os.path.join(base, "deploy", "revision.txt")
+    try:
+        if os.path.isfile(rev_file):
+            with open(rev_file, encoding="utf-8") as f:
+                v = _format_deploy_revision_file(f.read())
+            if v:
+                return v
+    except OSError:
+        pass
+    if os.path.isdir(os.path.join(base, ".git")):
+        try:
+            proc = subprocess.run(
+                ["git", "-C", base, "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                return proc.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return "unknown"

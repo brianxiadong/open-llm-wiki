@@ -9,6 +9,8 @@ __pycache__/
 dist/
 build/
 ._*
+deploy/revision.txt
+internal-kb-assistant-wiki.zip
 tests/screenshots/
 .cursor/
 .superpowers/

@@ -154,7 +154,7 @@ class ConversationSession(db.Model):
 
 
 class AuditLog(db.Model):
-    """审计日志：登录、删库、改 Schema 等关键操作"""
+    """审计日志：登录/Token、知识库写操作、上传与摄入、检索（含流式/API）、Schema 等"""
     __tablename__ = "audit_logs"
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)

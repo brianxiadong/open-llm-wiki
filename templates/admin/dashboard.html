@@ -56,7 +56,7 @@
     <tr>
       <td>{{ u.username }}</td>
       <td>{{ u.display_name or '—' }}</td>
-      <td>{{ u.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>{{ u.created_at|localtime('%Y-%m-%d %H:%M') }}</td>
       <td><a href="{{ url_for('repo.list_repos', username=u.username) }}">查看知识库</a></td>
     </tr>
     {% endfor %}

@@ -3,8 +3,8 @@
 设计目标：
 - 与现有 Qdrant dense 检索互补（数字/ID/专名），为 hybrid retrieval 提供关键词通道。
 - 语料由调用方通过 ``corpus_loader`` 提供，避免把持久化细节带进核心包：
-  - 服务端：`QdrantService.scroll_all_chunks(repo_id)` 从 Qdrant payload 拉取；
-  - Confidential 客户端：同名方法从本地 SQLite `chunk_map` 拉取。
+  - 服务端：`QdrantService.scroll_all_chunks` / `scroll_all_facts` 从 Qdrant payload 拉取；
+  - Confidential 客户端：同名方法从本地 SQLite `chunk_map` / `fact_map` 拉取。
 - 中文分词使用 ``jieba``（纯 Python 无原生依赖），失败时回退到字符 bi-gram。
 - 按 ``(repo_id, signature)`` 惰性缓存；signature 由调用方传入（通常是 chunk 数量或
   ingest 时间戳），变更即失效，无需显式刷新。

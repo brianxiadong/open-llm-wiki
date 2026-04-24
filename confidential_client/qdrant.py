@@ -321,6 +321,35 @@ class ConfidentialQdrantService(QdrantService):
             for row in rows
         ]
 
+    def scroll_all_facts(self, repo_id: int) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT record_id, source_file, source_markdown_filename, sheet,
+                       row_index, fields_json, fact_text
+                FROM fact_map WHERE repo_id = ?
+                """,
+                (repo_id,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                fields = json.loads(row["fields_json"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                fields = {}
+            if not isinstance(fields, dict):
+                fields = {}
+            out.append({
+                "record_id": row["record_id"],
+                "source_file": row["source_file"],
+                "source_markdown_filename": row["source_markdown_filename"],
+                "sheet": row["sheet"],
+                "row_index": int(row["row_index"] or 0),
+                "fields": fields,
+                "fact_text": row["fact_text"] or "",
+            })
+        return out
+
     def delete_page_chunks(self, repo_id: int, filename: str) -> None:
         with self._connect() as conn:
             rows = conn.execute(

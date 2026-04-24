@@ -7,6 +7,7 @@ import re
 import secrets
 import shutil
 import time
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from urllib.parse import urlparse
@@ -35,7 +36,6 @@ from api_router import preselect_candidates, route_to_repo
 from description_generator import generate_description as _generate_description
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import or_
-from werkzeug.utils import secure_filename
 
 from config import Config
 from exceptions import MineruClientError, QdrantServiceError
@@ -65,12 +65,17 @@ from utils import (
     ensure_repo_dirs,
     extract_links,
     file_md5,
+    get_app_revision,
     get_backlinks,
     get_repo_path,
     list_raw_sources,
     list_wiki_pages,
+    local_now,
+    local_today_date_str,
     render_markdown,
+    safe_upload_basename,
     slugify,
+    utc_to_local,
     write_jsonl,
 )
 from wiki_engine import WikiEngine
@@ -187,8 +192,6 @@ def _get_repo_role(repo: Repo, user: User | None = None) -> str | None:
         if not current_user.is_authenticated:
             return None
         user = current_user
-    if _is_admin() and user.id == current_user.id:
-        return "owner"
     if user.id == repo.user_id:
         return "owner"
     membership = _get_repo_member(repo, user)
@@ -196,18 +199,32 @@ def _get_repo_role(repo: Repo, user: User | None = None) -> str | None:
 
 
 def _can_edit_repo(repo: Repo, user: User | None = None) -> bool:
+    """写权限：仅知识库所有者或显式 editor 成员。公开浏览、viewer 成员均不授予写权限。"""
     role = _get_repo_role(repo, user)
     return role in {"owner", "editor"}
+
+
+def _can_use_editor_ui(repo: Repo) -> bool:
+    """是否展示上传/删除/编辑等控件。写权限持有者或站点管理员（运维兜底）。"""
+    return _can_edit_repo(repo) or _is_admin()
 
 
 def _can_manage_sessions(repo: Repo) -> bool:
     if not current_user.is_authenticated:
         return False
+    if _is_admin():
+        return True
     return repo.is_public or _get_repo_role(repo) is not None
 
 
 def _can_access_repo(repo: Repo) -> bool:
-    return repo.is_public or _get_repo_role(repo) is not None
+    if repo.is_public:
+        return True
+    if not current_user.is_authenticated:
+        return False
+    if _is_admin():
+        return True
+    return _get_repo_role(repo) is not None
 
 
 def _can_user_access_repo(repo: Repo, user: User | None) -> bool:
@@ -228,8 +245,9 @@ def _can_user_access_repo(repo: Repo, user: User | None) -> bool:
 def _require_editor(repo: Repo) -> None:
     if not current_user.is_authenticated:
         abort(403)
-    if not _can_edit_repo(repo):
-        abort(403)
+    if _can_edit_repo(repo) or _is_admin():
+        return
+    abort(403)
 
 
 def _ensure_repo_access(repo: Repo) -> None:
@@ -367,17 +385,37 @@ def _send_verification_email(user: User) -> None:
     )
 
 
+def _audit_detail_trunc(text: str | None, max_len: int = 480) -> str | None:
+    if not text:
+        return None
+    s = str(text).replace("\n", " ").replace("\r", " ").strip()
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 1] + "…"
+
+
 def _audit(
     action: str,
     resource_type: str | None = None,
     resource_id: str | None = None,
     detail: str | None = None,
+    *,
+    audit_user_id: int | None = None,
+    audit_username: str | None = None,
 ) -> None:
-    """写入审计日志，失败静默。"""
+    """写入审计日志，失败静默。
+
+    Web 请求默认取 ``current_user``；API Token 等场景可显式传入 ``audit_user_id`` /
+    ``audit_username``（建议成对传入）。
+    """
     try:
         from models import AuditLog
-        uid = current_user.id if current_user and current_user.is_authenticated else None
-        uname = current_user.username if uid else None
+        if audit_user_id is not None or audit_username is not None:
+            uid = audit_user_id
+            uname = audit_username
+        else:
+            uid = current_user.id if current_user and current_user.is_authenticated else None
+            uname = current_user.username if uid else None
         ip = request.remote_addr if request else None
         log = AuditLog(
             user_id=uid,
@@ -450,7 +488,7 @@ CORE_WIKI_PAGE_SLUGS = {"index", "log", "overview"}
 
 
 def _default_wiki_page_content(repo_name: str, page_slug: str) -> str:
-    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now_str = local_today_date_str()
     if page_slug == "index":
         return (
             f"---\ntitle: 首页\ntype: index\nupdated: {now_str}\n---\n\n"
@@ -629,6 +667,13 @@ def create_app() -> Flask:
     login_manager.login_view = "auth.login"
     login_manager.login_message = "请先登录"
 
+    @app.template_filter("localtime")
+    def _jinja_localtime(value, fmt="%Y-%m-%d %H:%M"):
+        if value is None:
+            return ""
+        loc = utc_to_local(value)
+        return loc.strftime(fmt)
+
     app.llm = LLMClient(
         Config.LLM_API_BASE,
         Config.LLM_API_KEY,
@@ -692,6 +737,7 @@ def create_app() -> Flask:
         return {
             "admin_username": Config.ADMIN_USERNAME,
             "site_name": Config.SITE_NAME,
+            "app_revision": get_app_revision(),
             "csrf_token": _get_csrf_token,
         }
 
@@ -809,18 +855,19 @@ def _register_routes(app: Flask) -> None:
                 return cached_payload
 
             ok, message = app.llm.health_check()
+            checked_local = local_now().strftime("%Y-%m-%d %H:%M:%S")
             status_payload = {
                 "ok": ok,
                 "status": "ok" if ok else "error",
                 "label": "大模型正常" if ok else "大模型异常",
                 "message": message,
                 "model": Config.LLM_MODEL,
-                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "checked_at": local_now().isoformat(),
                 "title": "",
                 "cached": False,
             }
             status_payload["title"] = (
-                f"模型：{Config.LLM_MODEL} · 检查时间：{status_payload['checked_at']}"
+                f"模型：{Config.LLM_MODEL} · 检查时间：{checked_local}"
             )
             if message and message != "ok":
                 status_payload["title"] += f" · {message}"
@@ -901,7 +948,8 @@ def _register_routes(app: Flask) -> None:
                     "message": "unavailable",
                 }
 
-            checked_at_iso = datetime.now(timezone.utc).isoformat()
+            checked_at_iso = local_now().isoformat()
+            checked_local = local_now().strftime("%Y-%m-%d %H:%M:%S")
             all_ok = all(bool(service.get("ok")) for service in services.values())
             status_payload = {
                 "ok": all_ok,
@@ -910,7 +958,7 @@ def _register_routes(app: Flask) -> None:
                 "message": "ok" if all_ok else "部分组件异常",
                 "services": services,
                 "checked_at": checked_at_iso,
-                "title": _build_dependency_status_title(services, checked_at_iso),
+                "title": _build_dependency_status_title(services, checked_local),
                 "cached": False,
             }
             app._dependencies_status_cache = {
@@ -968,7 +1016,11 @@ def _register_routes(app: Flask) -> None:
 
         all_ok = all(v == "ok" for v in checks.values())
         return (
-            jsonify(status="ok" if all_ok else "degraded", checks=checks),
+            jsonify(
+                status="ok" if all_ok else "degraded",
+                checks=checks,
+                revision=get_app_revision(),
+            ),
             200 if all_ok else 503,
         )
 
@@ -1593,7 +1645,7 @@ def _register_routes(app: Flask) -> None:
             page_content=page_content,
             active_page=active_page,
             is_owner=_is_owner(repo),
-            can_edit=_can_edit_repo(repo),
+            can_edit=_can_use_editor_ui(repo),
             can_manage_sessions=_can_manage_sessions(repo),
             readme_html=readme_html,
         )
@@ -1618,12 +1670,24 @@ def _register_routes(app: Flask) -> None:
                 repo.description = request.form.get("description", "").strip()
                 repo.is_public = "is_public" in request.form
                 db.session.commit()
+                _audit(
+                    "update_repo_info",
+                    "repo",
+                    repo.id,
+                    f"{username}/{repo_slug} public={repo.is_public}",
+                )
                 flash("设置已保存", "success")
             elif action == "update_schema":
                 content = request.form.get("schema_content", "")
                 os.makedirs(os.path.dirname(schema_path), exist_ok=True)
                 with open(schema_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                _audit(
+                    "update_schema",
+                    "repo",
+                    repo.id,
+                    f"{username}/{repo_slug} chars={len(content)}",
+                )
                 flash("Schema 已保存", "success")
             elif action == "update_readme":
                 readme_content = request.form.get("readme", "")
@@ -1650,6 +1714,12 @@ def _register_routes(app: Flask) -> None:
                     )
                     session["_new_share_code"] = share_code.code
                     session["_new_share_invite_link"] = invite_link
+                    _audit(
+                        "create_share_code",
+                        "repo",
+                        repo.id,
+                        f"{username}/{repo_slug} role={role} code={share_code.code}",
+                    )
                     flash(
                         f"已生成共享邀请（{REPO_ROLE_LABELS.get(role, role)}）。邀请链接会自动复制，直接发给相关同事即可。",
                         "success",
@@ -2011,7 +2081,7 @@ def _register_routes(app: Flask) -> None:
             content=html,
             backlinks=backlinks,
             is_owner=_is_owner(repo),
-            can_edit=_can_edit_repo(repo),
+            can_edit=_can_use_editor_ui(repo),
         )
 
     @wiki_bp.route("/<username>/<repo_slug>/graph")
@@ -2096,7 +2166,7 @@ def _register_routes(app: Flask) -> None:
             all_pages=all_pages,
             sorted_groups=sorted_groups,
             is_owner=_is_owner(repo),
-            can_edit=_can_edit_repo(repo),
+            can_edit=_can_use_editor_ui(repo),
         )
 
     @wiki_bp.route("/<username>/<repo_slug>/wiki/<page_slug>/edit", methods=["GET", "POST"])
@@ -2173,6 +2243,12 @@ def _register_routes(app: Flask) -> None:
                 except Exception:
                     pass
             _sync_repo_counts(repo, username)
+            _audit(
+                "delete_wiki_page",
+                "repo",
+                repo.id,
+                f"{username}/{repo_slug} page={page_slug}.md",
+            )
             flash(f"页面 {page_slug} 已删除", "success")
         else:
             flash("页面不存在", "error")
@@ -2297,7 +2373,7 @@ def _register_routes(app: Flask) -> None:
             repo=repo,
             sources=_enrich_sources(raw_dir, repo),
             is_owner=_is_owner(repo),
-            can_edit=_can_edit_repo(repo),
+            can_edit=_can_use_editor_ui(repo),
             can_download=current_user.is_authenticated and _can_access_repo(repo),
         )
 
@@ -2334,7 +2410,7 @@ def _register_routes(app: Flask) -> None:
             source=source,
             content=html,
             is_owner=_is_owner(repo),
-            can_edit=_can_edit_repo(repo),
+            can_edit=_can_use_editor_ui(repo),
             can_download=current_user.is_authenticated and _can_access_repo(repo),
         )
 
@@ -2351,7 +2427,7 @@ def _register_routes(app: Flask) -> None:
                 url_for("source.list_sources", username=username, repo_slug=repo_slug)
             )
 
-        safe_name = secure_filename(uploaded.filename)
+        safe_name = safe_upload_basename(uploaded.filename)
         if not safe_name or not _allowed_file(safe_name):
             flash("不支持的文件格式", "error")
             return redirect(
@@ -2441,7 +2517,11 @@ def _register_routes(app: Flask) -> None:
         elif ext in MINERU_EXTENSIONS:
             temp_dir = os.path.join(base, "temp")
             os.makedirs(temp_dir, exist_ok=True)
-            temp_path = os.path.join(temp_dir, safe_name)
+            # 临时文件用纯 ASCII 文件名：避免 MinerU / 反向代理对 multipart 中文文件名的兼容问题；
+            # 展示用 md 与 originals 仍使用用户原始 safe_name。
+            import uuid as _uuid
+
+            temp_path = os.path.join(temp_dir, f"{_uuid.uuid4().hex}.{ext}")
             uploaded.save(temp_path)
 
             # Convert .doc → .docx via LibreOffice before sending to MinerU
@@ -2513,6 +2593,12 @@ def _register_routes(app: Flask) -> None:
             )
             db.session.add(task)
             db.session.commit()
+            _audit(
+                "upload_source",
+                "repo",
+                repo.id,
+                f"{username}/{repo_slug} file={saved_name} task_id={task.id}",
+            )
 
             if is_xhr:
                 return jsonify(ok=True, filename=saved_name, task_id=task.id)
@@ -2582,6 +2668,12 @@ def _register_routes(app: Flask) -> None:
         if os.path.isfile(filepath):
             os.remove(filepath)
             removed = _purge_source_wiki(current_app._get_current_object(), repo, username, source_id)
+            _audit(
+                "delete_source",
+                "repo",
+                repo.id,
+                f"{username}/{repo_slug} file={source_id} purged_pages={removed}",
+            )
             flash(f"已删除 {source_id}（清理了 {removed} 个关联 Wiki 页面）", "success")
         else:
             flash("文件不存在", "error")
@@ -2605,7 +2697,7 @@ def _register_routes(app: Flask) -> None:
                     "source.list_sources", username=username, repo_slug=repo_slug
                 )
             )
-        safe_new = secure_filename(new_name)
+        safe_new = safe_upload_basename(new_name)
         if not safe_new:
             flash("文件名包含非法字符", "error")
             return redirect(
@@ -2628,6 +2720,12 @@ def _register_routes(app: Flask) -> None:
             task = Task(repo_id=repo.id, type="ingest", status="queued", input_data=safe_new)
             db.session.add(task)
             db.session.commit()
+            _audit(
+                "rename_source",
+                "repo",
+                repo.id,
+                f"{username}/{repo_slug} {source_id!r}→{safe_new!r} task_id={task.id}",
+            )
             flash(f"已重命名为 {safe_new}，已排队重新摄入（#{task.id}）", "success")
         return redirect(
             url_for("source.list_sources", username=username, repo_slug=repo_slug)
@@ -2648,12 +2746,19 @@ def _register_routes(app: Flask) -> None:
         purged_wiki = 0
         app_obj = current_app._get_current_object()
         for fn in filenames:
-            fp = os.path.join(raw_dir, secure_filename(fn))
+            fp = os.path.join(raw_dir, safe_upload_basename(fn))
             if os.path.isfile(fp):
                 os.remove(fp)
-                purged_wiki += _purge_source_wiki(app_obj, repo, username, secure_filename(fn))
+                purged_wiki += _purge_source_wiki(app_obj, repo, username, safe_upload_basename(fn))
                 deleted += 1
         _sync_repo_counts(repo, username)
+        if deleted:
+            _audit(
+                "batch_delete_sources",
+                "repo",
+                repo.id,
+                f"{username}/{repo_slug} n={deleted} purged_wiki={purged_wiki}",
+            )
         flash(f"已删除 {deleted} 个文件，清理了 {purged_wiki} 个关联 Wiki 页面", "success")
         return redirect(
             url_for("source.list_sources", username=username, repo_slug=repo_slug)
@@ -2695,6 +2800,12 @@ def _register_routes(app: Flask) -> None:
             queued_count += 1
         if queued_count:
             db.session.commit()
+            _audit(
+                "batch_ingest",
+                "repo",
+                repo.id,
+                f"{username}/{repo_slug} queued={queued_count}",
+            )
         flash(f"已排队 {queued_count} 个摄入任务", "success" if queued_count else "info")
         return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
 
@@ -2756,6 +2867,12 @@ def _register_routes(app: Flask) -> None:
         db.session.add(task)
         db.session.commit()
         _sync_repo_counts(repo, username)
+        _audit(
+            "import_url",
+            "repo",
+            repo.id,
+            _audit_detail_trunc(f"{username}/{repo_slug} url={url} → {save_name} task_id={task.id}"),
+        )
         flash(f"已导入 {save_name}，摄入任务已排队（#{task.id}）", "success")
         return redirect(url_for("source.list_sources", username=username, repo_slug=repo_slug))
 
@@ -2777,6 +2894,12 @@ def _register_routes(app: Flask) -> None:
         task = Task(repo_id=repo.id, type="ingest", status="queued", input_data=source_id)
         db.session.add(task)
         db.session.commit()
+        _audit(
+            "queue_ingest",
+            "repo",
+            repo.id,
+            f"{username}/{repo_slug} source={source_id} task_id={task.id}",
+        )
 
         flash(f"摄入任务已排队（#{task.id}）", "success")
         return redirect(
@@ -2869,7 +2992,7 @@ def _register_routes(app: Flask) -> None:
             repo=repo,
             tasks=tasks,
             is_owner=_is_owner(repo),
-            can_edit=_can_edit_repo(repo),
+            can_edit=_can_use_editor_ui(repo),
         )
 
     @ops_bp.route("/api/tasks/<int:task_id>/status")
@@ -2940,7 +3063,7 @@ def _register_routes(app: Flask) -> None:
             "ops/query.html",
             username=username,
             repo=repo,
-            can_edit=_can_edit_repo(repo),
+            can_edit=_can_use_editor_ui(repo),
         )
 
     @ops_bp.route(
@@ -2954,6 +3077,9 @@ def _register_routes(app: Flask) -> None:
             abort(403)
         data = request.get_json(silent=True) or {}
         question = data.get("q", "").strip()
+        _reasoning_mode = (data.get("reasoning_mode") or "standard").strip().lower()
+        if _reasoning_mode not in ("standard", "deep", "react"):
+            _reasoning_mode = "standard"
         session_key = data.get("session_key", "")
         history: list[dict] = []
         if session_key and current_user.is_authenticated:
@@ -3014,11 +3140,34 @@ def _register_routes(app: Flask) -> None:
             try:
                 from models import QueryLog
                 _pre_conf = pre_confidence if isinstance(pre_confidence, dict) else {}
+                _pre_rm = (data.get("reasoning_mode") or "standard").strip().lower()
+                if _pre_rm not in ("standard", "deep", "react"):
+                    _pre_rm = "standard"
+                _pre_subq = data.get("_sub_questions") or []
+                if not isinstance(_pre_subq, list):
+                    _pre_subq = []
+                _pre_react = data.get("_react_trace") or []
+                if not isinstance(_pre_react, list):
+                    _pre_react = []
+                _pre_critique = data.get("_retrieval_critique") or []
+                if not isinstance(_pre_critique, list):
+                    _pre_critique = []
                 _pre_retrieval = {
                     "wiki": [{"filename": e.get("filename", ""), "title": e.get("title", ""), "reason": e.get("reason", "")} for e in pre_wiki_ev],
                     "chunks": [{"filename": e.get("filename", ""), "score": e.get("score"), "snippet": (e.get("snippet") or "")[:300]} for e in pre_chunk_ev],
                     "facts": [{"source_file": e.get("source_file", ""), "score": e.get("score"), "fields": e.get("fields", {})} for e in pre_fact_ev],
+                    "reasoning_mode": _pre_rm,
+                    "sub_questions": _pre_subq,
+                    "react_trace": _pre_react,
+                    "retrieval_critique": _pre_critique,
                 }
+                _pre_qlog_mode = (
+                    "deep"
+                    if _pre_rm == "deep"
+                    else "react"
+                    if _pre_rm == "react"
+                    else "stream"
+                )
                 _pre_ql = QueryLog(
                     trace_id=_pre_trace_id,
                     repo_id=repo.id,
@@ -3033,7 +3182,7 @@ def _register_routes(app: Flask) -> None:
                     used_chunk_ids=_json.dumps([e.get("chunk_id", "") for e in pre_chunk_ev], ensure_ascii=False),
                     evidence_summary=pre_ev_summary,
                     retrieval_json=_json.dumps(_pre_retrieval, ensure_ascii=False),
-                    query_mode="stream",
+                    query_mode=_pre_qlog_mode,
                 )
                 db.session.add(_pre_ql)
                 db.session.commit()
@@ -3074,6 +3223,7 @@ def _register_routes(app: Flask) -> None:
             result = current_app.wiki_engine.query_with_evidence(
                 repo, username, question, _wiki_base_url(username, repo_slug),
                 history=history[-6:] if history else None,
+                reasoning_mode=_reasoning_mode,
             )
         except Exception as exc:
             logger.exception("Query failed for repo %s", repo.id)
@@ -3112,6 +3262,10 @@ def _register_routes(app: Flask) -> None:
                     {"source_file": e.get("source_file", ""), "score": e.get("score"), "fields": e.get("fields", {})}
                     for e in _fact_ev
                 ],
+                "reasoning_mode": result.get("reasoning_mode", _reasoning_mode),
+                "sub_questions": result.get("sub_questions") or [],
+                "react_trace": result.get("react_trace") or [],
+                "retrieval_critique": result.get("retrieval_critique") or [],
             }
             ql = QueryLog(
                 trace_id=_trace_id,
@@ -3169,6 +3323,13 @@ def _register_routes(app: Flask) -> None:
         referenced = result.get("referenced_pages", [])
         references = [_fn_to_ref(fn) for fn in referenced]
 
+        _audit(
+            "kb_query",
+            "repo",
+            repo.id,
+            _audit_detail_trunc(question, 480),
+        )
+
         return jsonify(
             html=answer_html,
             markdown=result.get("markdown", ""),
@@ -3195,15 +3356,31 @@ def _register_routes(app: Flask) -> None:
         question = request.args.get("q", "").strip()
         if not question:
             return jsonify(error="请输入问题"), 400
+        _stream_rm = (request.args.get("reasoning_mode") or "standard").strip().lower()
+        if _stream_rm not in ("standard", "deep", "react"):
+            _stream_rm = "standard"
+
+        _audit(
+            "kb_query_stream",
+            "repo",
+            repo.id,
+            _audit_detail_trunc(question, 480),
+        )
+
+        # 流式响应在 generate() 里才跑；此时请求级 DB session 可能已 teardown，
+        # 不能继续用 ORM 的 Repo 实例（会 DetachedInstanceError）。只传标量快照。
+        _repo_stream = SimpleNamespace(id=int(repo.id), slug=str(repo.slug))
 
         def generate():
             try:
-                for event_dict in current_app.wiki_engine.query_stream(repo, username, question):
+                for event_dict in current_app.wiki_engine.query_stream(
+                    _repo_stream, username, question, reasoning_mode=_stream_rm
+                ):
                     event = event_dict["event"]
                     data = json.dumps(event_dict["data"], ensure_ascii=False)
                     yield f"event: {event}\ndata: {data}\n\n"
             except Exception as exc:
-                logger.exception("query_stream error for repo %s", repo.id)
+                logger.exception("query_stream error for repo %s", _repo_stream.id)
                 yield f"event: error\ndata: {json.dumps({'message': str(exc)})}\n\n"
 
         return Response(
@@ -3228,7 +3405,7 @@ def _register_routes(app: Flask) -> None:
 
         slug = slugify(query_text) if query_text else "query-result"
         slug = slug or "query-result"
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now_str = local_today_date_str()
 
         if not content.startswith("---"):
             content = (
@@ -3267,6 +3444,12 @@ def _register_routes(app: Flask) -> None:
 
         _sync_repo_counts(repo, username)
         flash(f"已保存为 Wiki 页面: {filename}", "success")
+        _audit(
+            "save_query_as_wiki",
+            "repo",
+            repo.id,
+            _audit_detail_trunc(f"{username}/{repo_slug} file={filename}"),
+        )
         return redirect(
             url_for(
                 "wiki.view_page",
@@ -3422,7 +3605,9 @@ def _register_routes(app: Flask) -> None:
         return jsonify(sessions=[{
             "key": s.session_key,
             "title": s.title,
-            "updated_at": s.updated_at.strftime("%Y-%m-%d %H:%M"),
+            "updated_at": utc_to_local(s.updated_at).strftime("%Y-%m-%d %H:%M")
+            if s.updated_at
+            else "",
             "message_count": len(json.loads(s.messages_json or "[]")) // 2,
         } for s in sessions])
 
@@ -3565,7 +3750,7 @@ def _register_routes(app: Flask) -> None:
             "is_public": bool(repo.is_public),
             "source_count": repo.source_count,
             "page_count": repo.page_count,
-            "updated_at": repo.updated_at.isoformat() if repo.updated_at else None,
+            "updated_at": utc_to_local(repo.updated_at).isoformat() if repo.updated_at else None,
             "full_name": f"{owner_username}/{repo.slug}" if owner_username else repo.slug,
         }
         if include_description:
@@ -3610,8 +3795,8 @@ def _register_routes(app: Flask) -> None:
                 "name": token.name,
                 "prefix": token.token_prefix,
                 "scopes": [s.strip() for s in (token.scopes or "").split(",") if s.strip()],
-                "expires_at": token.expires_at.isoformat() if token.expires_at else None,
-                "last_used_at": token.last_used_at.isoformat() if token.last_used_at else None,
+                "expires_at": utc_to_local(token.expires_at).isoformat() if token.expires_at else None,
+                "last_used_at": utc_to_local(token.last_used_at).isoformat() if token.last_used_at else None,
             },
         )
 
@@ -3861,6 +4046,15 @@ def _register_routes(app: Flask) -> None:
             db.session.commit()
         except Exception as exc:  # noqa: BLE001
             current_app.logger.warning("[api_v1] persist query log failed: %s", exc)
+
+        _audit(
+            "api_kb_search",
+            "repo",
+            repo.id,
+            _audit_detail_trunc(query, 480),
+            audit_user_id=g.api_user.id,
+            audit_username=g.api_user.username,
+        )
 
         return jsonify(body)
 

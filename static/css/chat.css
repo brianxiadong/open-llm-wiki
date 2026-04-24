@@ -527,6 +527,28 @@
 .chat-input-row:focus-within {
   border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-bg);
 }
+.chat-input-row .chat-reasoning-label {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  align-self: center;
+}
+.chat-input-row #chat-reasoning-mode {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0.4rem 0.45rem;
+  background: var(--surface-soft);
+  cursor: pointer;
+  max-width: 7.5rem;
+  line-height: 1.2;
+}
+.chat-input-row #chat-reasoning-mode:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px var(--brand-bg);
+}
 .chat-input-row textarea {
   flex: 1; border: none !important; background: transparent !important;
   box-shadow: none !important; resize: none; padding: 0.85rem 0;

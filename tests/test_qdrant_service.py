@@ -189,6 +189,32 @@ def test_scroll_all_chunks_iterates_pages(qdrant_service):
     }]
 
 
+def test_scroll_all_facts_iterates_pages(qdrant_service):
+    svc, mock_client = qdrant_service
+    mock_client.collection_exists.return_value = True
+    point = MagicMock()
+    point.payload = {
+        "record_id": "rec1",
+        "source_file": "s.csv",
+        "source_markdown_filename": "s.csv",
+        "sheet": "S1",
+        "row_index": 2,
+        "fields": {"地区": "华东"},
+        "fact_text": "note",
+    }
+    mock_client.scroll.side_effect = [([point], None)]
+    out = svc.scroll_all_facts(repo_id=7)
+    assert out == [{
+        "record_id": "rec1",
+        "source_file": "s.csv",
+        "source_markdown_filename": "s.csv",
+        "sheet": "S1",
+        "row_index": 2,
+        "fields": {"地区": "华东"},
+        "fact_text": "note",
+    }]
+
+
 def test_fact_embed_text_contains_sheet_and_row(qdrant_service):
     svc, _ = qdrant_service
     text = svc._normalize_fact_embed_text(

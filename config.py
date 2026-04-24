@@ -47,6 +47,11 @@ class Config:
     RAG_MAX_CHUNKS_PER_FILE = int(os.environ.get("RAG_MAX_CHUNKS_PER_FILE", "2"))
     RAG_RRF_K = int(os.environ.get("RAG_RRF_K", "60"))
     RAG_ENABLE_BM25 = os.environ.get("RAG_ENABLE_BM25", "true").lower() == "true"
+    RAG_BM25_TOP_K = int(os.environ.get("RAG_BM25_TOP_K", "20"))
+    RAG_ENABLE_FACT_KEYWORD = os.environ.get("RAG_ENABLE_FACT_KEYWORD", "true").lower() == "true"
+    RAG_FACT_KEYWORD_TOP_K = int(os.environ.get("RAG_FACT_KEYWORD_TOP_K", "100"))
+    RAG_FACT_KEYWORD_MAX_RECORDS = int(os.environ.get("RAG_FACT_KEYWORD_MAX_RECORDS", "50000"))
+    RAG_FACT_SEARCH_TEXT_CHARS = int(os.environ.get("RAG_FACT_SEARCH_TEXT_CHARS", "2000"))
     RAG_ENABLE_HYDE = os.environ.get("RAG_ENABLE_HYDE", "false").lower() == "true"
     RAG_CONTEXT_CHUNK_CHARS = int(os.environ.get("RAG_CONTEXT_CHUNK_CHARS", "700"))
     RAG_CONTEXT_EXPAND_NEIGHBORS = int(os.environ.get("RAG_CONTEXT_EXPAND_NEIGHBORS", "1"))
@@ -74,6 +79,8 @@ class Config:
     ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
     SITE_NAME = os.environ.get("SITE_NAME", "Open LLM Wiki")
     APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
+    # IANA 时区名，用于页脚/模板/API 展示、查询追溯日志分卷、Wiki 内嵌日期等（库内仍存 UTC）
+    APP_TIMEZONE = os.environ.get("APP_TIMEZONE", "Asia/Shanghai")
 
     MAIL_HOST = os.environ.get("MAIL_HOST", "")
     MAIL_PORT = int(os.environ.get("MAIL_PORT", "465"))

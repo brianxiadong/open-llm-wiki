@@ -224,6 +224,40 @@ def test_confidential_qdrant_fact_upsert_batches_large_payloads(confidential_qdr
     assert all(len(call.kwargs["points"]) <= service.UPSERT_BATCH_SIZE for call in fact_calls)
 
 
+def test_confidential_qdrant_scroll_all_facts_reads_local_fact_map(confidential_qdrant):
+    service, _ = confidential_qdrant
+
+    service.upsert_fact_records(
+        repo_id=12,
+        source_filename="sales.md",
+        records=[
+            {
+                "record_id": "csv:2",
+                "source_file": "sales.csv",
+                "source_markdown_filename": "sales.md",
+                "sheet": "CSV",
+                "row_index": 2,
+                "fields": {"地区": "华东", "收入": 1200},
+                "fact_text": "来源=sales.csv; 表=CSV; 行=2; 地区=华东; 收入=1200",
+            }
+        ],
+    )
+
+    out = service.scroll_all_facts(repo_id=12)
+
+    assert out == [
+        {
+            "record_id": "csv:2",
+            "source_file": "sales.csv",
+            "source_markdown_filename": "sales.md",
+            "sheet": "CSV",
+            "row_index": 2,
+            "fields": {"地区": "华东", "收入": 1200},
+            "fact_text": "来源=sales.csv; 表=CSV; 行=2; 地区=华东; 收入=1200",
+        }
+    ]
+
+
 def test_confidential_runtime_records_fact_progress_events(tmp_path):
     repo_dir = tmp_path / "repo"
     source_path = tmp_path / "finance.md"

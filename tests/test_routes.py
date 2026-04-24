@@ -649,6 +649,41 @@ def test_public_sources_list_accessible_without_login(sample_repo):
     assert resp.status_code == 200
 
 
+def test_public_repo_other_logged_in_user_has_no_write_ui(sample_repo, app):
+    """他人公开知识库：登录用户仅浏览，不应出现上传/批量删除等写操作控件。"""
+    client_alice, repo_info = sample_repo
+    slug = repo_info["slug"]
+    client_alice.post(
+        f"/alice/{slug}/settings",
+        data={"action": "update_info", "name": "Test KB", "description": "", "is_public": "on"},
+    )
+    with app.app_context():
+        from models import User, db
+
+        bob = User(username="bob", email="bob@example.com", display_name="Bob")
+        bob.set_password("password123")
+        bob.email_verified = True
+        db.session.add(bob)
+        db.session.commit()
+
+    client_bob = app.test_client()
+    _login_as(client_bob, "bob", "password123")
+
+    html = client_bob.get(f"/alice/{slug}/sources").data.decode()
+    assert 'type="file"' not in html
+    assert 'id="upload-form"' not in html
+    # 内联脚本仍含 getElementById('batch-delete-btn')，断言真实按钮 id 不出现
+    assert 'id="batch-delete-btn"' not in html
+
+    dash = client_bob.get(f"/alice/{slug}").data.decode()
+    assert "kb-upload-zone" not in dash
+    assert '"canSave": true' not in dash
+    assert '"canSave": false' in dash or '"canSave": false' in dash.replace(" ", "")
+
+    overview = client_bob.get(f"/alice/{slug}/wiki/overview").data.decode()
+    assert "page-actions" not in overview
+
+
 def test_upload_md_file(sample_repo):
     client, repo_info = sample_repo
     slug = repo_info["slug"]
@@ -656,6 +691,43 @@ def test_upload_md_file(sample_repo):
     data = {"file": (io.BytesIO(b"# Test content\n"), "test.md")}
     resp = client.post(url, data=data, content_type="multipart/form-data", follow_redirects=False)
     assert resp.status_code == 302
+
+
+def test_upload_writes_audit_log(sample_repo, app):
+    from models import AuditLog
+
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    rid = repo_info["id"]
+    url = f"/alice/{slug}/sources/upload"
+    client.post(
+        url,
+        data={"file": (io.BytesIO(b"# Audit upload\n"), "audit-up.md")},
+        content_type="multipart/form-data",
+        follow_redirects=False,
+    )
+    with app.app_context():
+        row = (
+            AuditLog.query.filter_by(action="upload_source", resource_id=str(rid))
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+    assert row is not None
+    assert "audit-up.md" in (row.detail or "")
+
+
+def test_upload_md_preserves_cjk_in_filename(sample_repo, app):
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    url = f"/alice/{slug}/sources/upload"
+    name = "0--中文--250930.md"
+    data = {"file": (io.BytesIO(b"# CJK name\n"), name)}
+    resp = client.post(url, data=data, content_type="multipart/form-data", follow_redirects=False)
+    assert resp.status_code == 302
+    from config import Config
+
+    raw_path = os.path.join(Config.DATA_DIR, "alice", slug, "raw", name)
+    assert os.path.isfile(raw_path)
 
 
 def test_upload_csv_creates_markdown_and_fact_records(sample_repo, app):
@@ -915,6 +987,9 @@ def test_health(client, app):
     data = resp.get_json()
     assert data is not None
     assert "status" in data
+    assert "revision" in data
+    assert isinstance(data["revision"], str)
+    assert len(data["revision"]) >= 1
 
 
 def test_llm_status_endpoint_ok(client, app):
@@ -1129,7 +1204,7 @@ def test_query_stream_route_with_q(sample_repo, app):
     slug = repo_info["slug"]
     from unittest.mock import patch
 
-    def fake_query_stream(repo, username, question):
+    def fake_query_stream(repo, username, question, reasoning_mode="standard"):
         yield {"event": "progress", "data": {"message": "检索中", "percent": 10}}
         yield {"event": "answer_chunk", "data": {"chunk": "Hello"}}
         yield {"event": "done", "data": {"answer": "Hello", "wiki_sources": [],
@@ -1274,6 +1349,39 @@ def test_upload_pdf_via_mineru_saves_original_and_markdown(sample_repo, app):
         base = os.path.join(Config.DATA_DIR, "alice", slug, "raw")
         assert os.path.isfile(os.path.join(base, "paper.md"))
         assert os.path.isfile(os.path.join(base, "originals", "paper.pdf"))
+
+
+def test_upload_docx_cjk_name_uses_ascii_temp_path_for_mineru(sample_repo, app):
+    """中文文件名 docx：MinerU 请求使用 UUID 临时名，产出 md/originals 仍保留原名。"""
+    import re
+
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    cjk_name = "具身智能世界模型在2026的进展和发展方向.docx"
+    captured: dict[str, str] = {}
+
+    def _capture(path: str) -> dict:
+        captured["path"] = path
+        return {"md_content": "# 正文\n"}
+
+    with patch.object(app.mineru, "parse_file", side_effect=_capture):
+        resp = client.post(
+            f"/alice/{slug}/sources/upload",
+            data={"file": (io.BytesIO(b"PK\x03\x04 fake"), cjk_name)},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+    norm = captured["path"].replace("\\", "/")
+    assert re.search(r"/[0-9a-f]{32}\.docx$", norm), norm
+
+    with app.app_context():
+        from config import Config
+
+        base = os.path.join(Config.DATA_DIR, "alice", slug, "raw")
+        stem = "具身智能世界模型在2026的进展和发展方向"
+        assert os.path.isfile(os.path.join(base, f"{stem}.md"))
+        assert os.path.isfile(os.path.join(base, "originals", cjk_name))
 
 
 def test_download_source_prefers_original_file(sample_repo, app):
@@ -1724,7 +1832,7 @@ def test_query_stream_done_has_evidence(sample_repo, app):
     client, repo_info = sample_repo
     slug = repo_info["slug"]
 
-    def fake_stream(repo, username, question):
+    def fake_stream(repo, username, question, reasoning_mode="standard"):
         yield {"event": "progress", "data": {"message": "检索中", "percent": 10}}
         yield {"event": "answer_chunk", "data": {"chunk": "Hi"}}
         yield {"event": "done", "data": {
@@ -1743,6 +1851,44 @@ def test_query_stream_done_has_evidence(sample_repo, app):
     assert b"wiki_evidence" in resp.data
     assert b"chunk_evidence" in resp.data
     assert b"fact_evidence" in resp.data
+
+
+def test_query_stream_passes_reasoning_mode_to_engine(sample_repo, app):
+    from unittest.mock import patch, MagicMock
+
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    mock_stream = MagicMock(return_value=iter(()))
+    with patch.object(app.wiki_engine, "query_stream", mock_stream):
+        client.get(f"/alice/{slug}/query/stream?q=hi&reasoning_mode=deep")
+    mock_stream.assert_called_once()
+    assert mock_stream.call_args.kwargs.get("reasoning_mode") == "deep"
+    mock_stream.reset_mock()
+    with patch.object(app.wiki_engine, "query_stream", mock_stream):
+        client.get(f"/alice/{slug}/query/stream?q=hi&reasoning_mode=react")
+    mock_stream.assert_called_once()
+    assert mock_stream.call_args.kwargs.get("reasoning_mode") == "react"
+
+
+def test_query_stream_writes_audit_log(sample_repo, app):
+    from unittest.mock import patch, MagicMock
+
+    from models import AuditLog
+
+    client, repo_info = sample_repo
+    slug = repo_info["slug"]
+    rid = repo_info["id"]
+    mock_stream = MagicMock(return_value=iter(()))
+    with patch.object(app.wiki_engine, "query_stream", mock_stream):
+        client.get(f"/alice/{slug}/query/stream?q=audit-stream-q")
+    with app.app_context():
+        row = (
+            AuditLog.query.filter_by(action="kb_query_stream", resource_id=str(rid))
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+    assert row is not None
+    assert "audit-stream-q" in (row.detail or "")
 
 
 # -- API Token -----------------------------------------------------------------

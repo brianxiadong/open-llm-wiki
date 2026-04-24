@@ -134,7 +134,7 @@
         <tr data-filename="{{ src.filename }}"
             data-size="{{ src.size_kb }}"
             data-status="{{ 'ingested' if src.ingested else 'pending' }}"
-            data-date="{{ src.created_at.strftime('%Y%m%d%H%M') if src.created_at else '0' }}">
+            data-date="{{ src.created_at|localtime('%Y%m%d%H%M') if src.created_at else '0' }}">
           {% if can_edit %}
           <td>
             <input type="checkbox" name="files" value="{{ src.filename }}" class="source-cb">
@@ -170,7 +170,7 @@
             <span class="badge badge-muted">待摄入</span>
             {% endif %}
           </td>
-          <td class="source-date">{{ src.created_at.strftime('%Y-%m-%d %H:%M') if src.created_at else '-' }}</td>
+          <td class="source-date">{{ src.created_at|localtime('%Y-%m-%d %H:%M') if src.created_at else '-' }}</td>
           <td class="source-actions">
             <a href="{{ url_for('source.view_source', username=username, repo_slug=repo.slug, source_id=src.id) }}"
                class="btn-sm" title="预览">
@@ -230,6 +230,9 @@
       <button type="button" class="flash-close" onclick="document.getElementById('rename-dialog').close()" aria-label="关闭">&times;</button>
     </header>
     <form method="POST" id="rename-form">
+      {% if csrf_token is defined %}
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% endif %}
       <label for="rename-input">新文件名</label>
       <input type="text" id="rename-input" name="new_name" required>
       <div class="rename-dialog-actions">
@@ -337,6 +340,16 @@
     }
   }
 
+  function appendCsrfToForm(form) {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    if (!meta || !meta.getAttribute('content')) return;
+    var inp = document.createElement('input');
+    inp.type = 'hidden';
+    inp.name = 'csrf_token';
+    inp.value = meta.getAttribute('content');
+    form.appendChild(inp);
+  }
+
   /* ── 全选 / 批量删除 ── */
   var selectAll = document.getElementById('select-all');
   var batchBtn = document.getElementById('batch-delete-btn');
@@ -379,6 +392,7 @@
         inp.type = 'hidden'; inp.name = 'files'; inp.value = cb.value;
         form.appendChild(inp);
       });
+      appendCsrfToForm(form);
       document.body.appendChild(form);
       form.submit();
     });
@@ -396,6 +410,7 @@
         inp.type = 'hidden'; inp.name = 'files'; inp.value = cb.value;
         form.appendChild(inp);
       });
+      appendCsrfToForm(form);
       document.body.appendChild(form);
       form.submit();
     });
@@ -448,6 +463,7 @@
       if (!confirm('确定要删除 ' + btn.dataset.name + ' 吗？')) return;
       var form = document.createElement('form');
       form.method = 'POST'; form.action = btn.dataset.url;
+      appendCsrfToForm(form);
       document.body.appendChild(form);
       form.submit();
     });

@@ -285,7 +285,7 @@ def test_query_stream_done_has_evidence_fields(app, sample_repo):
     client, repo_info = sample_repo
     slug = repo_info["slug"]
 
-    def fake_stream(repo, username, question):
+    def fake_stream(repo, username, question, reasoning_mode="standard"):
         yield {"event": "done", "data": {
             "answer": "Hi", "markdown": "Hi",
             "confidence": {"level": "low", "score": 0.1, "reasons": []},

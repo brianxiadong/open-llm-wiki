@@ -15,11 +15,9 @@ from typing import Any
 from flask import Flask, jsonify, render_template, request
 from jinja2 import ChoiceLoader, DictLoader
 from werkzeug.serving import make_server
-from werkzeug.utils import secure_filename
-
 from confidential_client.controller import ConfidentialClientController
 from confidential_client.version import CLIENT_NAME, CLIENT_VERSION
-from utils import render_markdown, slugify
+from utils import render_markdown, safe_upload_basename, slugify
 
 UI_TEXT = {
     "ready": "已就绪",
@@ -2366,7 +2364,7 @@ def create_client_web_app(controller: ConfidentialClientController | None = None
         for upload in uploads:
             filename = Path(str(upload.filename or "")).name.strip()
             if not filename or filename in {".", ".."}:
-                filename = secure_filename(str(upload.filename or "")) or "upload"
+                filename = safe_upload_basename(str(upload.filename or "")) or "upload"
             upload_dir = task_registry._uploads_dir / uuid.uuid4().hex
             upload_dir.mkdir(parents=True, exist_ok=True)
             temp_path = upload_dir / filename

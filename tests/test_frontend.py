@@ -86,6 +86,8 @@ def test_dashboard_has_chat_and_sidebar(client, app):
     assert "kb-sidebar" in html, "Should have sidebar"
     assert "kb-chat" in html or "chat-area" in html, "Should have chat area"
     assert "chat-input" in html, "Should have chat input"
+    assert "chat-reasoning-mode" in html, "Should have reasoning mode selector"
+    assert "极致推理" in html, "Should offer ReAct / extreme reasoning mode"
 
 
 def test_dashboard_has_task_queue_link(client, app):
@@ -425,6 +427,8 @@ def test_base_template_has_llm_status_pill(client):
     assert 'id="dependencies-status-pill"' in html
     assert "/api/system/llm-status" in html
     assert "/api/system/dependencies-status" in html
+    assert "site-footer-revision" in html
+    assert "版本 " in html
 
 
 # ── Upload creates task ──────────────────────────────────────

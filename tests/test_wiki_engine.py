@@ -4,6 +4,7 @@ import json
 import os
 from unittest.mock import MagicMock
 
+from llmwiki_core import RetrievalConfig
 from wiki_engine import WikiEngine
 
 
@@ -194,6 +195,195 @@ def test_query_stream_evidence_urls_include_repo_prefix(tmp_data_dir):
     assert done["data"]["chunk_evidence"][0]["url"] == "/alice/r1/wiki/concept"
 
 
+def test_query_stream_deep_merges_retrieval_calls(tmp_data_dir):
+    """深度模式应对每个子查询分别召回，并对 chunk 去重。"""
+    wiki_dir = os.path.join(tmp_data_dir, "alice", "deep1", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "index.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntitle: I\ntype: index\n---\n\n# Index\n")
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.side_effect = [
+        {"sub_questions": ["子问题甲", "子问题乙"]},
+        {"filenames": []},
+        {"filenames": []},
+        {"filenames": []},
+        {"sufficient": True, "follow_up_queries": [], "brief_rationale": "ok"},
+    ]
+    dup_chunk = {
+        "chunk_id": "x.md#0",
+        "filename": "x.md",
+        "page_title": "X",
+        "heading": "",
+        "chunk_text": "snippet",
+        "score": 0.91,
+    }
+    mock_llm.chat_stream.return_value = iter(["答"])
+
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve_chunks.return_value = [dup_chunk]
+    mock_retriever.retrieve_facts.return_value = []
+    mock_retriever.config = RetrievalConfig()
+
+    engine = WikiEngine(mock_llm, None, tmp_data_dir, retriever=mock_retriever)
+    repo = MagicMock()
+    repo.slug = "deep1"
+    repo.id = 99
+
+    events = list(
+        engine.query_stream(repo, "alice", "综合主问题？", reasoning_mode="deep")
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert len(done["data"]["chunk_evidence"]) == 1
+    assert mock_retriever.retrieve_chunks.call_count == 3
+    assert done["data"]["reasoning_mode"] == "deep"
+    assert len(done["data"]["sub_questions"]) == 2
+    rc = done["data"].get("retrieval_critique") or []
+    assert len(rc) == 1
+    assert rc[0].get("sufficient") is True
+
+
+def test_query_stream_react_runs_plan_then_finish(tmp_data_dir):
+    wiki_dir = os.path.join(tmp_data_dir, "alice", "react1", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "index.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntitle: I\ntype: index\n---\n\n# Index\n")
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.side_effect = [
+        {
+            "thought": "先查概念",
+            "action": "retrieve",
+            "action_input": "概念A",
+        },
+        {"filenames": []},
+        {"thought": "够了", "action": "finish", "action_input": ""},
+        {"sufficient": True, "follow_up_queries": [], "brief_rationale": "ok"},
+    ]
+    mock_llm.chat_stream.return_value = iter(["终"])
+
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve_chunks.return_value = []
+    mock_retriever.retrieve_facts.return_value = []
+    mock_retriever.config = RetrievalConfig()
+
+    engine = WikiEngine(mock_llm, None, tmp_data_dir, retriever=mock_retriever)
+    repo = MagicMock()
+    repo.slug = "react1"
+    repo.id = 3
+
+    events = list(
+        engine.query_stream(repo, "alice", "主问题？", reasoning_mode="react")
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["reasoning_mode"] == "react"
+    trace = done["data"].get("react_trace") or []
+    assert len(trace) >= 1
+    assert any(t.get("action") == "retrieve" for t in trace)
+    rc = done["data"].get("retrieval_critique") or []
+    assert len(rc) == 1
+
+
+def test_query_stream_deep_retrieval_critique_triggers_followup(tmp_data_dir):
+    """深度模式：评审认为不足时追加检索查询并合并证据。"""
+    wiki_dir = os.path.join(tmp_data_dir, "alice", "deepcrit", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "index.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntitle: I\ntype: index\n---\n\n# Index\n")
+
+    extra_chunk = {
+        "chunk_id": "y.md#1",
+        "filename": "y.md",
+        "page_title": "Y",
+        "heading": "",
+        "chunk_text": "extra hit",
+        "score": 0.88,
+    }
+    mock_llm = MagicMock()
+    mock_llm.chat_json.side_effect = [
+        {"sub_questions": ["子A", "子B"]},
+        {"filenames": []},
+        {"filenames": []},
+        {"filenames": []},
+        {
+            "sufficient": False,
+            "follow_up_queries": ["补充检索关键词"],
+            "brief_rationale": "缺实体",
+        },
+        {"filenames": ["y.md"]},
+    ]
+    mock_llm.chat_stream.return_value = iter(["答"])
+
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve_chunks.side_effect = [
+        [{
+            "chunk_id": "x.md#0",
+            "filename": "x.md",
+            "page_title": "X",
+            "heading": "",
+            "chunk_text": "first",
+            "score": 0.9,
+        }],
+        [{
+            "chunk_id": "x.md#0",
+            "filename": "x.md",
+            "page_title": "X",
+            "heading": "",
+            "chunk_text": "first",
+            "score": 0.9,
+        }],
+        [{
+            "chunk_id": "x.md#0",
+            "filename": "x.md",
+            "page_title": "X",
+            "heading": "",
+            "chunk_text": "first",
+            "score": 0.9,
+        }],
+        [extra_chunk],
+    ]
+    mock_retriever.retrieve_facts.return_value = []
+    mock_retriever.config = RetrievalConfig()
+
+    engine = WikiEngine(mock_llm, None, tmp_data_dir, retriever=mock_retriever)
+    repo = MagicMock()
+    repo.slug = "deepcrit"
+    repo.id = 7
+
+    events = list(
+        engine.query_stream(repo, "alice", "主问题？", reasoning_mode="deep")
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert mock_retriever.retrieve_chunks.call_count == 4
+    filenames = {h["filename"] for h in done["data"]["chunk_evidence"]}
+    assert "y.md" in filenames
+    rc = done["data"].get("retrieval_critique") or []
+    assert len(rc) == 1
+    assert rc[0].get("refined") is True
+
+
+def test_merge_chunk_hits_prefers_fused_score_over_dense_score():
+    hits = [
+        {
+            "chunk_id": "dense.md#0",
+            "filename": "dense.md",
+            "score": 0.95,
+            "fused_score": 0.01,
+        },
+        {
+            "chunk_id": "bm25.md#0",
+            "filename": "bm25.md",
+            "score": 0.0,
+            "fused_score": 0.03,
+            "sources": ["bm25"],
+        },
+    ]
+
+    out = WikiEngine._merge_chunk_hits(hits)
+
+    assert [h["chunk_id"] for h in out] == ["bm25.md#0", "dense.md#0"]
+
+
 def test_ingest_updates_overview(tmp_data_dir):
     """overview.md should be updated by LLM after ingest when pages are created."""
     base = os.path.join(tmp_data_dir, "alice", "test-ov")
@@ -208,7 +398,11 @@ def test_ingest_updates_overview(tmp_data_dir):
         ("schema.md", "# Schema\n\nRules here.\n"),
         ("index.md", "---\ntitle: Home\ntype: index\nupdated: 2026-01-01\n---\n\n# Index\n"),
         ("log.md", "---\ntitle: Log\ntype: log\n---\n\n# Log\n"),
-        ("overview.md", "---\ntitle: 概览\ntype: overview\n---\n\n暂无概览内容。上传文档并摄入后，此页面将自动更新。\n"),
+        (
+            "overview.md",
+            "---\ntitle: 概览\ntype: overview\n---\n\n"
+            "暂无概览内容。上传文档并摄入后，此页面将自动更新。\n",
+        ),
     ]:
         with open(os.path.join(base, "wiki", name), "w", encoding="utf-8") as f:
             f.write(body)
@@ -398,7 +592,6 @@ def test_lint_with_pages(tmp_data_dir):
 
 def test_apply_fixes_bad_frontmatter(tmp_path):
     """apply_fixes should fix bad_frontmatter issues via LLM."""
-    import os as _os
     wiki_dir = tmp_path / "alice" / "test-fix" / "wiki"
     wiki_dir.mkdir(parents=True)
     (tmp_path / "alice" / "test-fix" / "raw").mkdir(parents=True, exist_ok=True)

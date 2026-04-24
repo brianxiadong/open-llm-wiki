@@ -7,7 +7,15 @@
   var form = document.getElementById('chat-form');
   var input = document.getElementById('chat-input');
   var submitBtn = document.getElementById('chat-submit');
+  var reasoningSelect = document.getElementById('chat-reasoning-mode');
   var isLoading = false;
+
+  function getReasoningMode() {
+    if (!reasoningSelect) return 'standard';
+    var v = reasoningSelect.value || 'standard';
+    if (v === 'deep' || v === 'react') return v;
+    return 'standard';
+  }
 
   /* ── Auto-resize textarea ─────────────────────────────── */
   input.addEventListener('input', function () {
@@ -719,11 +727,16 @@
     addLoadingMessage();
 
     var streamUrl = cfg.queryStreamUrl;
+    var reasoningMode = getReasoningMode();
     if (!streamUrl) {
       fetch(cfg.queryUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: q, session_key: SESSION_KEY })
+        body: JSON.stringify({
+          q: q,
+          session_key: SESSION_KEY,
+          reasoning_mode: reasoningMode,
+        })
       })
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -752,7 +765,10 @@
     var streamingEl = null;
     var lastActivity = Date.now();
     var SSE_TIMEOUT_MS = 90000; // 90s total timeout
-    var es = new EventSource(streamUrl + '?q=' + encodeURIComponent(q));
+    var es = new EventSource(
+      streamUrl + '?q=' + encodeURIComponent(q) +
+      '&reasoning_mode=' + encodeURIComponent(reasoningMode)
+    );
 
     var timeoutTimer = setInterval(function () {
       if (Date.now() - lastActivity > SSE_TIMEOUT_MS) {
@@ -810,11 +826,22 @@
       fetch(cfg.queryUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: q, session_key: SESSION_KEY, _rendered_answer: answer,
-                               _wiki_sources: wikiSources, _qdrant_sources: qdrantSources,
-                               _confidence: confidence, _wiki_evidence: wikiEvidence,
-                               _chunk_evidence: chunkEvidence, _fact_evidence: factEvidence,
-                               _evidence_summary: evidenceSummary })
+        body: JSON.stringify({
+          q: q,
+          session_key: SESSION_KEY,
+          reasoning_mode: reasoningMode,
+          _rendered_answer: answer,
+          _wiki_sources: wikiSources,
+          _qdrant_sources: qdrantSources,
+          _confidence: confidence,
+          _wiki_evidence: wikiEvidence,
+          _chunk_evidence: chunkEvidence,
+          _fact_evidence: factEvidence,
+          _evidence_summary: evidenceSummary,
+          _sub_questions: d.sub_questions || [],
+          _react_trace: d.react_trace || [],
+          _retrieval_critique: d.retrieval_critique || [],
+        })
       })
         .then(function (r) { return r.json(); })
         .then(function (data) {

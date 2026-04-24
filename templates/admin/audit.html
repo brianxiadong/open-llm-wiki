@@ -26,7 +26,7 @@
     <tbody>
       {% for log in logs.items %}
       <tr>
-        <td style="white-space:nowrap;font-size:0.83rem;">{{ log.created_at.strftime('%m-%d %H:%M') }}</td>
+        <td style="white-space:nowrap;font-size:0.83rem;">{{ log.created_at|localtime('%m-%d %H:%M') }}</td>
         <td style="font-size:0.88rem;">{{ log.username or '—' }}</td>
         <td><span class="badge" style="background:var(--pico-muted-border-color);font-size:0.78rem;">{{ log.action }}</span></td>
         <td style="font-size:0.83rem;">
@@ -34,7 +34,7 @@
           {% if log.resource_id %}<span style="color:var(--pico-muted-color);">#{{ log.resource_id }}</span>{% endif %}
         </td>
         <td style="font-size:0.80rem;color:var(--pico-muted-color);">{{ log.ip or '—' }}</td>
-        <td style="font-size:0.80rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+        <td style="font-size:0.80rem;max-width:min(520px,40vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
             title="{{ log.detail or '' }}">{{ log.detail or '' }}</td>
       </tr>
       {% else %}

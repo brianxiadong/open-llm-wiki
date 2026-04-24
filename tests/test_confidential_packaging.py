@@ -18,7 +18,8 @@ def test_build_confidential_client_script_creates_launcher(tmp_path):
                 path.rmdir()
 
     env = dict(os.environ)
-    env["PYTHON_BIN"] = "python3"
+    venv_python = repo_root / ".venv" / "bin" / "python3"
+    env["PYTHON_BIN"] = str(venv_python) if venv_python.is_file() else "python3"
     subprocess.run(
         ["bash", str(repo_root / "scripts" / "build-confidential-client.sh")],
         cwd=repo_root,

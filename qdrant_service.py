@@ -932,6 +932,47 @@ class QdrantService:
             return []
         return out
 
+    def scroll_all_facts(self, repo_id: int) -> list[dict[str, Any]]:
+        """拉取某 repo 下所有 fact payload，供 BM25 / 字段精确打分旁路索引构建。"""
+        collection = self._fact_collection_name(repo_id)
+        try:
+            if not self._qdrant.collection_exists(collection_name=collection):
+                return []
+        except Exception:
+            return []
+        out: list[dict[str, Any]] = []
+        offset: Any = None
+        try:
+            while True:
+                points, next_offset = self._qdrant.scroll(
+                    collection_name=collection,
+                    limit=512,
+                    with_payload=True,
+                    with_vectors=False,
+                    offset=offset,
+                )
+                for p in points:
+                    pl = p.payload or {}
+                    fields = pl.get("fields", {})
+                    if not isinstance(fields, dict):
+                        fields = {}
+                    out.append({
+                        "record_id": pl.get("record_id", ""),
+                        "source_file": pl.get("source_file", ""),
+                        "source_markdown_filename": pl.get("source_markdown_filename", ""),
+                        "sheet": pl.get("sheet", ""),
+                        "row_index": pl.get("row_index", 0),
+                        "fields": fields,
+                        "fact_text": pl.get("fact_text", ""),
+                    })
+                if not next_offset:
+                    break
+                offset = next_offset
+        except Exception as e:
+            logger.warning("scroll_all_facts failed collection=%s: %s", collection, e)
+            return []
+        return out
+
     def delete_page_chunks(self, repo_id: int, filename: str) -> None:
         collection = self._chunk_collection_name(repo_id)
         try:

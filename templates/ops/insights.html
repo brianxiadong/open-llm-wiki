@@ -26,7 +26,7 @@
   <ul style="font-size:0.9rem;margin:0;padding-left:1.2rem;">
     {% for q in low_conf_logs[:25] %}
     <li style="margin-bottom:0.3rem;">
-      <span style="color:var(--pico-muted-color);font-size:0.82rem;">{{ q.created_at.strftime('%m-%d') }}</span>
+      <span style="color:var(--pico-muted-color);font-size:0.82rem;">{{ q.created_at|localtime('%m-%d') }}</span>
       {{ q.question }}
     </li>
     {% endfor %}

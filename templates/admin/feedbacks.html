@@ -41,7 +41,7 @@
         <td style="text-align:center;font-size:1.1rem;">
           {% if fb.rating == 'good' %}👍{% else %}👎{% endif %}
         </td>
-        <td style="white-space:nowrap;">{{ fb.created_at.strftime('%m-%d %H:%M') }}</td>
+        <td style="white-space:nowrap;">{{ fb.created_at|localtime('%m-%d %H:%M') }}</td>
         <td>{{ user.username if user else '匿名' }}</td>
         <td>{{ repo.slug if repo else '-' }}</td>
         <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ ql.question if ql else '' }}">

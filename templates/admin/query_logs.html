@@ -60,7 +60,7 @@
       {% for ql, user, repo in pagination.items %}
       <tr>
         <td><code style="font-size:0.78rem;background:var(--pico-card-background-color);padding:0.1rem 0.3rem;border-radius:3px;">{{ ql.trace_id or '-' }}</code></td>
-        <td style="white-space:nowrap;">{{ ql.created_at.strftime('%m-%d %H:%M') }}</td>
+        <td style="white-space:nowrap;">{{ ql.created_at|localtime('%m-%d %H:%M') }}</td>
         <td>{{ user.username if user else '匿名' }}</td>
         <td>{{ repo.slug if repo else '-' }}</td>
         <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ ql.question }}">{{ ql.question }}</td>

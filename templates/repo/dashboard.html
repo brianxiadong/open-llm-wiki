@@ -219,6 +219,13 @@
     <div class="chat-input-area">
       <form id="chat-form" class="chat-input-form" autocomplete="off">
         <div class="chat-input-row">
+          <label class="chat-reasoning-label" title="标准：单次检索；深度：预设子问题多路检索；极致推理：ReAct 多轮思考—检索—观察">
+            <select id="chat-reasoning-mode" name="reasoning_mode" aria-label="检索模式">
+              <option value="standard" selected>标准模式</option>
+              <option value="deep">深度推理</option>
+              <option value="react">极致推理</option>
+            </select>
+          </label>
           <textarea id="chat-input" name="q" rows="1"
                     placeholder="输入问题，按 Enter 发送…" required
                     aria-label="查询内容"></textarea>

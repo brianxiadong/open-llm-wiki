@@ -118,15 +118,15 @@
                 {% else %}—{% endif %}
               </td>
               <td style="font-size:0.82rem;white-space:nowrap;">{{ t.scopes or 'kb:search,kb:read' }}</td>
-              <td style="font-size:0.85rem;white-space:nowrap;">{{ t.created_at.strftime('%Y-%m-%d') }}</td>
+              <td style="font-size:0.85rem;white-space:nowrap;">{{ t.created_at|localtime('%Y-%m-%d') }}</td>
               <td style="font-size:0.85rem;white-space:nowrap;">
                 {% if t.expires_at %}
-                  {{ t.expires_at.strftime('%Y-%m-%d') }}
+                  {{ t.expires_at|localtime('%Y-%m-%d') }}
                 {% else %}
                   <span class="muted">永不过期</span>
                 {% endif %}
               </td>
-              <td style="font-size:0.85rem;white-space:nowrap;">{{ t.last_used_at.strftime('%Y-%m-%d %H:%M') if t.last_used_at else '从未使用' }}</td>
+              <td style="font-size:0.85rem;white-space:nowrap;">{{ t.last_used_at|localtime('%Y-%m-%d %H:%M') if t.last_used_at else '从未使用' }}</td>
               <td>
                 {% if not t.is_active %}
                   <span class="badge" style="background:var(--pico-muted-color);color:#fff;">已吊销</span>

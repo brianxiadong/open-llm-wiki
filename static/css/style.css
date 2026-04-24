@@ -265,6 +265,13 @@ textarea:focus-visible {
 .site-footer-inner { max-width: 36rem; margin: 0 auto; }
 .site-footer-tagline { margin: 0 0 0.35rem; color: var(--text); font-weight: 500; }
 .site-footer-meta { margin: 0; opacity: 0.9; }
+.site-footer-revision {
+  margin: 0.65rem 0 0;
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--muted-color, #64748b);
+  letter-spacing: 0.02em;
+}
 
 /* ── Flash Toasts ────────────────────────────────────────── */
 .flash-stack { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.5rem; }

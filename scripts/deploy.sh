@@ -23,6 +23,12 @@ if [ -z "${DEPLOY_PASSWORD:-}" ]; then
   exit 1
 fi
 
+echo "→ 写入部署版本号..."
+mkdir -p "$PROJECT_ROOT/deploy"
+GIT_SHA="$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+DEPLOY_TS="$(TZ=Asia/Shanghai date +"%Y-%m-%d %H:%M:%S %z")"
+printf '%s\n%s\n' "$GIT_SHA" "$DEPLOY_TS" > "$PROJECT_ROOT/deploy/revision.txt"
+
 echo "→ 打包代码..."
 tar czf "$TARBALL" \
   --exclude=".venv" \

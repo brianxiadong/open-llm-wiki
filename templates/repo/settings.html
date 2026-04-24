@@ -160,7 +160,7 @@
           <td>{{ member.user.username if member.user else member.user_id }}</td>
           <td>{{ role_labels.get(member.role, member.role) }}</td>
           <td>{{ member.share_code.code if member.share_code_id and member.share_code else '手动授权' }}</td>
-          <td>{{ member.created_at.strftime('%Y-%m-%d %H:%M') if member.created_at else '—' }}</td>
+          <td>{{ member.created_at|localtime('%Y-%m-%d %H:%M') if member.created_at else '—' }}</td>
           <td>
             <form method="POST" action="{{ url_for('repo.remove_member', username=username, repo_slug=repo.slug, member_id=member.id) }}" style="margin:0;">
               <button type="submit" class="action-btn">移除</button>

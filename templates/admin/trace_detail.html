@@ -17,7 +17,7 @@
 <article style="padding:1.2rem;margin-bottom:1rem;">
   <h4 style="margin-bottom:0.8rem;color:var(--pico-muted-color);font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;">基本信息</h4>
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:0.8rem;">
-    <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">时间</div><strong>{{ ql.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</strong></div>
+    <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">时间</div><strong>{{ ql.created_at|localtime('%Y-%m-%d %H:%M:%S') }}</strong></div>
     <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">用户</div><strong>{{ user.username if user else '匿名' }}</strong></div>
     <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">知识库</div><strong>{{ repo.name if repo else '-' }}{% if repo %} ({{ repo.slug }}){% endif %}</strong></div>
     <div><div style="font-size:0.75rem;color:var(--pico-muted-color);margin-bottom:0.2rem;">置信度</div>

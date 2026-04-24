@@ -17,11 +17,11 @@
       <span class="badge badge-{{ page.type }}">{{ page.type_label or page.type }}</span>
       <span class="page-meta-item">
         <i class="lucide-calendar" aria-hidden="true"></i>
-        创建于 {{ page.created_at.strftime('%Y-%m-%d') if page.created_at else '—' }}
+        创建于 {{ page.created_at|localtime('%Y-%m-%d') if page.created_at else '—' }}
       </span>
       <span class="page-meta-item">
         <i class="lucide-clock" aria-hidden="true"></i>
-        更新于 {{ page.updated_at.strftime('%Y-%m-%d') if page.updated_at else '—' }}
+        更新于 {{ page.updated_at|localtime('%Y-%m-%d') if page.updated_at else '—' }}
       </span>
       {% if page.sources %}
       <span class="page-meta-item">

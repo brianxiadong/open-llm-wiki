@@ -76,7 +76,7 @@
               <small class="task-progress-msg">{{ t.progress_msg or '' }}</small>
             </div>
           </td>
-          <td>{{ t.created_at.strftime('%m-%d %H:%M') if t.created_at }}</td>
+          <td>{{ t.created_at|localtime('%m-%d %H:%M') if t.created_at }}</td>
           <td>
             {% if t.finished_at and t.started_at %}
               {% set delta = (t.finished_at - t.started_at).total_seconds()|int %}

@@ -6,17 +6,43 @@ import pytest
 
 from utils import (
     _find_header_row_index,
+    _format_deploy_revision_file,
     build_tabular_markdown_and_records,
     classify_query_mode,
     ensure_repo_dirs,
     extract_links,
+    get_app_revision,
     get_backlinks,
+    utc_to_local,
     get_repo_path,
     list_raw_sources,
     list_wiki_pages,
     render_markdown,
+    safe_upload_basename,
     slugify,
 )
+
+
+def test_get_app_revision_prefers_env(monkeypatch):
+    monkeypatch.setenv("APP_REVISION", "env-override-9")
+    assert get_app_revision() == "env-override-9"
+
+
+def test_format_deploy_revision_file_one_line():
+    assert _format_deploy_revision_file("abc1234\n\n") == "abc1234"
+
+
+def test_format_deploy_revision_file_sha_and_timestamp():
+    raw = "abc1234\n2026-04-22 16:00:00 +0800\n"
+    assert _format_deploy_revision_file(raw) == "abc1234 · 2026-04-22 16:00:00 +0800"
+
+
+def test_utc_to_local_interprets_naive_as_utc():
+    from datetime import datetime
+
+    loc = utc_to_local(datetime(2026, 1, 1, 0, 0, 0))
+    assert loc.hour == 8
+    assert loc.utcoffset().total_seconds() == 8 * 3600
 
 
 def test_slugify():
@@ -25,6 +51,19 @@ def test_slugify():
     assert slugify("  spaces  ") == "spaces"
     assert slugify("special!@#chars") == "specialchars"
     assert slugify("") == ""
+
+
+def test_safe_upload_basename_preserves_cjk():
+    assert safe_upload_basename("0--中文--250930.docx") == "0--中文--250930.docx"
+    assert safe_upload_basename("报告 v2（终稿）.md") == "报告 v2（终稿）.md"
+
+
+def test_safe_upload_basename_strips_path_and_forbidden():
+    assert safe_upload_basename("../../etc/passwd") == "passwd"
+    # basename is last segment; forbidden chars become underscores
+    assert safe_upload_basename("a/b:c*d?.txt") == "b_c_d_.txt"
+    assert safe_upload_basename(None) == ""
+    assert safe_upload_basename("..") == ""
 
 
 def test_render_markdown_basic():

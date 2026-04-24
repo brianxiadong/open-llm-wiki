@@ -7,14 +7,20 @@ import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
-from typing import Any, Generator
+from typing import Any, Generator, Iterator
 
-from exceptions import LLMClientError, QdrantServiceError, WikiEngineError
+from exceptions import LLMClientError, QdrantServiceError
 from llm_client import LLMClient
 from llmwiki_core import HybridRetriever, RetrievalConfig
 from qdrant_service import QdrantService
-from utils import classify_query_mode, list_wiki_pages, read_jsonl, render_markdown
+from utils import (
+    classify_query_mode,
+    list_wiki_pages,
+    local_now,
+    local_today_date_str,
+    read_jsonl,
+    render_markdown,
+)
 from wiki_prompts import (
     apply_citation_penalty,
     build_comparison_user_prompt,
@@ -25,6 +31,11 @@ from wiki_prompts import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ReAct（极致推理）：每轮一次规划 LLM + 可选检索，上限步数防止失控
+REACT_MAX_STEPS = 6
+# 深度 / 极致：首轮（及 ReAct 累积）检索后，评审是否覆盖问题；不足时最多追加的独立检索查询条数
+RETRIEVAL_CRITIQUE_MAX_FOLLOWUPS = 3
 
 _JSON_FENCE_CHARS = ("`", "```")
 
@@ -555,6 +566,7 @@ class WikiEngine:
                 query=question,
                 top_k=chunk_k,
                 dense_query=dense_q,
+                expand_neighbors=self._context_expand_neighbors,
             )
         except QdrantServiceError as exc:
             logger.warning("retrieve_chunks failed: %s", exc)
@@ -585,6 +597,341 @@ class WikiEngine:
         if not isinstance(hits, list):
             return []
         return [h for h in hits if isinstance(h, dict)]
+
+    @staticmethod
+    def _normalize_reasoning_mode(raw: str | None) -> str:
+        m = (raw or "standard").strip().lower()
+        return m if m in ("standard", "deep", "react") else "standard"
+
+    def _react_observation_line(
+        self,
+        wiki_filenames: list[str],
+        chunk_hits: list[dict],
+        fact_hits: list[dict],
+    ) -> str:
+        sample = ", ".join(wiki_filenames[:6])
+        if len(wiki_filenames) > 6:
+            sample += "…"
+        return (
+            f"页面 {len(wiki_filenames)}，片段 {len(chunk_hits)}，事实 {len(fact_hits)}。"
+            f"页面示例：{sample or '无'}"
+        )
+
+    def _react_plan_json(
+        self, main_question: str, history_text: str, obs_summary: str
+    ) -> dict[str, Any]:
+        return self._chat_json(
+            system=(
+                "你是知识库检索编排助手（ReAct）。根据主问题与「已执行步骤」，决定下一步。\n"
+                "仅允许两种 action：\n"
+                "- retrieve：用 action_input 给出一条简短、具体的检索查询（供向量与索引使用）；\n"
+                "- finish：action_input 置空，表示不再检索（证据已够或无法继续）。\n"
+                "只输出一个 JSON 对象，不要代码块或其它文字：\n"
+                '{"thought":"用一句话写推理","action":"retrieve或finish","action_input":"…"}\n'
+            ),
+            user=(
+                f"【主问题】\n{main_question}\n\n"
+                f"【当前累积】\n{obs_summary}\n\n"
+                f"【已执行步骤】\n{history_text}\n\n"
+                "请输出下一步 JSON。"
+            ),
+            default={"thought": "结束检索", "action": "finish", "action_input": ""},
+        )
+
+    def _react_retrieval_iter(
+        self,
+        system_base: str,
+        index_content: str,
+        repo_id: int,
+        question: str,
+        query_mode: str,
+    ) -> Iterator[Any]:
+        """Yields (\"progress\", message, percent) then (\"result\", wiki, chunks, facts, trace)."""
+        wiki_acc: list[str] = []
+        chunk_acc: list[dict] = []
+        fact_acc: list[dict] = []
+        transcript: list[str] = []
+        trace: list[dict] = []
+        for step in range(REACT_MAX_STEPS):
+            w_m = self._dedupe_wiki_filenames(wiki_acc)
+            c_m = self._merge_chunk_hits(chunk_acc)
+            f_m = self._merge_fact_hits(fact_acc)
+            obs_summary = self._react_observation_line(w_m, c_m, f_m)
+            history_text = "\n".join(transcript) if transcript else "（尚无）"
+            plan = self._react_plan_json(question, history_text, obs_summary)
+            thought = str(plan.get("thought") or "").strip()
+            action = str(plan.get("action") or "finish").strip().lower()
+            action_input = str(plan.get("action_input") or "").strip()
+            entry: dict[str, Any] = {
+                "step": step + 1,
+                "thought": thought,
+                "action": action,
+                "action_input": action_input,
+            }
+            hint = thought if len(thought) <= 100 else thought[:99] + "…"
+            yield (
+                "progress",
+                f"极致推理(ReAct)：第 {step + 1} 步 — {hint or '…'}",
+                6 + min(34, step * 6),
+            )
+            if action != "retrieve" or not action_input:
+                if action == "retrieve" and not action_input:
+                    entry["observation"] = "未提供检索语句，结束。"
+                trace.append(entry)
+                break
+            wiki_acc.extend(
+                self._pick_wiki_filenames(system_base, index_content, action_input)
+            )
+            chunk_acc.extend(self._retrieve_chunks(repo_id, action_input, query_mode))
+            fact_acc.extend(self._retrieve_facts(repo_id, action_input, query_mode))
+            w2 = self._dedupe_wiki_filenames(wiki_acc)
+            c2 = self._merge_chunk_hits(chunk_acc)
+            f2 = self._merge_fact_hits(fact_acc)
+            obs_line = self._react_observation_line(w2, c2, f2)
+            entry["observation"] = obs_line
+            trace.append(entry)
+            transcript.append(
+                f"--- 第 {step + 1} 步 ---\n思考：{thought}\n"
+                f"动作：retrieve — {action_input}\n观察：{obs_line}"
+            )
+        yield (
+            "result",
+            self._dedupe_wiki_filenames(wiki_acc),
+            self._merge_chunk_hits(chunk_acc),
+            self._merge_fact_hits(fact_acc),
+            trace,
+        )
+
+    @staticmethod
+    def _log_query_mode_for_reasoning(reasoning_mode: str, classify_mode: str) -> str:
+        if reasoning_mode == "deep":
+            return "deep"
+        if reasoning_mode == "react":
+            return "react"
+        return classify_mode
+
+    def _pick_wiki_filenames(
+        self, system_base: str, index_content: str, question: str
+    ) -> list[str]:
+        if not index_content:
+            return []
+        pick_result = self._chat_json(
+            system=system_base,
+            user=(
+                "根据用户问题，从索引中选出最相关的页面（最多 8 个）。\n"
+                '返回 JSON: {"filenames": ["a.md", "b.md"]}\n\n'
+                f"--- 问题 ---\n{question}\n\n--- index.md ---\n{index_content}"
+            ),
+            default={"filenames": []},
+        )
+        names = pick_result.get("filenames", [])
+        if isinstance(names, str):
+            names = [names]
+        return [n for n in names if isinstance(n, str) and n.strip()]
+
+    def _deep_sub_questions(self, system_base: str, question: str) -> list[str]:
+        res = self._chat_json(
+            system=system_base,
+            user=(
+                "将用户问题拆成 2～4 个具体、可独立检索知识库的子问题；"
+                "每个子问题用简短中文，覆盖主问题的不同方面。\n"
+                '严格返回 JSON：`{"sub_questions":["..."]}`\n\n'
+                f"主问题：\n{question}"
+            ),
+            default={"sub_questions": []},
+        )
+        raw = res.get("sub_questions") or []
+        out: list[str] = []
+        for s in raw:
+            t = (s or "").strip()
+            if t and t not in out:
+                out.append(t)
+        return out[:4]
+
+    @staticmethod
+    def _dedupe_wiki_filenames(names: list[str], max_n: int = 12) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for fn in names:
+            fn = (fn or "").strip()
+            if not fn or fn in seen:
+                continue
+            seen.add(fn)
+            out.append(fn)
+        return out[:max_n]
+
+    @staticmethod
+    def _merge_chunk_hits(hits: list[dict], max_n: int = 24) -> list[dict]:
+        def _rank_score(hit: dict) -> float:
+            for key in ("fused_score", "score", "dense_score", "bm25_score"):
+                try:
+                    value = float(hit.get(key) or 0.0)
+                except (TypeError, ValueError):
+                    value = 0.0
+                if value:
+                    return value
+            return 0.0
+
+        by_id: dict[str, dict] = {}
+        for h in hits:
+            if not isinstance(h, dict):
+                continue
+            cid = h.get("chunk_id")
+            if not cid:
+                continue
+            sc = _rank_score(h)
+            prev = by_id.get(str(cid))
+            if prev is None or sc > _rank_score(prev):
+                by_id[str(cid)] = h
+        merged = sorted(by_id.values(), key=lambda x: -_rank_score(x))
+        return merged[:max_n]
+
+    @staticmethod
+    def _merge_fact_hits(hits: list[dict], max_n: int = 20) -> list[dict]:
+        by_key: dict[str, dict] = {}
+        for h in hits:
+            if not isinstance(h, dict):
+                continue
+            key = str(h.get("record_id") or "").strip()
+            if not key:
+                key = (
+                    f"{h.get('source_file', '')}|{h.get('sheet', '')}|"
+                    f"{h.get('row_index', '')}"
+                )
+            sc = float(h.get("score") or 0.0)
+            prev = by_key.get(key)
+            if prev is None or sc > float(prev.get("score") or 0.0):
+                by_key[key] = h
+        merged = sorted(by_key.values(), key=lambda x: -float(x.get("score") or 0.0))
+        return merged[:max_n]
+
+    def _retrieval_evidence_summary(
+        self,
+        question: str,
+        wiki_filenames: list[str],
+        chunk_hits: list[dict],
+        fact_hits: list[dict],
+        *,
+        max_chunks_in_summary: int = 8,
+        snippet_chars: int = 160,
+    ) -> str:
+        """供检索评审 LLM 阅读的紧凑摘要（非全文）。"""
+        wiki_preview = ", ".join(wiki_filenames[:12])
+        if len(wiki_filenames) > 12:
+            wiki_preview += "…"
+        lines = [
+            f"【用户问题】\n{question}\n",
+            f"【结构化 Wiki 路径命中】共 {len(wiki_filenames)} 个：{wiki_preview or '无'}",
+        ]
+        if chunk_hits:
+            lines.append("【向量片段摘录】（按融合排序）")
+            for i, h in enumerate(chunk_hits[:max_chunks_in_summary]):
+                if not isinstance(h, dict):
+                    continue
+                fn = h.get("filename") or "?"
+                try:
+                    sc = float(h.get("fused_score") or h.get("score") or 0.0)
+                except (TypeError, ValueError):
+                    sc = 0.0
+                tx = (h.get("chunk_text") or "")[:snippet_chars].replace("\n", " ")
+                lines.append(f"  - [{i + 1}] {fn} (score={sc:.3f}) {tx}")
+        else:
+            lines.append("【向量片段】无命中")
+        lines.append(f"【结构化事实行】约 {len(fact_hits)} 条")
+        return "\n".join(lines)
+
+    def _retrieval_critique_json(
+        self,
+        system_base: str,
+        reasoning_mode: str,
+        evidence_summary: str,
+    ) -> dict[str, Any]:
+        mode_label = "深度推理" if reasoning_mode == "deep" else "极致推理(ReAct)"
+        schema_hint = (system_base or "").strip()[:2500]
+        return self._chat_json(
+            system=(
+                f"你是检索质量评审员（仅用于 {mode_label}）。根据用户问题与「已召回证据摘要」，"
+                "判断当前证据是否**很可能**足以支撑准确、完整的回答。\n"
+                "若明显偏题、关键实体或维度未覆盖、证据过少、或仅有泛泛页面而无实质片段，"
+                "应判定为不足，并给出 1～3 条**简短中文检索查询**（供向量与索引选页），"
+                "查询须具体、可独立检索知识库。\n"
+                "若证据已覆盖问题要点，sufficient 为 true，follow_up_queries 为空数组。\n"
+                "只输出 JSON，不要代码块或其它文字：\n"
+                '{"sufficient": true/false, "follow_up_queries": ["..."], "brief_rationale": "一句话"}\n'
+            ),
+            user=f"{schema_hint}\n\n---\n{evidence_summary}\n\n请输出 JSON。",
+            default={
+                "sufficient": True,
+                "follow_up_queries": [],
+                "brief_rationale": "",
+            },
+        )
+
+    def _refine_retrieval_after_critique(
+        self,
+        system_base: str,
+        index_content: str,
+        repo_id: int,
+        question: str,
+        query_mode: str,
+        reasoning_mode: str,
+        wiki_filenames: list[str],
+        chunk_hits: list[dict],
+        fact_hits: list[dict],
+    ) -> tuple[list[str], list[dict], list[dict], list[dict[str, Any]]]:
+        """深度 / 极致：评审检索质量，不足时追加至多一轮补充检索。标准模式勿调用。"""
+        trace: list[dict[str, Any]] = []
+        if reasoning_mode not in ("deep", "react"):
+            return wiki_filenames, chunk_hits, fact_hits, trace
+
+        evidence_summary = self._retrieval_evidence_summary(
+            question, wiki_filenames, chunk_hits, fact_hits
+        )
+        crit = self._retrieval_critique_json(
+            system_base, reasoning_mode, evidence_summary
+        )
+        if not isinstance(crit, dict):
+            crit = {
+                "sufficient": True,
+                "follow_up_queries": [],
+                "brief_rationale": "",
+            }
+
+        sufficient = bool(crit.get("sufficient", True))
+        raw_extra = crit.get("follow_up_queries") or []
+        extras: list[str] = []
+        if isinstance(raw_extra, str):
+            raw_extra = [raw_extra]
+        if isinstance(raw_extra, list):
+            for q in raw_extra:
+                if isinstance(q, str):
+                    t = q.strip()
+                    if t and t not in extras:
+                        extras.append(t)
+                if len(extras) >= RETRIEVAL_CRITIQUE_MAX_FOLLOWUPS:
+                    break
+
+        trace.append(crit)
+        if sufficient or not extras:
+            return wiki_filenames, chunk_hits, fact_hits, trace
+
+        crit["refined"] = True
+        wiki_acc = list(wiki_filenames)
+        chunk_acc: list[dict] = list(chunk_hits)
+        fact_acc: list[dict] = list(fact_hits)
+        for qtext in extras:
+            wiki_acc.extend(
+                self._pick_wiki_filenames(system_base, index_content, qtext)
+            )
+            chunk_acc.extend(self._retrieve_chunks(repo_id, qtext, query_mode))
+            fact_acc.extend(self._retrieve_facts(repo_id, qtext, query_mode))
+
+        return (
+            self._dedupe_wiki_filenames(wiki_acc),
+            self._merge_chunk_hits(chunk_acc),
+            self._merge_fact_hits(fact_acc),
+            trace,
+        )
 
     def _build_chunk_context(
         self,
@@ -879,7 +1226,7 @@ class WikiEngine:
             _write_file(self._index_path(username, repo_slug), new_index)
 
         # -- 8. Append to log.md -------------------------------------------
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        now_str = local_now().strftime("%Y-%m-%d %H:%M")
         log_entry = (
             f"\n## {now_str} — Ingested `{source_filename}`\n\n"
             f"- Created: {', '.join(created_files) or 'none'}\n"
@@ -903,7 +1250,7 @@ class WikiEngine:
                 for p in overview_pages
                 if p["filename"] not in ("log.md", "schema.md", "overview.md")
             )
-            now_str_ov = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            now_str_ov = local_today_date_str()
 
             new_overview = self._chat_text(
                 system=system_base,
@@ -1062,6 +1409,7 @@ class WikiEngine:
         repo: Any,
         username: str,
         question: str,
+        reasoning_mode: str = "standard",
     ) -> Any:
         """Stream query: yields dicts {"event": str, "data": dict}."""
         repo_slug = repo.slug
@@ -1070,6 +1418,7 @@ class WikiEngine:
         wiki_dir = self._wiki_dir(username, repo_slug)
         schema_content = _read_file(self._schema_path(username, repo_slug))
         index_content = _read_file(self._index_path(username, repo_slug))
+        reasoning_mode = self._normalize_reasoning_mode(reasoning_mode)
         query_mode = classify_query_mode(question)
         system_base = (
             "你是一个 Wiki 知识助手。根据 Wiki 内容准确回答问题，并引用来源页面。\n\n"
@@ -1078,26 +1427,95 @@ class WikiEngine:
 
         yield {"event": "progress", "data": {"message": "正在检索相关页面…", "percent": 10}}
 
-        wiki_filenames: list[str] = []
-        if index_content:
-            pick_result = self._chat_json(
-                system=system_base,
-                user=(
-                    "根据用户问题，从索引中选出最相关的页面（最多 8 个）。\n"
-                    '返回 JSON: {"filenames": ["a.md", "b.md"]}\n\n'
-                    f"--- 问题 ---\n{question}\n\n--- index.md ---\n{index_content}"
-                ),
-                default={"filenames": []},
+        sub_questions_out: list[str] = []
+        react_trace_out: list[dict] = []
+        if reasoning_mode == "deep":
+            yield {
+                "event": "progress",
+                "data": {"message": "深度推理：拆解检索要点…", "percent": 8},
+            }
+            subs = self._deep_sub_questions(system_base, question)
+            if len(subs) >= 2:
+                sub_questions_out = subs
+                queries = [question] + [
+                    s
+                    for s in subs
+                    if s.strip().lower() != question.strip().lower()
+                ]
+            else:
+                queries = [question]
+            wiki_acc: list[str] = []
+            chunk_acc: list[dict] = []
+            fact_acc: list[dict] = []
+            nq = len(queries)
+            for i, qtext in enumerate(queries):
+                yield {
+                    "event": "progress",
+                    "data": {
+                        "message": f"深度推理：检索步骤 {i + 1}/{nq}…",
+                        "percent": 10 + int(24 * (i + 1) / max(nq, 1)),
+                    },
+                }
+                wiki_acc.extend(
+                    self._pick_wiki_filenames(system_base, index_content, qtext)
+                )
+                chunk_acc.extend(self._retrieve_chunks(repo_id, qtext, query_mode))
+                fact_acc.extend(self._retrieve_facts(repo_id, qtext, query_mode))
+            wiki_filenames = self._dedupe_wiki_filenames(wiki_acc)
+            chunk_hits = self._merge_chunk_hits(chunk_acc)
+            fact_hits = self._merge_fact_hits(fact_acc)
+        elif reasoning_mode == "react":
+            yield {
+                "event": "progress",
+                "data": {"message": "极致推理：ReAct 规划与检索…", "percent": 5},
+            }
+            wiki_filenames = []
+            chunk_hits = []
+            fact_hits = []
+            for item in self._react_retrieval_iter(
+                system_base, index_content, repo_id, question, query_mode
+            ):
+                if item[0] == "progress":
+                    _, msg, pct = item
+                    yield {"event": "progress", "data": {"message": msg, "percent": pct}}
+                else:
+                    _, wiki_filenames, chunk_hits, fact_hits, react_trace_out = item
+        else:
+            wiki_filenames = self._pick_wiki_filenames(
+                system_base, index_content, question
             )
-            wiki_filenames = pick_result.get("filenames", [])
-            if isinstance(wiki_filenames, str):
-                wiki_filenames = [wiki_filenames]
+            chunk_hits = self._retrieve_chunks(repo_id, question, query_mode)
+            fact_hits = self._retrieve_facts(repo_id, question, query_mode)
 
-        qdrant_filenames: list[str] = []
-        chunk_hits = self._retrieve_chunks(repo_id, question, query_mode)
-        fact_hits = self._retrieve_facts(repo_id, question, query_mode)
-        if chunk_hits:
-            qdrant_filenames = list({h["filename"] for h in chunk_hits if h.get("filename")})
+        critique_trace_out: list[dict[str, Any]] = []
+        if reasoning_mode in ("deep", "react"):
+            yield {
+                "event": "progress",
+                "data": {"message": "正在评审检索结果是否覆盖问题…", "percent": 32},
+            }
+            wiki_filenames, chunk_hits, fact_hits, critique_trace_out = (
+                self._refine_retrieval_after_critique(
+                    system_base,
+                    index_content,
+                    repo_id,
+                    question,
+                    query_mode,
+                    reasoning_mode,
+                    wiki_filenames,
+                    chunk_hits,
+                    fact_hits,
+                )
+            )
+            if any(
+                isinstance(c, dict) and c.get("refined") for c in critique_trace_out
+            ):
+                yield {
+                    "event": "progress",
+                    "data": {
+                        "message": "检索评审：已按补充查询扩展证据…",
+                        "percent": 36,
+                    },
+                }
 
         yield {"event": "progress", "data": {"message": "正在读取页面内容…", "percent": 40}}
 
@@ -1114,6 +1532,10 @@ class WikiEngine:
                 "answer": "暂无相关 Wiki 内容可以回答该问题。请先导入相关资料。",
                 "wiki_sources": [], "qdrant_sources": [], "referenced_pages": [],
                 "fact_evidence": [],
+                "reasoning_mode": reasoning_mode,
+                "sub_questions": sub_questions_out,
+                "react_trace": react_trace_out,
+                "retrieval_critique": critique_trace_out,
             }}
             return
 
@@ -1247,6 +1669,10 @@ class WikiEngine:
             "wiki_sources": [f for f in wiki_filenames if f in loaded],
             "qdrant_sources": list({h["filename"] for h in chunk_hits}),
             "referenced_pages": list(loaded),
+            "reasoning_mode": reasoning_mode,
+            "sub_questions": sub_questions_out,
+            "react_trace": react_trace_out,
+            "retrieval_critique": critique_trace_out,
         }}
 
     # -----------------------------------------------------------------------
@@ -1260,6 +1686,7 @@ class WikiEngine:
         question: str,
         wiki_base_url: str = "",
         history: list[dict] | None = None,
+        reasoning_mode: str = "standard",
     ) -> dict[str, Any]:
         """Query using dual-channel evidence retrieval with rule-based confidence scoring."""
         repo_slug = repo.slug
@@ -1267,6 +1694,7 @@ class WikiEngine:
         wiki_dir = self._wiki_dir(username, repo_slug)
         schema_content = _read_file(self._schema_path(username, repo_slug))
         index_content = _read_file(self._index_path(username, repo_slug))
+        reasoning_mode = self._normalize_reasoning_mode(reasoning_mode)
         query_mode = classify_query_mode(question)
 
         system_base = (
@@ -1277,25 +1705,62 @@ class WikiEngine:
             + (schema_content or "")
         )
 
-        # -- Wiki path -------------------------------------------------
-        wiki_filenames: list[str] = []
-        if index_content:
-            pick = self._chat_json(
-                system=system_base,
-                user=(
-                    "根据用户问题，从索引中选出最相关的页面（最多 8 个）。\n"
-                    '返回 JSON: {"filenames": ["a.md", "b.md"]}\n\n'
-                    f"--- 问题 ---\n{question}\n\n--- index.md ---\n{index_content}"
-                ),
-                default={"filenames": []},
+        sub_questions_out: list[str] = []
+        react_trace_out: list[dict] = []
+        critique_trace_out: list[dict[str, Any]] = []
+        if reasoning_mode == "deep":
+            subs = self._deep_sub_questions(system_base, question)
+            if len(subs) >= 2:
+                sub_questions_out = subs
+                queries = [question] + [
+                    s
+                    for s in subs
+                    if s.strip().lower() != question.strip().lower()
+                ]
+            else:
+                queries = [question]
+            wiki_acc: list[str] = []
+            chunk_acc: list[dict] = []
+            fact_acc: list[dict] = []
+            for qtext in queries:
+                wiki_acc.extend(
+                    self._pick_wiki_filenames(system_base, index_content, qtext)
+                )
+                chunk_acc.extend(self._retrieve_chunks(repo_id, qtext, query_mode))
+                fact_acc.extend(self._retrieve_facts(repo_id, qtext, query_mode))
+            wiki_filenames = self._dedupe_wiki_filenames(wiki_acc)
+            chunk_hits = self._merge_chunk_hits(chunk_acc)
+            fact_hits = self._merge_fact_hits(fact_acc)
+        elif reasoning_mode == "react":
+            wiki_filenames = []
+            chunk_hits = []
+            fact_hits = []
+            for item in self._react_retrieval_iter(
+                system_base, index_content, repo_id, question, query_mode
+            ):
+                if item[0] == "result":
+                    _, wiki_filenames, chunk_hits, fact_hits, react_trace_out = item
+        else:
+            wiki_filenames = self._pick_wiki_filenames(
+                system_base, index_content, question
             )
-            wiki_filenames = pick.get("filenames", [])
-            if isinstance(wiki_filenames, str):
-                wiki_filenames = [wiki_filenames]
+            chunk_hits = self._retrieve_chunks(repo_id, question, query_mode)
+            fact_hits = self._retrieve_facts(repo_id, question, query_mode)
 
-        # -- Chunk / Fact path (hybrid: dense + BM25 RRF, mode-aware top-k) --
-        chunk_hits = self._retrieve_chunks(repo_id, question, query_mode)
-        fact_hits = self._retrieve_facts(repo_id, question, query_mode)
+        if reasoning_mode in ("deep", "react"):
+            wiki_filenames, chunk_hits, fact_hits, critique_trace_out = (
+                self._refine_retrieval_after_critique(
+                    system_base,
+                    index_content,
+                    repo_id,
+                    question,
+                    query_mode,
+                    reasoning_mode,
+                    wiki_filenames,
+                    chunk_hits,
+                    fact_hits,
+                )
+            )
 
         # -- Build wiki_evidence ---------------------------------------
         wiki_evidence: list[dict] = []
@@ -1356,6 +1821,13 @@ class WikiEngine:
                 "referenced_pages": [],
                 "wiki_sources": [],
                 "qdrant_sources": [],
+                "query_mode": self._log_query_mode_for_reasoning(
+                    reasoning_mode, query_mode
+                ),
+                "reasoning_mode": reasoning_mode,
+                "sub_questions": sub_questions_out,
+                "react_trace": react_trace_out,
+                "retrieval_critique": critique_trace_out,
             }
 
         # -- Build context & generate answer ---------------------------
@@ -1440,7 +1912,11 @@ class WikiEngine:
             "chunk_evidence": chunk_evidence,
             "fact_evidence": fact_evidence,
             "evidence_summary": evidence_summary,
-            "query_mode": query_mode,
+            "query_mode": self._log_query_mode_for_reasoning(reasoning_mode, query_mode),
+            "reasoning_mode": reasoning_mode,
+            "sub_questions": sub_questions_out,
+            "react_trace": react_trace_out,
+            "retrieval_critique": critique_trace_out,
             "intent": intent,
             "citation_validation": citation_validation,
             "referenced_pages": list(loaded),
@@ -1520,7 +1996,7 @@ class WikiEngine:
                 '{"duplicate_groups": [{"pages": ["a.md", "b.md"], '
                 '"reason": "重复原因", "suggestion": "建议操作"}], '
                 '"total_issues": 0}\n\n'
-                f"--- Wiki 页面列表 ---\n" + "\n".join(pages_detail)
+                "--- Wiki 页面列表 ---\n" + "\n".join(pages_detail)
             ),
             default={"duplicate_groups": [], "total_issues": 0},
         )
