@@ -11,10 +11,23 @@
 - 多用户、多知识库，每个仓库独立维护自己的 `raw/ + wiki/ + schema.md`
 - 支持 Markdown、TXT、PDF、DOCX、PPTX、图片、CSV、Excel 等多种资料导入
 - 摄入流程会自动生成或更新 Wiki 页面、目录页、概览页和操作日志
-- 查询采用双通道检索：Wiki 结构化导航 + Qdrant 向量检索
-- 支持流式回答（SSE）、证据展示、置信度分级、将优质回答保存为 Wiki 页面
-- 前端为 Flask + Jinja2 SSR，界面面向知识库/文档工作台场景优化
+- 查询采用 **三通道检索**：Wiki 结构化选页 + Chunk 向量与 BM25 融合（Hybrid RRF）+ 结构化表格 **Fact**（向量 + 关键词 + 字段精确加分融合，便于金额、地区、日期等短值对齐到正确行）
+- 支持 **推理模式**：标准（单次检索）/ **深度推理**（子问题拆解后多路检索合并）/ **极致推理**（ReAct 多轮规划检索）；深度与极致模式下含 **检索评审**，可在证据不足时自动追加补充查询
+- 支持 **流式回答（SSE）**、三路证据面板、置信度分级、将优质回答保存为 Wiki 页面
+- **OpenAPI v1**：Bearer Token 鉴权，`/me`、`/repos`、支持显式知识库或 **自动路由** 的 `/search`
+- **生成层保护**：Prompt Guard、对比类问题专用模板、答案引用合法性后校验与置信度扣分
+- 顶栏提供 **依赖探测**（LLM / Qdrant / MinerU 等），便于自检环境
+- 前端为 Flask + Jinja2 SSR，界面面向知识库/文档工作台场景优化（含侧边栏滚动、列表与共享等交互优化）
 - Wiki 文件最终落盘为 Markdown，可直接被 Obsidian 等工具打开
+- 可选 **机密知识库桌面客户端**（本地加密仓库 + 与 `llmwiki_core` 共享检索契约），并配套 Windows 打包与更新链路说明
+
+## 近期亮点（主线能力）
+
+- **检索**：Chunk 侧 Hybrid（dense + BM25 + RRF）、邻居扩展；Fact 侧关键词与字段规则融合；摄入阶段向量与 embed 并发加速。
+- **查询体验**：推理档位、流式进度、检索评审 trace；修复流式场景下 ORM 会话与生成器生命周期问题，保证 SSE 稳定。
+- **开放与自动化**：API Token（Fernet 存储、吊销/删除、受控展示完整 token）、OpenClaw 技能与 `/kb` 直返模式约定、分享邀请链接与访问码共享。
+- **安全与合规**：公测前安全基线、回调域名配置、未登录访问策略收紧等。
+- **工程化**：SQL 迁移与 `api_tokens` 等表结构修复、部署脚本与 systemd 约定、GitLab 镜像可与 GitHub 双远端同步（视你的远程配置而定）。
 
 ## 适用场景
 
@@ -95,17 +108,19 @@
 
 ### 2. 智能查询
 
-查询采用双通道：
+查询在 **Wiki 结构化选页** 与 **Qdrant** 之间协同：
 
-- Wiki 路径：从 `index.md` 和已存在的结构化页面中导航
-- Qdrant 路径：从向量索引中检索语义相关页面 / chunk
+- **Wiki 路径**：由 LLM 结合 `index.md` / `schema.md` 选择相关页面（深度模式会对多个子问题分别选页）。
+- **Chunk 路径**：向量检索 +（可选）全库 chunk 语料上的 BM25，RRF 融合后再做按文件限流与可选邻居扩展。
+- **Fact 路径**：表格行向量检索；默认再对全量 fact payload 构建搜索文本（字段名、值、`fact_text` 等）做 BM25，并叠加轻量字段精确加分，三者融合排序。超大表可通过环境变量关闭或限制行数。
+
+**推理模式**（聊天栏下拉）：`standard` / `deep` / `react`，流式与非流式接口均支持。深度与极致模式在合并检索后增加一轮 **检索评审**（JSON：`sufficient` / `follow_up_queries`），必要时自动多查一轮；结果与 `react_trace` 等可写入查询日志便于排障。
 
 最终返回：
 
-- 回答内容
-- Wiki 证据
-- Chunk 证据
-- 置信度（`high / medium / low`）
+- 回答内容（流式为 SSE `answer_chunk` + `done`）
+- Wiki / Chunk / Fact 证据与引用校验提示
+- 置信度（`high / medium / low`）及原因说明
 
 ### 3. Wiki 维护
 
@@ -211,6 +226,8 @@ make prod
 | `SECRET_KEY` | Flask Secret |
 | `DATA_DIR` | 数据目录 |
 | `ADMIN_USERNAME` | 管理员用户名 |
+| `RAG_ENABLE_BM25` / `RAG_BM25_TOP_K` | Chunk 关键词通道与候选规模 |
+| `RAG_ENABLE_FACT_KEYWORD` / `RAG_FACT_KEYWORD_MAX_RECORDS` 等 | Fact 关键词与精确通道；超大表可调低或关闭 |
 
 ## 常用命令
 
@@ -255,9 +272,12 @@ make format
 ├── templates/             # Jinja2 模板
 ├── static/                # CSS / JS / 静态资源
 ├── tests/                 # 单元、契约、前端、路由、E2E 测试
-├── scripts/               # 对比测试、E2E 脚本等
+├── scripts/               # 部署、E2E、巡检、客户端打包脚本等
 ├── deploy/                # 生产部署资产（systemd service 模板）
 ├── migrations/            # SQL 迁移文件
+├── llmwiki_core/          # 服务端与机密客户端共享的检索与契约
+├── confidential_client/   # 机密知识库桌面客户端（可选）
+├── packaging/             # 客户端安装包与 CI 相关资源
 └── docs/design.md         # 完整设计文档
 ```
 
@@ -307,12 +327,6 @@ make inspect
 - Dashboard 聊天输入区控件高度指标
 
 适合排查“按钮点击没反应”“一直加载中”“控件高度不齐”“资源加载失败”这类浏览器侧问题。
-
-### 页面巡检截图
-
-```bash
-make inspect
-```
 
 ### 前端结构测试示例
 
