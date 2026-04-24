@@ -3865,13 +3865,24 @@ def _register_routes(app: Flask) -> None:
                 ],
                 "facts": [
                     {
+                        "record_id": e.get("record_id", ""),
                         "source_file": e.get("source_file", ""),
+                        "source_markdown_filename": e.get("source_markdown_filename", ""),
+                        "sheet": e.get("sheet", ""),
+                        "row_index": e.get("row_index"),
                         "score": e.get("score"),
                         "fields": e.get("fields", {}),
+                        "snippet": (e.get("snippet") or "")[:300],
+                        "title": e.get("title", ""),
+                        "url": e.get("url", ""),
                     }
                     for e in fact_ev
                 ],
             },
+            "reasoning_mode": result.get("reasoning_mode", "standard"),
+            "sub_questions": result.get("sub_questions") or [],
+            "react_trace": result.get("react_trace") or [],
+            "retrieval_critique": result.get("retrieval_critique") or [],
         }
 
     @api_v1_bp.route("/search", methods=["POST"])
@@ -3968,6 +3979,9 @@ def _register_routes(app: Flask) -> None:
             )
 
         owner_username = repo.user.username
+        reasoning_mode = current_app.wiki_engine._normalize_reasoning_mode(
+            payload.get("reasoning_mode")
+        )
 
         import time as _time
         _t0 = _time.monotonic()
@@ -3978,6 +3992,7 @@ def _register_routes(app: Flask) -> None:
                 query,
                 _wiki_base_url(owner_username, repo.slug),
                 history=None,
+                reasoning_mode=reasoning_mode,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("[api_v1] search failed repo=%s", repo.id)
@@ -4022,8 +4037,18 @@ def _register_routes(app: Flask) -> None:
                     for e in chunk_ev
                 ],
                 "facts": [
-                    {"source_file": e.get("source_file", ""), "score": e.get("score"),
-                     "fields": e.get("fields", {})}
+                    {
+                        "record_id": e.get("record_id", ""),
+                        "source_file": e.get("source_file", ""),
+                        "source_markdown_filename": e.get("source_markdown_filename", ""),
+                        "sheet": e.get("sheet", ""),
+                        "row_index": e.get("row_index"),
+                        "score": e.get("score"),
+                        "fields": e.get("fields", {}),
+                        "snippet": (e.get("snippet") or "")[:300],
+                        "title": e.get("title", ""),
+                        "url": e.get("url", ""),
+                    }
                     for e in fact_ev
                 ],
             }

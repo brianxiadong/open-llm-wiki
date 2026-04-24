@@ -1,0 +1,164 @@
+{
+  "_readme": "金标与 eval/pack/e2e-llm-bench.zip 中 wiki 页一一对应。repo 留空时在命令行传 --repo <owner>/eval-llm-bench。若已在后台摄入 raw/e2e-training-costs.xlsx，则 expected_facts 生效；仅导入 wiki 时可依赖页面 e2e-training-costs.md 与关键词。",
+  "questions": [
+    {
+      "id": "e2e-01-transformer-rnn",
+      "question": "Transformer 架构相对 RNN 的核心优势是什么？为什么能替代循环网络？",
+      "expected_pages": ["transformer-architecture.md", "attention-mechanism.md"],
+      "expected_keywords": ["attention", "RNN", "并行"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-02-self-vs-cross",
+      "question": "Self-attention 和 Cross-attention 的根本区别是什么？",
+      "expected_pages": ["attention-mechanism.md"],
+      "expected_keywords": ["同一序列", "encoder", "decoder"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-03-rlhf-pipeline",
+      "question": "RLHF 一般分哪几个阶段？每个阶段做什么？",
+      "expected_pages": ["rlhf.md"],
+      "expected_keywords": ["SFT", "奖励", "PPO"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-04-flashattention-doc",
+      "question": "哪篇资料说明了 FlashAttention 如何降低显存访问？作者与会议年份是什么？",
+      "expected_pages": ["attention-mechanism.md"],
+      "expected_keywords": ["FlashAttention", "Dao", "NeurIPS"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-05-gpt-vs-bert",
+      "question": "GPT 系与 BERT 在架构范式上的根本差异是什么？",
+      "expected_pages": ["large-language-models.md", "transformer-architecture.md"],
+      "expected_keywords": ["decoder", "encoder", "双向"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-06-rag-vs-wiki",
+      "question": "纯 RAG 与「编译式 LLM Wiki」在知识沉淀方式上有什么矛盾观点？",
+      "expected_pages": ["rag-vs-fine-tuning.md", "knowledge-management-with-llms.md"],
+      "expected_keywords": ["RAG", "wiki", "检索"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-07-training-cost-table",
+      "question": "根据成本参考表，GPT-2（约 1.5B 参数）一行写的预估训练费用是多少美元？PaLM 一行呢？",
+      "expected_pages": ["e2e-training-costs.md"],
+      "expected_keywords": ["50000", "8000000"],
+      "expected_facts": [
+        {
+          "record_id": "trainingcost:2",
+          "sheet": "TrainingCost",
+          "row_index": 2,
+          "field_substrings": ["50000"]
+        },
+        {
+          "record_id": "trainingcost:3",
+          "sheet": "TrainingCost",
+          "row_index": 3,
+          "field_substrings": ["8000000"]
+        }
+      ],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-08-attention-complexity",
+      "question": "标准稠密注意力的复杂度大致如何？资料里提到了哪种 IO 友好优化？",
+      "expected_pages": ["attention-mechanism.md", "transformer-architecture.md"],
+      "expected_keywords": ["FlashAttention", "O(n"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-09-contradiction-rag-enough",
+      "question": "关于「RAG 是否足够」，不同页面之间有什么对立观点？请简要说明。",
+      "expected_pages": ["rag-vs-fine-tuning.md", "knowledge-management-with-llms.md", "overview.md"],
+      "expected_keywords": ["RAG", "足够", "编译"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-10-dpo-vs-rlhf",
+      "question": "DPO 相对传统 RLHF  pipeline 主要省掉了哪一类模型？",
+      "expected_pages": ["rlhf.md"],
+      "expected_keywords": ["奖励", "DPO", "偏好"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-11-rnn-to-transformer",
+      "question": "从 RNN/LSTM 到 Transformer 的技术主线，资料里如何串起来？",
+      "expected_pages": ["transformer-architecture.md", "attention-mechanism.md", "large-language-models.md"],
+      "expected_keywords": ["Bahdanau", "Attention Is All You Need", "Transformer"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-12-deepseek-mention",
+      "question": "资料里如何介绍 DeepSeek 这类模型？",
+      "expected_pages": ["large-language-models.md"],
+      "expected_keywords": ["DeepSeek"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-13-rag-vs-finetune-when",
+      "question": "什么情况下更适合 RAG，什么情况下更适合 fine-tuning？",
+      "expected_pages": ["rag-vs-fine-tuning.md"],
+      "expected_keywords": ["引用", "风格", "LoRA"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-14-overview-synthesis",
+      "question": "综合本知识库各主题，概述大语言模型相关的关键技术栈（不必过长）。",
+      "expected_pages": ["overview.md"],
+      "expected_keywords": ["Transformer", "RLHF"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-15-alpha-power-no-beta-mix",
+      "question": "仅针对 Alpha-900：其典型功耗是多少瓦？接口类型是什么？",
+      "expected_pages": ["e2e-product-line.md"],
+      "expected_keywords": ["420", "PCIe"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": {
+        "forbidden_in_answer": ["Beta-One", "USB4", "8 W", "8W"]
+      }
+    },
+    {
+      "id": "e2e-16-abstain-fictional-sku",
+      "question": "Neptune-9999 加速卡的默认 BMC 密码策略是什么？",
+      "expected_pages": [],
+      "expected_keywords": [],
+      "expected_facts": [],
+      "must_abstain": true,
+      "comparison": { "forbidden_in_answer": [] }
+    }
+  ]
+}

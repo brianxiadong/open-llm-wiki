@@ -1,0 +1,23 @@
+{
+  "questions": [
+    {
+      "id": "e2e-sample-01",
+      "question": "示例：请替换为针对已摄入知识库的真实问题",
+      "repo": "owner/slug",
+      "expected_pages": ["overview.md"],
+      "expected_keywords": ["关键词1"],
+      "expected_facts": [],
+      "must_abstain": false,
+      "comparison": { "forbidden_in_answer": [] }
+    },
+    {
+      "id": "e2e-sample-02-abstain",
+      "question": "示例：库中不存在的内容，期望模型表达不确定或拒答",
+      "repo": "owner/slug",
+      "expected_pages": [],
+      "expected_keywords": [],
+      "must_abstain": true,
+      "comparison": { "forbidden_in_answer": [] }
+    }
+  ]
+}

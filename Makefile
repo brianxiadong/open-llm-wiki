@@ -1,4 +1,4 @@
-.PHONY: init dev prod migrate check test test-e2e inspect lint format clean deploy client-desktop client-package client-binary client-windows-installer
+.PHONY: init dev prod migrate check test test-e2e inspect lint format clean deploy client-desktop client-package client-binary client-windows-installer build-e2e-pack eval-ci
 
 init:
 	python3 -m venv .venv
@@ -18,8 +18,14 @@ migrate:
 check:
 	.venv/bin/python manage.py check
 
+build-e2e-pack:
+	.venv/bin/python eval/scripts/build_e2e_wiki_pack.py
+
 test:
 	.venv/bin/pytest tests/ -v --ignore=tests/test_e2e.py
+
+eval-ci:
+	.venv/bin/pytest tests/test_eval_e2e_harness.py tests/test_eval_e2e_scoring.py -q
 
 test-e2e:
 	bash scripts/ab-e2e-test.sh

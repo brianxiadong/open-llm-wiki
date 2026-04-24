@@ -247,7 +247,20 @@ _FAKE_QUERY_RESULT = {
     "chunk_evidence": [
         {"filename": "ae350-specifications.md", "score": 0.78, "snippet": "RJ45 PoE ..."}
     ],
-    "fact_evidence": [],
+    "fact_evidence": [
+        {
+            "record_id": "fact-rec-1",
+            "source_file": "spec.xlsx",
+            "source_markdown_filename": "spec.md",
+            "sheet": "参数",
+            "row_index": 2,
+            "fields": {"接口": "RJ45"},
+            "snippet": "RJ45 PoE",
+            "score": 0.91,
+            "title": "参数 第 2 行",
+            "url": "/alice/kb/sources/spec.md",
+        }
+    ],
     "evidence_summary": "3 条证据",
     "query_mode": "hybrid",
     "intent": "generic",
@@ -255,6 +268,10 @@ _FAKE_QUERY_RESULT = {
     "referenced_pages": [],
     "wiki_sources": [],
     "qdrant_sources": [],
+    "reasoning_mode": "standard",
+    "sub_questions": [],
+    "react_trace": [],
+    "retrieval_critique": [],
 }
 
 
@@ -287,6 +304,40 @@ def test_api_search_explicit_repo_returns_answer_with_evidence(app):
     assert len(data["evidence"]["chunks"]) == 1
     assert data["trace_id"]
     assert "latency_ms" in data
+    assert data["reasoning_mode"] == "standard"
+    fact0 = data["evidence"]["facts"][0]
+    assert fact0["record_id"] == "fact-rec-1"
+    assert fact0["sheet"] == "参数"
+    assert fact0["row_index"] == 2
+    assert fact0["source_markdown_filename"] == "spec.md"
+
+
+def test_api_search_passes_reasoning_mode_to_engine(app):
+    plaintext, _, user_id = _create_user_with_token(app, username="alice_rm")
+    _create_repo(app, owner_id=user_id, name="KB", slug="kb-rm")
+    fake = {**_FAKE_QUERY_RESULT, "reasoning_mode": "deep"}
+    with patch.object(app.wiki_engine, "query_with_evidence", return_value=fake) as mock_q:
+        resp = app.test_client().post(
+            "/api/v1/search",
+            json={"query": "q1", "repo": "alice_rm/kb-rm", "reasoning_mode": "deep"},
+            headers=_h(plaintext),
+        )
+    assert resp.status_code == 200
+    assert mock_q.call_args.kwargs.get("reasoning_mode") == "deep"
+    assert resp.get_json()["reasoning_mode"] == "deep"
+
+
+def test_api_search_invalid_reasoning_mode_defaults_to_standard(app):
+    plaintext, _, user_id = _create_user_with_token(app, username="alice_rm2")
+    _create_repo(app, owner_id=user_id, name="KB", slug="kb-rm2")
+    with patch.object(app.wiki_engine, "query_with_evidence", return_value=_FAKE_QUERY_RESULT) as mock_q:
+        resp = app.test_client().post(
+            "/api/v1/search",
+            json={"query": "q1", "repo": "alice_rm2/kb-rm2", "reasoning_mode": "not-a-mode"},
+            headers=_h(plaintext),
+        )
+    assert resp.status_code == 200
+    assert mock_q.call_args.kwargs.get("reasoning_mode") == "standard"
 
 
 def test_api_search_persists_query_log(app):

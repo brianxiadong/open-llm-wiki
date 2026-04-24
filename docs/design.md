@@ -818,8 +818,11 @@ User Prompt:（根据操作类型不同）
 ### 7.4 查询的 Prompt 细节（多通道 Hybrid RAG）
 
 查询分四步：**问题分类 → 多通道召回 → RRF 融合 → Chunk 粒度 Prompt**。所有
-参数都可通过 `config.py`（`RAG_`* 环境变量）调整，evaluation 脚本
-`eval/scripts/eval_retrieval.py` 用来量化改动对 Recall@k / MRR 的影响。
+参数都可通过 `config.py`（`RAG_`* 环境变量）调整；离线 chunk 评测用
+`eval/scripts/eval_retrieval.py`（Recall@k / MRR）；对**已部署服务**的真链路与三档推理模式对比用
+`eval/scripts/eval_e2e.py`（Bearer 调用 `/api/v1/search`，金标见 `eval/ground_truth/e2e_questions.json`）。
+
+**CI 金标回归（无需启服务、不调用 LLM）**：`eval/e2e/harness.py` 按金标合成「理想引擎输出」，对 `score_one` 与 `POST /api/v1/search` 的装配做回归；测试入口为 `tests/test_eval_e2e_harness.py`（`make test` 已包含）。可选本地摘要：`python -m eval.e2e.harness`。打分逻辑在 `eval/e2e/scoring.py`。
 
 **Step 1 — 问题分类**（`utils.classify_query_mode`）：
 
@@ -944,6 +947,13 @@ open-llm-wiki/
 ├── mineru_client.py       ← MinerU 文档解析客户端（HTTP 调用）
 ├── llmwiki_core/          ← 服务端 / 机密客户端共享 contract
 │   └── contracts.py       ← RepoRef / LocalRepoPaths / QueryRunResult
+├── eval/                  ← 离线评测与 E2E 金标
+│   ├── e2e/
+│   │   └── scoring.py     ← `/api/v1/search` 响应的多维度金标打分
+│   ├── ground_truth/      ← questions.json、e2e_questions.sample.json 等
+│   └── scripts/
+│       ├── eval_retrieval.py  ← chunk Recall@k / MRR（直连 Qdrant）
+│       └── eval_e2e.py        ← HTTP E2E（Bearer + 三档 reasoning_mode）
 ├── confidential_client/   ← 本地机密知识库运行层
 │   ├── cli.py             ← 纯客户端 CLI 入口
 │   ├── controller.py      ← 客户端 workflow controller
@@ -1343,12 +1353,12 @@ QDRANT_URL=http://localhost:6333    # Qdrant 服务地址
 | ---- | ---------------- | ----------- | -------------------------------------------------------------------------------------------------- |
 | GET  | `/api/v1/me`     | `kb:read`   | 验证 token 归属；返回用户信息 + token 元数据（prefix / scopes / expires_at）                                       |
 | GET  | `/api/v1/repos`  | `kb:read`   | 列出当前 token 可见的全部知识库（owner + member + public 合集、去重、按 updated_at 降序）。`?include_public=false` 可屏蔽广场条目 |
-| POST | `/api/v1/search` | `kb:search` | 在指定 KB 内做自然语言检索；body：`{query, repo?: "owner/slug", top_k?, query_mode?}`                           |
+| POST | `/api/v1/search` | `kb:search` | 在指定 KB 内做自然语言检索；body：`{query, repo?: "owner/slug", reasoning_mode?: "standard"\|"deep"\|"react"}`（非法值按 `standard` 归一）；与 Web 端一致走 `query_with_evidence` |
 
 
 ### 8.7.3 `/search` 语义（第一步：显式路由）
 
-- 传入 `repo="owner/slug"`：解析 → `_can_user_access_repo(repo, api_user)` 鉴权 → 调 `wiki_engine.query_with_evidence` → 返回与 Web 端一致的答案 + 证据 + 置信度 + `trace_id`
+- 传入 `repo="owner/slug"`：解析 → `_can_user_access_repo(repo, api_user)` 鉴权 → 调 `wiki_engine.query_with_evidence(..., reasoning_mode=...)` → 返回与 Web 端一致的答案 + 证据 + 置信度 + `trace_id` + `reasoning_mode`
 - 未传 `repo`：走自动路由（见 §8.7.4），命中则正常返回 + `routing.mode="auto"`，未命中返 `422 no_matching_repo` + `candidates`
 - 响应体结构：
   ```json
@@ -1358,12 +1368,27 @@ QDRANT_URL=http://localhost:6333    # Qdrant 服务地址
     "answer": "markdown...",
     "confidence": {"level": "high", "score": 0.82, "reasons": [...]},
     "query_mode": "hybrid",
+    "reasoning_mode": "standard",
+    "sub_questions": [],
+    "react_trace": [],
+    "retrieval_critique": [],
     "intent": "generic",
     "citation_validation": {...},
     "evidence": {
       "wiki_pages": [{"filename": "...", "title": "...", "reason": "..."}],
       "chunks":     [{"filename": "...", "score": 0.78, "snippet": "..."}],
-      "facts":      [{"source_file": "...", "score": 0.72, "fields": {...}}]
+      "facts":      [{
+        "record_id": "...",
+        "source_file": "...",
+        "source_markdown_filename": "...",
+        "sheet": "...",
+        "row_index": 0,
+        "score": 0.72,
+        "fields": {...},
+        "snippet": "...",
+        "title": "...",
+        "url": "..."
+      }]
     },
     "latency_ms": 1840
   }
@@ -1940,6 +1965,10 @@ open-llm-wiki/
 │       ├── lucide/
 │       ├── easymde/
 │       └── d3/
+├── eval/                  ← 离线检索评测 + HTTP E2E 金标（见 §13.6）
+│   ├── e2e/scoring.py
+│   ├── ground_truth/
+│   └── scripts/
 ├── tests/                 ← 测试
 │   ├── test_confidential_client.py
 │   ├── test_confidential_desktop.py
@@ -2190,13 +2219,23 @@ eval/
 ├── corpus/                    ← 测试文档（后续构建）
 │   ├── doc-01-xxx.md
 │   └── ...
+├── pack/                      ← 预构建 Wiki ZIP（固定 slug，免 LLM 摄入漂移）
+│   ├── e2e-llm-bench.zip      ← `wiki/` + `raw/e2e-training-costs.xlsx`，由脚本生成
+│   └── e2e-wiki-bench/        ← 解压后的目录（脚本写入，可删后重跑）
+├── e2e/
+│   ├── scoring.py             ← E2E 金标：页面召回、事实行、拒答、对比防串、关键词覆盖
+│   └── harness.py             ← CI：由金标合成 mock 引擎输出，驱动 pytest 回归
 ├── ground_truth/              ← 标准答案
-│   ├── questions.json         ← 问答对 + 预期命中页面
+│   ├── questions.json         ← 问答对 + 预期命中页面（chunk 离线评测）
+│   ├── e2e_questions.json     ← HTTP E2E 正式金标（与 e2e-llm-bench.zip 页面对齐）
+│   ├── e2e_questions.sample.json ← E2E 字段样例
 │   └── entities.json          ← 预期实体 + 交叉引用 + 矛盾
 ├── scripts/
 │   ├── run_eval.py            ← 评估主入口
 │   ├── eval_ingest.py         ← 摄入质量评估
-│   ├── eval_retrieval.py      ← 检索准确率评估
+│   ├── eval_retrieval.py      ← 检索准确率评估（Recall@k / MRR）
+│   ├── eval_e2e.py            ← 已部署实例 E2E（`/api/v1/search` + Bearer）
+│   ├── build_e2e_wiki_pack.py ← 从 `corpus/doc-0*.md` 生成 `pack/e2e-llm-bench.zip`
 │   └── eval_answer.py         ← 回答质量评估（LLM-as-Judge）
 └── results/                   ← 评估结果输出
     └── report-YYYY-MM-DD.json
