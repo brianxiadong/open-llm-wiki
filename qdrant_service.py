@@ -548,6 +548,9 @@ class QdrantService:
     def _chunk_collection_name(self, repo_id: int) -> str:
         return f"repo_{repo_id}_chunks"
 
+    def _raw_chunk_collection_name(self, repo_id: int) -> str:
+        return f"repo_{repo_id}_raw_chunks"
+
     @staticmethod
     def _stable_chunk_point_id(repo_id: int, filename: str, chunk_id: str) -> int:
         digest = hashlib.md5(f"{repo_id}:{filename}:{chunk_id}".encode()).hexdigest()
@@ -686,6 +689,105 @@ class QdrantService:
                 position += 1
         return out
 
+    def split_raw_source_into_chunks(self, content: str) -> list[dict]:
+        """Split raw Markdown/TXT into chunks without losing table-like rows.
+
+        Wiki pages are narrative and benefit from heading-aware section chunks. Raw
+        sources often contain OCR/Excel-style wide rows where one line is one product
+        record, so long non-heading lines are kept as independent chunks.
+        """
+        text = self._strip_frontmatter(content)
+        if not text.strip():
+            return []
+
+        out: list[dict] = []
+        buffer: list[str] = []
+        buffer_heading = ""
+        current_heading = ""
+        position = 0
+
+        def _emit_piece(heading: str, piece: str) -> None:
+            nonlocal position
+            piece = piece.strip()
+            if not piece:
+                return
+            if len(piece) <= self._chunk_max:
+                out.append({
+                    "chunk_id": str(position),
+                    "heading": heading,
+                    "chunk_text": piece,
+                    "position": position,
+                })
+                position += 1
+                return
+            for h, chunk_text in self._slice_section_body(heading, piece):
+                out.append({
+                    "chunk_id": str(position),
+                    "heading": h,
+                    "chunk_text": chunk_text,
+                    "position": position,
+                })
+                position += 1
+
+        def _flush_buffer() -> None:
+            nonlocal buffer, buffer_heading
+            if buffer:
+                _emit_piece(buffer_heading, "\n".join(buffer))
+                buffer = []
+                buffer_heading = current_heading
+
+        import re as _re
+
+        def _raw_heading(stripped: str) -> str:
+            heading_match = _re.match(r"^#{1,4}\s+(.+)", stripped)
+            if heading_match:
+                return heading_match.group(1).strip()
+            bold_heading = _re.fullmatch(r"\*\*([^*\n]{1,120})\*\*", stripped)
+            if bold_heading:
+                return bold_heading.group(1).strip()
+            return ""
+
+        def _looks_like_record_line(stripped: str) -> bool:
+            if stripped.startswith("|") and stripped.endswith("|"):
+                return True
+            if len(stripped) < 60:
+                return False
+            numbered = _re.match(r"^(?:\*\*)?\d+(?:\.\d+)?(?:\*\*)?\s+\S", stripped)
+            if not numbered:
+                return False
+            return bool(_re.search(r"\S\s{2,}\S", stripped)) or len(stripped) >= self._chunk_min
+
+        for raw_line in text.splitlines():
+            line = raw_line.rstrip()
+            stripped = line.strip()
+            raw_heading = _raw_heading(stripped)
+            if raw_heading:
+                _flush_buffer()
+                current_heading = raw_heading
+                buffer_heading = current_heading
+                continue
+            if not stripped:
+                _flush_buffer()
+                continue
+            if _looks_like_record_line(stripped):
+                _flush_buffer()
+                _emit_piece(current_heading, stripped)
+                continue
+            if len(stripped) >= self._chunk_min:
+                _flush_buffer()
+                _emit_piece(current_heading, stripped)
+                continue
+            if not buffer:
+                buffer_heading = current_heading
+            candidate = "\n".join(buffer + [stripped])
+            if len(candidate) > self._chunk_max:
+                _flush_buffer()
+            buffer.append(stripped)
+            if len("\n".join(buffer)) >= self._chunk_min:
+                _flush_buffer()
+        _flush_buffer()
+        return out
+
     @staticmethod
     def build_chunk_embed_text(page_title: str, heading: str, chunk_text: str) -> str:
         """把页面标题和小节标题拼到 chunk_text 前作为 embedding 输入，显著提升语义区分度。"""
@@ -704,6 +806,13 @@ class QdrantService:
 
     def ensure_chunk_collection(self, repo_id: int) -> None:
         name = self._chunk_collection_name(repo_id)
+        self._ensure_vector_collection(name)
+
+    def ensure_raw_chunk_collection(self, repo_id: int) -> None:
+        name = self._raw_chunk_collection_name(repo_id)
+        self._ensure_vector_collection(name)
+
+    def _ensure_vector_collection(self, name: str) -> None:
         try:
             if self._qdrant.collection_exists(collection_name=name):
                 return
@@ -814,6 +923,7 @@ class QdrantService:
             return
         self.ensure_chunk_collection(repo_id)
         collection = self._chunk_collection_name(repo_id)
+        self.delete_page_chunks(repo_id, filename)
         embedded = self._embed_chunks_batched(chunks, page_title=title)
         points: list[PointStruct] = []
         for chunk, vector in embedded:
@@ -830,6 +940,43 @@ class QdrantService:
                     "heading": chunk["heading"],
                     "chunk_text": chunk["chunk_text"][:DEFAULT_CHUNK_PAYLOAD_CHARS],
                     "position": chunk["position"],
+                    "source_layer": "wiki",
+                },
+            ))
+        if points:
+            self._upsert_points_in_batches(collection_name=collection, points=points)
+
+    def upsert_raw_chunks(
+        self,
+        repo_id: int,
+        filename: str,
+        title: str,
+        content: str,
+    ) -> None:
+        chunks = self.split_raw_source_into_chunks(content)
+        if not chunks:
+            return
+        self.ensure_raw_chunk_collection(repo_id)
+        collection = self._raw_chunk_collection_name(repo_id)
+        self.delete_raw_chunks(repo_id, filename)
+        embedded = self._embed_chunks_batched(chunks, page_title=title or filename)
+        points: list[PointStruct] = []
+        for chunk, vector in embedded:
+            point_id = self._stable_chunk_point_id(repo_id, filename, chunk["chunk_id"])
+            points.append(PointStruct(
+                id=point_id,
+                vector=vector,
+                payload={
+                    "repo_id": repo_id,
+                    "filename": filename,
+                    "source_file": filename,
+                    "page_title": title or filename,
+                    "page_type": "raw",
+                    "chunk_id": f"{filename}#{chunk['chunk_id']}",
+                    "heading": chunk["heading"],
+                    "chunk_text": chunk["chunk_text"][:DEFAULT_CHUNK_PAYLOAD_CHARS],
+                    "position": chunk["position"],
+                    "source_layer": "raw",
                 },
             ))
         if points:
@@ -852,6 +999,48 @@ class QdrantService:
         - ``oversample``: 为了能在过滤后仍然取到 ``limit`` 条，Qdrant 端拉取 ``limit * oversample`` 条
         """
         collection = self._chunk_collection_name(repo_id)
+        return self._search_chunk_collection(
+            collection=collection,
+            query=query,
+            limit=limit,
+            score_threshold=score_threshold,
+            max_per_file=max_per_file,
+            oversample=oversample,
+            default_source_layer="wiki",
+        )
+
+    def search_raw_chunks(
+        self,
+        repo_id: int,
+        query: str,
+        limit: int = 8,
+        *,
+        score_threshold: float | None = None,
+        max_per_file: int | None = None,
+        oversample: int = 3,
+    ) -> list[dict[str, Any]]:
+        collection = self._raw_chunk_collection_name(repo_id)
+        return self._search_chunk_collection(
+            collection=collection,
+            query=query,
+            limit=limit,
+            score_threshold=score_threshold,
+            max_per_file=max_per_file,
+            oversample=oversample,
+            default_source_layer="raw",
+        )
+
+    def _search_chunk_collection(
+        self,
+        *,
+        collection: str,
+        query: str,
+        limit: int,
+        score_threshold: float | None,
+        max_per_file: int | None,
+        oversample: int,
+        default_source_layer: str,
+    ) -> list[dict[str, Any]]:
         try:
             if not self._qdrant.collection_exists(collection_name=collection):
                 return []
@@ -889,6 +1078,8 @@ class QdrantService:
                 "chunk_text": pl.get("chunk_text", ""),
                 "position": pl.get("position", 0),
                 "score": score,
+                "source_layer": pl.get("source_layer", default_source_layer),
+                "source_file": pl.get("source_file", fn),
             })
             if len(out) >= limit:
                 break
@@ -897,6 +1088,18 @@ class QdrantService:
     def scroll_all_chunks(self, repo_id: int) -> list[dict[str, Any]]:
         """拉取某 repo 下所有 chunk payload，供 BM25 等旁路索引构建使用。"""
         collection = self._chunk_collection_name(repo_id)
+        return self._scroll_all_chunk_collection(collection, default_source_layer="wiki")
+
+    def scroll_all_raw_chunks(self, repo_id: int) -> list[dict[str, Any]]:
+        collection = self._raw_chunk_collection_name(repo_id)
+        return self._scroll_all_chunk_collection(collection, default_source_layer="raw")
+
+    def _scroll_all_chunk_collection(
+        self,
+        collection: str,
+        *,
+        default_source_layer: str,
+    ) -> list[dict[str, Any]]:
         try:
             if not self._qdrant.collection_exists(collection_name=collection):
                 return []
@@ -923,6 +1126,8 @@ class QdrantService:
                         "heading": pl.get("heading", ""),
                         "chunk_text": pl.get("chunk_text", ""),
                         "position": pl.get("position", 0),
+                        "source_layer": pl.get("source_layer", default_source_layer),
+                        "source_file": pl.get("source_file", pl.get("filename", "")),
                     })
                 if not next_offset:
                     break
@@ -975,6 +1180,13 @@ class QdrantService:
 
     def delete_page_chunks(self, repo_id: int, filename: str) -> None:
         collection = self._chunk_collection_name(repo_id)
+        self._delete_chunks_from_collection(collection, filename, log_label="delete_page_chunks")
+
+    def delete_raw_chunks(self, repo_id: int, filename: str) -> None:
+        collection = self._raw_chunk_collection_name(repo_id)
+        self._delete_chunks_from_collection(collection, filename, log_label="delete_raw_chunks")
+
+    def _delete_chunks_from_collection(self, collection: str, filename: str, *, log_label: str) -> None:
         try:
             if not self._qdrant.collection_exists(collection_name=collection):
                 return
@@ -986,7 +1198,7 @@ class QdrantService:
                 ),
             )
         except Exception as e:
-            logger.warning("delete_page_chunks failed filename=%s: %s", filename, e)
+            logger.warning("%s failed filename=%s: %s", log_label, filename, e)
 
     def delete_chunk_collection(self, repo_id: int) -> None:
         name = self._chunk_collection_name(repo_id)
@@ -994,6 +1206,13 @@ class QdrantService:
             self._qdrant.delete_collection(collection_name=name)
         except Exception as e:
             logger.warning("delete_chunk_collection failed repo_id=%s: %s", repo_id, e)
+
+    def delete_raw_chunk_collection(self, repo_id: int) -> None:
+        name = self._raw_chunk_collection_name(repo_id)
+        try:
+            self._qdrant.delete_collection(collection_name=name)
+        except Exception as e:
+            logger.warning("delete_raw_chunk_collection failed repo_id=%s: %s", repo_id, e)
 
     def delete_collection(self, repo_id: int) -> None:
         name = self._collection_name(repo_id)

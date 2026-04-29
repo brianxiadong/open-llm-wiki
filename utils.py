@@ -259,7 +259,7 @@ def _normalize_header_row(header_row: list) -> list[str]:
     headers: list[str] = []
     used: dict[str, int] = {}
     for idx, cell in enumerate(header_row, start=1):
-        base = str(cell).strip() if cell is not None else ""
+        base = _clean_header_label(cell)
         if not base:
             base = f"col_{idx}"
         if base in used:
@@ -271,24 +271,97 @@ def _normalize_header_row(header_row: list) -> list[str]:
     return headers
 
 
+def _clean_header_label(value) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    text = text.replace("\r", "").replace("\n", "")
+    return re.sub(r"[ \t]+", " ", text)
+
+
+def _row_non_empty_count(row: list) -> int:
+    return sum(1 for c in row if c not in (None, ""))
+
+
+def _row_numeric_count(row: list) -> int:
+    return sum(1 for c in row if isinstance(c, int | float) and not isinstance(c, bool))
+
+
 def _find_header_row_index(rows: list[list], max_scan: int = 5) -> int:
     """Pick the row most likely to be the real column header.
 
     Excel sheets often have one or more title / merged-cell rows before the
     actual headers.  The heuristic: among the first *max_scan* rows, the row
-    with the highest count of non-empty cells is the header.  Ties go to the
-    earlier row.
+    with the highest count of non-empty cells is the header. When that row
+    already looks data-heavy, use the previous row as the bottom header row.
+    Ties go to the earlier row.
     """
     if not rows:
         return 0
     scan = min(len(rows), max_scan)
     best_idx, best_count = 0, 0
     for i in range(scan):
-        count = sum(1 for c in rows[i] if c not in (None, ""))
+        count = _row_non_empty_count(rows[i])
         if count > best_count:
             best_count = count
             best_idx = i
+    if (
+        best_idx > 0
+        and _row_numeric_count(rows[best_idx]) >= 2
+        and _row_non_empty_count(rows[best_idx - 1]) >= 2
+    ):
+        return best_idx - 1
     return best_idx
+
+
+def _header_start_index(rows: list[list], header_idx: int) -> int:
+    if header_idx <= 0:
+        return header_idx
+    max_cols = max((len(r) for r in rows[:header_idx + 1]), default=0)
+    if max_cols <= 0:
+        return header_idx
+    if _row_non_empty_count(rows[header_idx]) >= max_cols * 0.6:
+        return header_idx
+    start = header_idx
+    while start > 0 and _row_non_empty_count(rows[start - 1]) > 1:
+        start -= 1
+    return start
+
+
+def _normalize_header_rows(header_rows: list[list]) -> list[str]:
+    if not header_rows:
+        return []
+    max_cols = max(len(r) for r in header_rows)
+    clean_rows: list[list[str]] = []
+    for row in header_rows:
+        clean_rows.append([
+            _clean_header_label(row[idx] if idx < len(row) else None)
+            for idx in range(max_cols)
+        ])
+    filled_rows: list[list[str]] = []
+    for row_idx, row in enumerate(clean_rows):
+        filled: list[str] = []
+        current = ""
+        for idx in range(max_cols):
+            value = row[idx]
+            if value:
+                current = value
+                filled.append(value)
+            elif any(prev[idx] for prev in clean_rows[:row_idx]):
+                filled.append("")
+            else:
+                filled.append(current)
+        filled_rows.append(filled)
+
+    combined: list[str] = []
+    for col in range(max_cols):
+        parts: list[str] = []
+        for row in filled_rows:
+            value = row[col]
+            if value and value not in parts:
+                parts.append(value)
+        combined.append(" ".join(parts))
+    return _normalize_header_row(combined)
 
 
 def _row_to_fact_text(source_filename: str, sheet_name: str, row_index: int, fields: dict) -> str:
@@ -323,7 +396,13 @@ def build_tabular_markdown_and_records(
             continue
 
         header_idx = _find_header_row_index(non_empty_rows)
-        headers = _normalize_header_row(non_empty_rows[header_idx])
+        header_start = _header_start_index(non_empty_rows, header_idx)
+        header_rows = non_empty_rows[header_start:header_idx + 1]
+        headers = (
+            _normalize_header_rows(header_rows)
+            if len(header_rows) > 1
+            else _normalize_header_row(non_empty_rows[header_idx])
+        )
         data_rows = non_empty_rows[header_idx + 1:]
 
         markdown_parts.append(f"\n## Sheet: {table_name}\n")
@@ -379,6 +458,109 @@ def read_jsonl(path: str) -> list[dict]:
     return rows
 
 
+_GLOSSARY_LINE_RE = re.compile(r"^(.{1,120}?)(?:\s*(?:=>|=|:|：)\s*)(.{1,800})$")
+
+
+def parse_glossary_entries(text: str, *, max_entries: int = 200) -> list[dict]:
+    """Parse repo-level glossary lines such as ``双模 = SVC + AVC``.
+
+    The glossary is intentionally plain text so owners can maintain it from the
+    settings page without learning YAML. Multiple aliases can be written on the
+    left side with ``|`` / ``，`` / ``、`` separators.
+    """
+    if not text:
+        return []
+    entries: list[dict] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith(">"):
+            continue
+        line = re.sub(r"^\s*[-*]\s+", "", line)
+        match = _GLOSSARY_LINE_RE.match(line)
+        if not match:
+            continue
+        lhs = match.group(1).strip()
+        definition = re.sub(r"\s+", " ", match.group(2).strip())
+        aliases = [
+            part.strip()
+            for part in re.split(r"[|,，、；;]", lhs)
+            if part and part.strip()
+        ]
+        if not aliases or not definition:
+            continue
+        entries.append({
+            "term": aliases[0],
+            "aliases": aliases,
+            "definition": definition,
+        })
+        if len(entries) >= max_entries:
+            break
+    return entries
+
+
+def match_glossary_entries(question: str, entries: list[dict], *, max_matches: int = 8) -> list[dict]:
+    """Return glossary entries whose term or alias appears in the query."""
+    if not question or not entries:
+        return []
+    q = question.lower()
+    matched: list[dict] = []
+    seen: set[str] = set()
+    for entry in entries:
+        aliases = [str(a).strip() for a in entry.get("aliases") or [] if str(a).strip()]
+        if not aliases:
+            continue
+        for alias in aliases:
+            needle = alias.lower()
+            if needle and needle in q:
+                key = str(entry.get("term") or alias).lower()
+                if key not in seen:
+                    matched.append(entry)
+                    seen.add(key)
+                break
+        if len(matched) >= max_matches:
+            break
+    return matched
+
+
+def expand_query_with_glossary(question: str, matches: list[dict], *, max_chars: int = 800) -> str:
+    """Append matched glossary definitions to a retrieval query.
+
+    This keeps the user-visible question unchanged while giving dense/BM25/fact
+    retrieval the vocabulary that may appear in source documents.
+    """
+    base = question or ""
+    if not matches:
+        return base
+    parts: list[str] = []
+    for item in matches:
+        term = str(item.get("term") or "").strip()
+        definition = str(item.get("definition") or "").strip()
+        if term and definition:
+            parts.append(f"{term} = {definition}")
+    if not parts:
+        return base
+    suffix = "; ".join(parts)
+    if len(suffix) > max_chars:
+        suffix = suffix[:max_chars].rstrip() + "…"
+    return f"{base}\n\n检索术语解释：{suffix}"
+
+
+def build_glossary_context(matches: list[dict]) -> str:
+    """Build the prompt context block for glossary matches."""
+    if not matches:
+        return ""
+    lines = [
+        "=== GLOSSARY ===",
+        "以下为当前知识库设置的术语解释；用户问题包含这些术语时，优先按这里的含义理解。",
+    ]
+    for item in matches:
+        term = str(item.get("term") or "").strip()
+        definition = str(item.get("definition") or "").strip()
+        if term and definition:
+            lines.append(f"- {term} = {definition}")
+    return "\n".join(lines) if len(lines) > 2 else ""
+
+
 def classify_query_mode(question: str) -> str:
     text = (question or "").strip().lower()
     if not text:
@@ -409,159 +591,95 @@ def classify_query_mode(question: str) -> str:
 
 DEFAULT_SCHEMA_MD = """\
 ---
-title: Wiki Schema
+title: 知识库提示词
 ---
 
-# Wiki Schema
+# 知识库提示词
 
-This file defines the structure and conventions for the wiki.
+这段内容会作为当前知识库的自定义提示词，参与文档摄入、Wiki 生成和问答回答。
+你可以按自己的业务修改，但不要要求模型忽略系统安全规则或编造资料中不存在的信息。
 
-## Page Types
+## 回答规则
 
-- **concept**: Explains a single concept, term, or technology.
-- **guide**: Step-by-step instructions or how-to content.
-- **reference**: API docs, tables, specs, or lookup content.
-- **overview**: High-level summaries that link to detail pages.
-- **comparison**: Side-by-side analysis of alternatives.
-- **log**: Changelog or ingestion history.
-- **index**: The main entry point listing all pages.
+- 优先依据检索上下文和原始文档回答，不要凭空补全。
+- 如果资料中没有直接证据，请明确说明“资料中未提及”或“现有证据不足”。
+- 对型号、价格、参数、日期、折扣、适用范围等字段保持严格，不跨产品或跨版本套用。
+- 如果问题涉及表格或清单，按原始记录逐行整理，避免把不同行字段拼成一条新记录。
 
-## Frontmatter Fields
+## 输出风格
 
-Every page should start with YAML frontmatter:
-
-```yaml
----
-title: Page Title
-type: concept | guide | reference | overview | comparison
-tags: [tag1, tag2]
-source: original-source-filename.pdf
-updated: YYYY-MM-DD
----
-```
-
-## Conventions
-
-- Use Chinese for page content (unless the source is English-only).
-- Filenames use lowercase ascii with hyphens: `my-page.md`.
-- Cross-reference other pages with `[Title](other-page.md)`.
-- Keep each page focused on a single topic.
+- 默认使用中文，结论先行，必要时给出简短依据。
+- 能直接回答时不要绕弯；需要计算时写出关键公式。
+- 不要在正文中写文件名或来源标注，证据由页面下方证据面板展示。
 """
 
 SCHEMA_ACADEMIC_MD = """\
 ---
-title: Wiki Schema — 学术研究
+title: 知识库提示词 — 学术研究
 ---
 
-# Wiki Schema — 学术研究
+# 知识库提示词 — 学术研究
 
-## Page Types
+## 回答规则
 
-- **paper**: 论文摘要和关键发现。
-- **concept**: 核心理论概念和术语定义。
-- **method**: 研究方法、实验设计、技术实现。
-- **result**: 实验结果、数据集、基准对比。
-- **comparison**: 不同方法/模型的横向对比。
-- **overview**: 某一研究方向的综合综述。
-- **index**: 主目录，按主题分类所有页面。
-- **log**: 摄入日志。
+- 优先区分“论文原文结论”“实验结果”“作者观点”和“你的归纳”。
+- 涉及指标、数据集、模型版本、实验设置时，必须使用资料中的明确字段。
+- 对不确定、样本不足或只在单篇论文中出现的结论，标注证据强弱。
+- 对比方法或模型时，按同一维度横向比较，不把 A 论文的实验条件套到 B 论文。
 
-## Frontmatter Fields
+## 输出风格
 
-```yaml
----
-title: Paper/Concept Title
-type: paper | concept | method | result | comparison | overview
-tags: [nlp, transformer, etc.]
-source: paper.pdf.md
-evidence_level: strong | moderate | weak
-updated: YYYY-MM-DD
----
-```
-
-## Conventions
-
-- 摘要页（paper）包含：研究问题、方法、结论、局限性。
-- 在 result 页标注证据等级 (evidence_level)。
-- 对比页使用 Markdown 表格。
-- 交叉引用格式：[作者年份](page.md)。
+- 先给摘要，再列依据和局限。
+- 对比类问题优先使用表格。
+- 结论不要过度外推，避免把相关性说成因果。
 """
 
 SCHEMA_PRODUCT_MD = """\
 ---
-title: Wiki Schema — 产品文档
+title: 知识库提示词 — 产品文档
 ---
 
-# Wiki Schema — 产品文档
+# 知识库提示词 — 产品文档
 
-## Page Types
+## 回答规则
 
-- **feature**: 功能介绍和使用说明。
-- **guide**: 操作教程、快速入门。
-- **reference**: API 文档、配置项、参数表。
-- **faq**: 常见问题与解答。
-- **changelog**: 版本更新记录。
-- **overview**: 产品整体介绍。
-- **index**: 主目录。
-- **log**: 摄入日志。
+- 产品型号、规格参数、价格、折扣、授权范围、停售/新增状态必须严格依据资料。
+- 用户问“是否支持/是不是/能不能”时，先给明确结论，再列出命中的产品特性。
+- 若术语解释中定义了业务含义，优先按该知识库内定义理解。
+- 不要把其他型号、其他系列或旧版本的能力套用到当前型号。
 
-## Frontmatter Fields
+## 输出风格
 
-```yaml
----
-title: Feature Name
-type: feature | guide | reference | faq | changelog | overview
-version: "1.0"
-updated: YYYY-MM-DD
----
-```
-
-## Conventions
-
-- guide 页使用有序步骤。
-- reference 页使用表格格式。
-- 每个功能页链接到对应的 guide 和 reference。
+- 简洁、面向销售/售前/实施人员。
+- 对价格或折扣计算，写出市场价、折扣和计算结果。
+- 对配置清单或参数较多的问题，使用表格。
 """
 
 SCHEMA_TECH_NOTES_MD = """\
 ---
-title: Wiki Schema — 技术笔记
+title: 知识库提示词 — 技术笔记
 ---
 
-# Wiki Schema — 技术笔记
+# 知识库提示词 — 技术笔记
 
-## Page Types
+## 回答规则
 
-- **concept**: 技术概念、算法原理。
-- **howto**: 如何解决某个具体问题。
-- **snippet**: 代码片段、命令备忘。
-- **troubleshoot**: 故障排查记录。
-- **overview**: 技术栈整体概述。
-- **index**: 主目录。
-- **log**: 摄入日志。
+- 优先给可执行步骤和判断依据。
+- 涉及命令、配置、版本号、接口字段时，必须按资料原文。
+- 排障问题按“现象、可能原因、验证方法、处理建议”组织。
+- 如果资料缺少环境或版本信息，明确指出缺口。
 
-## Frontmatter Fields
+## 输出风格
 
-```yaml
----
-title: Topic Name
-type: concept | howto | snippet | troubleshoot | overview
-tags: [python, docker, etc.]
-updated: YYYY-MM-DD
----
-```
-
-## Conventions
-
-- snippet 页包含可直接复制的代码块。
-- troubleshoot 页包含：症状、根因、解决方案。
-- 使用 howto 而非 guide（更口语化）。
+- 命令和配置使用代码块。
+- 先给最小可行方案，再补充注意事项。
+- 不确定时给出下一步验证命令，而不是武断结论。
 """
 
 SCHEMA_TEMPLATES = {
-    "default": ("通用", DEFAULT_SCHEMA_MD),
+    "default": ("通用问答", DEFAULT_SCHEMA_MD),
     "academic": ("学术研究", SCHEMA_ACADEMIC_MD),
-    "product": ("产品文档", SCHEMA_PRODUCT_MD),
+    "product": ("产品/报价", SCHEMA_PRODUCT_MD),
     "tech_notes": ("技术笔记", SCHEMA_TECH_NOTES_MD),
 }
 

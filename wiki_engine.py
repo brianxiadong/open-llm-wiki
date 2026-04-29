@@ -14,10 +14,14 @@ from llm_client import LLMClient
 from llmwiki_core import HybridRetriever, RetrievalConfig
 from qdrant_service import QdrantService
 from utils import (
+    build_glossary_context,
     classify_query_mode,
+    expand_query_with_glossary,
     list_wiki_pages,
     local_now,
     local_today_date_str,
+    match_glossary_entries,
+    parse_glossary_entries,
     read_jsonl,
     render_markdown,
 )
@@ -71,6 +75,20 @@ def _read_file(path: str) -> str:
         return ""
     with open(path, "r", encoding="utf-8") as fh:
         return fh.read()
+
+
+def _format_repo_prompt(content: str, *, include_empty: bool = False) -> str:
+    """Wrap the repo-level user prompt stored in wiki/schema.md."""
+    text = (content or "").strip()
+    if not text and not include_empty:
+        return ""
+    if not text:
+        text = "(暂无知识库提示词)"
+    return (
+        "\n\n--- 当前知识库提示词（owner 可配置） ---\n"
+        f"{text}\n"
+        "--- 知识库提示词结束 ---"
+    )
 
 
 def _clean_llm_markdown(text: str) -> str:
@@ -178,6 +196,9 @@ class WikiEngine:
 
     def _index_path(self, username: str, repo_slug: str) -> str:
         return os.path.join(self._wiki_dir(username, repo_slug), "index.md")
+
+    def _glossary_path(self, username: str, repo_slug: str) -> str:
+        return os.path.join(self._repo_base(username, repo_slug), "glossary.md")
 
     def _log_path(self, username: str, repo_slug: str) -> str:
         return os.path.join(self._wiki_dir(username, repo_slug), "log.md")
@@ -370,6 +391,31 @@ class WikiEngine:
             return {"ok": False, "filename": filename, "error": f"chunk: {exc}"}
         return {"ok": True, "filename": filename}
 
+    def _index_raw_source(
+        self,
+        *,
+        repo_id: int,
+        raw_dir: str,
+        filename: str,
+    ) -> dict:
+        filepath = os.path.join(raw_dir, filename)
+        content = _read_file(filepath)
+        if not content:
+            return {"ok": False, "filename": filename, "error": "empty content"}
+        fm, _ = render_markdown(content)
+        title = fm.get("title") or filename
+        try:
+            self._qdrant.upsert_raw_chunks(
+                repo_id=repo_id,
+                filename=filename,
+                title=title,
+                content=content,
+            )
+        except QdrantServiceError as exc:
+            logger.error("Raw chunk upsert failed for %s: %s", filename, exc)
+            return {"ok": False, "filename": filename, "error": f"raw_chunk: {exc}"}
+        return {"ok": True, "filename": filename}
+
     # -----------------------------------------------------------------------
     # CONFIDENCE SCORING
     # -----------------------------------------------------------------------
@@ -554,6 +600,16 @@ class WikiEngine:
         except Exception as exc:
             logger.warning("HyDE failed, fallback to raw question: %s", exc)
             return None
+
+    def _glossary_matches(self, username: str, repo_slug: str, question: str) -> list[dict]:
+        content = _read_file(self._glossary_path(username, repo_slug))
+        if not content:
+            return []
+        return match_glossary_entries(question, parse_glossary_entries(content))
+
+    @staticmethod
+    def _expand_with_glossary(question: str, glossary_matches: list[dict]) -> str:
+        return expand_query_with_glossary(question, glossary_matches)
 
     def _retrieve_chunks(self, repo_id: int, question: str, query_mode: str) -> list[dict]:
         if self._retriever is None:
@@ -779,10 +835,12 @@ class WikiEngine:
             cid = h.get("chunk_id")
             if not cid:
                 continue
+            layer = "raw" if h.get("source_layer") == "raw" else "wiki"
+            key = f"{layer}:{cid}"
             sc = _rank_score(h)
-            prev = by_id.get(str(cid))
+            prev = by_id.get(key)
             if prev is None or sc > _rank_score(prev):
-                by_id[str(cid)] = h
+                by_id[key] = h
         merged = sorted(by_id.values(), key=lambda x: -_rank_score(x))
         return merged[:max_n]
 
@@ -933,6 +991,23 @@ class WikiEngine:
             trace,
         )
 
+    @staticmethod
+    def _chunk_source_layer(hit: dict) -> str:
+        return "raw" if hit.get("source_layer") == "raw" else "wiki"
+
+    @staticmethod
+    def _chunk_evidence_url(
+        username: str,
+        repo_slug: str,
+        wiki_base_url: str,
+        hit: dict,
+    ) -> str:
+        fn = str(hit.get("filename") or "")
+        if WikiEngine._chunk_source_layer(hit) == "raw":
+            return f"/{username}/{repo_slug}/sources/{fn}" if fn else f"/{username}/{repo_slug}/sources"
+        page_slug = fn.replace(".md", "")
+        return f"{wiki_base_url}/{page_slug}" if wiki_base_url else f"/{page_slug}"
+
     def _build_chunk_context(
         self,
         chunk_hits: list[dict],
@@ -946,16 +1021,18 @@ class WikiEngine:
         """
         if not chunk_hits:
             return ""
-        by_file: dict[str, list[dict]] = {}
+        by_file: dict[tuple[str, str], list[dict]] = {}
         for hit in chunk_hits:
             fn = hit.get("filename") or ""
-            by_file.setdefault(fn, []).append(hit)
+            layer = self._chunk_source_layer(hit)
+            by_file.setdefault((layer, fn), []).append(hit)
         parts: list[str] = []
         limit = self._context_chunk_chars
-        for fn, hits in by_file.items():
+        for (layer, fn), hits in by_file.items():
             hits_sorted = sorted(hits, key=lambda h: int(h.get("position") or 0))
             title = hits_sorted[0].get("page_title") or fn.replace(".md", "")
-            parts.append(f"=== {title} ({fn}) ===")
+            label = "RAW SOURCE" if layer == "raw" else "WIKI"
+            parts.append(f"=== {label}: {title} ({fn}) ===")
             for h in hits_sorted:
                 heading = h.get("heading") or ""
                 snippet = str(h.get("chunk_text") or "").strip()
@@ -1014,10 +1091,25 @@ class WikiEngine:
 
         system_base = (
             "你是一个专业的 Wiki 维护者。你负责将原始资料整理成结构化的 Wiki 页面。\n"
-            "请严格遵守以下 schema 规范：\n\n" + (schema_content or "(暂无 schema)")
+            "请遵守当前知识库 owner 配置的提示词；系统安全规则和资料证据优先级更高。"
+            + _format_repo_prompt(schema_content, include_empty=True)
         )
 
         yield _progress("read", 5, f"Read source: {source_filename} ({len(source_content)} chars)")
+
+        if self._qdrant:
+            yield _progress("index", 8, f"Indexing raw source chunks: {source_filename}")
+            raw_result = self._index_raw_source(
+                repo_id=repo_id,
+                raw_dir=raw_dir,
+                filename=source_filename,
+            )
+            if not raw_result.get("ok"):
+                yield _progress(
+                    "index",
+                    8,
+                    f"Raw chunk index failed for {source_filename}: {raw_result.get('error', '')}",
+                )
 
         # -- 2. Analyze -----------------------------------------------------
         yield _progress("analyze", 10, "Analyzing source content …")
@@ -1313,7 +1405,7 @@ class WikiEngine:
 
         system_base = (
             "你是一个 Wiki 知识助手。根据 Wiki 内容准确回答问题，并引用来源页面。\n\n"
-            + (schema_content or "")
+            + _format_repo_prompt(schema_content)
         )
 
         # -- Wiki path: ask LLM to pick relevant pages ---------------------
@@ -1420,9 +1512,10 @@ class WikiEngine:
         index_content = _read_file(self._index_path(username, repo_slug))
         reasoning_mode = self._normalize_reasoning_mode(reasoning_mode)
         query_mode = classify_query_mode(question)
+        glossary_matches = self._glossary_matches(username, repo_slug, question)
         system_base = (
             "你是一个 Wiki 知识助手。根据 Wiki 内容准确回答问题，并引用来源页面。\n\n"
-            + (schema_content or "")
+            + _format_repo_prompt(schema_content)
         )
 
         yield {"event": "progress", "data": {"message": "正在检索相关页面…", "percent": 10}}
@@ -1449,6 +1542,7 @@ class WikiEngine:
             fact_acc: list[dict] = []
             nq = len(queries)
             for i, qtext in enumerate(queries):
+                retrieval_q = self._expand_with_glossary(qtext, glossary_matches)
                 yield {
                     "event": "progress",
                     "data": {
@@ -1457,10 +1551,10 @@ class WikiEngine:
                     },
                 }
                 wiki_acc.extend(
-                    self._pick_wiki_filenames(system_base, index_content, qtext)
+                    self._pick_wiki_filenames(system_base, index_content, retrieval_q)
                 )
-                chunk_acc.extend(self._retrieve_chunks(repo_id, qtext, query_mode))
-                fact_acc.extend(self._retrieve_facts(repo_id, qtext, query_mode))
+                chunk_acc.extend(self._retrieve_chunks(repo_id, retrieval_q, query_mode))
+                fact_acc.extend(self._retrieve_facts(repo_id, retrieval_q, query_mode))
             wiki_filenames = self._dedupe_wiki_filenames(wiki_acc)
             chunk_hits = self._merge_chunk_hits(chunk_acc)
             fact_hits = self._merge_fact_hits(fact_acc)
@@ -1473,7 +1567,11 @@ class WikiEngine:
             chunk_hits = []
             fact_hits = []
             for item in self._react_retrieval_iter(
-                system_base, index_content, repo_id, question, query_mode
+                system_base,
+                index_content,
+                repo_id,
+                self._expand_with_glossary(question, glossary_matches),
+                query_mode,
             ):
                 if item[0] == "progress":
                     _, msg, pct = item
@@ -1482,10 +1580,13 @@ class WikiEngine:
                     _, wiki_filenames, chunk_hits, fact_hits, react_trace_out = item
         else:
             wiki_filenames = self._pick_wiki_filenames(
-                system_base, index_content, question
+                system_base,
+                index_content,
+                self._expand_with_glossary(question, glossary_matches),
             )
-            chunk_hits = self._retrieve_chunks(repo_id, question, query_mode)
-            fact_hits = self._retrieve_facts(repo_id, question, query_mode)
+            retrieval_q = self._expand_with_glossary(question, glossary_matches)
+            chunk_hits = self._retrieve_chunks(repo_id, retrieval_q, query_mode)
+            fact_hits = self._retrieve_facts(repo_id, retrieval_q, query_mode)
 
         critique_trace_out: list[dict[str, Any]] = []
         if reasoning_mode in ("deep", "react"):
@@ -1498,7 +1599,7 @@ class WikiEngine:
                     system_base,
                     index_content,
                     repo_id,
-                    question,
+                    self._expand_with_glossary(question, glossary_matches),
                     query_mode,
                     reasoning_mode,
                     wiki_filenames,
@@ -1540,11 +1641,18 @@ class WikiEngine:
             return
 
         context_parts: list[str] = []
+        glossary_context = build_glossary_context(glossary_matches)
+        if glossary_context:
+            context_parts.append(glossary_context)
         chunk_context = self._build_chunk_context(chunk_hits, page_contents)
         if chunk_context:
             context_parts.append(chunk_context)
         # Wiki 通道命中但 chunk 通道没命中的页面，仍给 LLM 一段前言作为兜底
-        chunk_files = {h.get("filename") for h in chunk_hits if h.get("filename")}
+        chunk_files = {
+            h.get("filename")
+            for h in chunk_hits
+            if h.get("filename") and self._chunk_source_layer(h) == "wiki"
+        }
         for fn, content in page_contents.items():
             if fn in chunk_files:
                 continue
@@ -1638,18 +1746,23 @@ class WikiEngine:
         chunk_ev = []
         for hit in chunk_hits:
             fn = hit["filename"]
-            page_slug = fn.replace(".md", "")
             chunk_ev.append({
                 "chunk_id": hit["chunk_id"],
                 "filename": fn,
-                "title": hit.get("page_title", page_slug),
+                "source_layer": self._chunk_source_layer(hit),
+                "source_file": hit.get("source_file") or fn,
+                "title": hit.get("page_title") or fn.replace(".md", ""),
                 "heading": hit.get("heading", ""),
-                "url": f"{wiki_base_url}/{page_slug}",
+                "url": self._chunk_evidence_url(username, repo_slug, wiki_base_url, hit),
                 "snippet": hit.get("chunk_text", "")[:200],
                 "score": hit.get("score", 0.0),
+                "sources": hit.get("sources") or ["dense"],
             })
+        raw_chunk_count = sum(1 for e in chunk_ev if e.get("source_layer") == "raw")
+        wiki_chunk_count = len(chunk_ev) - raw_chunk_count
         evidence_summary = (
-            f"本回答基于 {len(wiki_ev)} 个 Wiki 页面、{len(chunk_ev)} 个原文片段"
+            f"本回答基于 {len(wiki_ev)} 个 Wiki 页面、{wiki_chunk_count} 个 Wiki 片段、"
+            f"{raw_chunk_count} 个原始文档片段"
             f"和 {len(fact_ev)} 条结构化事实生成。"
         )
         stream_validation = {"cited": [], "unknown": [], "ok": True}
@@ -1667,7 +1780,7 @@ class WikiEngine:
             "intent": stream_intent,
             "citation_validation": stream_validation,
             "wiki_sources": [f for f in wiki_filenames if f in loaded],
-            "qdrant_sources": list({h["filename"] for h in chunk_hits}),
+            "qdrant_sources": list({h["filename"] for h in chunk_hits if h.get("filename")}),
             "referenced_pages": list(loaded),
             "reasoning_mode": reasoning_mode,
             "sub_questions": sub_questions_out,
@@ -1696,13 +1809,14 @@ class WikiEngine:
         index_content = _read_file(self._index_path(username, repo_slug))
         reasoning_mode = self._normalize_reasoning_mode(reasoning_mode)
         query_mode = classify_query_mode(question)
+        glossary_matches = self._glossary_matches(username, repo_slug, question)
 
         system_base = (
             "你是一个 Wiki 知识助手。根据 Wiki 内容准确回答问题。\n"
             "当关键结论证据不足时，必须使用以下提示语之一：\n"
             "「基于现有资料只能推测到」、「现有证据不足以支持更确定的结论」、"
             "「当前知识库中缺少直接证据」。\n\n"
-            + (schema_content or "")
+            + _format_repo_prompt(schema_content)
         )
 
         sub_questions_out: list[str] = []
@@ -1723,11 +1837,12 @@ class WikiEngine:
             chunk_acc: list[dict] = []
             fact_acc: list[dict] = []
             for qtext in queries:
+                retrieval_q = self._expand_with_glossary(qtext, glossary_matches)
                 wiki_acc.extend(
-                    self._pick_wiki_filenames(system_base, index_content, qtext)
+                    self._pick_wiki_filenames(system_base, index_content, retrieval_q)
                 )
-                chunk_acc.extend(self._retrieve_chunks(repo_id, qtext, query_mode))
-                fact_acc.extend(self._retrieve_facts(repo_id, qtext, query_mode))
+                chunk_acc.extend(self._retrieve_chunks(repo_id, retrieval_q, query_mode))
+                fact_acc.extend(self._retrieve_facts(repo_id, retrieval_q, query_mode))
             wiki_filenames = self._dedupe_wiki_filenames(wiki_acc)
             chunk_hits = self._merge_chunk_hits(chunk_acc)
             fact_hits = self._merge_fact_hits(fact_acc)
@@ -1736,16 +1851,23 @@ class WikiEngine:
             chunk_hits = []
             fact_hits = []
             for item in self._react_retrieval_iter(
-                system_base, index_content, repo_id, question, query_mode
+                system_base,
+                index_content,
+                repo_id,
+                self._expand_with_glossary(question, glossary_matches),
+                query_mode,
             ):
                 if item[0] == "result":
                     _, wiki_filenames, chunk_hits, fact_hits, react_trace_out = item
         else:
             wiki_filenames = self._pick_wiki_filenames(
-                system_base, index_content, question
+                system_base,
+                index_content,
+                self._expand_with_glossary(question, glossary_matches),
             )
-            chunk_hits = self._retrieve_chunks(repo_id, question, query_mode)
-            fact_hits = self._retrieve_facts(repo_id, question, query_mode)
+            retrieval_q = self._expand_with_glossary(question, glossary_matches)
+            chunk_hits = self._retrieve_chunks(repo_id, retrieval_q, query_mode)
+            fact_hits = self._retrieve_facts(repo_id, retrieval_q, query_mode)
 
         if reasoning_mode in ("deep", "react"):
             wiki_filenames, chunk_hits, fact_hits, critique_trace_out = (
@@ -1753,7 +1875,7 @@ class WikiEngine:
                     system_base,
                     index_content,
                     repo_id,
-                    question,
+                    self._expand_with_glossary(question, glossary_matches),
                     query_mode,
                     reasoning_mode,
                     wiki_filenames,
@@ -1765,7 +1887,12 @@ class WikiEngine:
         # -- Build wiki_evidence ---------------------------------------
         wiki_evidence: list[dict] = []
         page_contents: dict[str, str] = {}
-        chunk_fns = {h["filename"] for h in chunk_hits if h.get("filename")}
+        all_chunk_fns = {h["filename"] for h in chunk_hits if h.get("filename")}
+        chunk_fns = {
+            h["filename"]
+            for h in chunk_hits
+            if h.get("filename") and self._chunk_source_layer(h) == "wiki"
+        }
         for fn in wiki_filenames:
             content = _read_file(os.path.join(wiki_dir, fn))
             if not content:
@@ -1791,17 +1918,19 @@ class WikiEngine:
         chunk_evidence: list[dict] = []
         for hit in chunk_hits:
             fn = hit["filename"]
-            if fn and fn not in page_contents:
+            layer = self._chunk_source_layer(hit)
+            if layer == "wiki" and fn and fn not in page_contents:
                 content = _read_file(os.path.join(wiki_dir, fn))
                 if content:
                     page_contents[fn] = content
-            page_slug = fn.replace(".md", "")
             chunk_evidence.append({
                 "chunk_id": hit["chunk_id"],
                 "filename": fn,
-                "title": hit.get("page_title", page_slug),
+                "source_layer": layer,
+                "source_file": hit.get("source_file") or fn,
+                "title": hit.get("page_title") or fn.replace(".md", ""),
                 "heading": hit.get("heading", ""),
-                "url": f"{wiki_base_url}/{page_slug}" if wiki_base_url else f"/{page_slug}",
+                "url": self._chunk_evidence_url(username, repo_slug, wiki_base_url, hit),
                 "snippet": hit.get("chunk_text", "")[:200],
                 "score": hit.get("score", 0.0),
                 "sources": hit.get("sources") or ["dense"],
@@ -1833,6 +1962,9 @@ class WikiEngine:
         # -- Build context & generate answer ---------------------------
         # Chunk 粒度优先，Wiki 整页只作兜底（命中了 chunk 的页面不再整页灌入）
         context_parts: list[str] = []
+        glossary_context = build_glossary_context(glossary_matches)
+        if glossary_context:
+            context_parts.append(glossary_context)
         chunk_context = self._build_chunk_context(chunk_hits, page_contents)
         if chunk_context:
             context_parts.append(chunk_context)
@@ -1900,8 +2032,11 @@ class WikiEngine:
             citation_validation = validate_citations(answer, set(allowed_sources))
             apply_citation_penalty(confidence, citation_validation, self._citation_penalty)
         loaded = set(page_contents.keys())
+        raw_chunk_count = sum(1 for e in chunk_evidence if e.get("source_layer") == "raw")
+        wiki_chunk_count = len(chunk_evidence) - raw_chunk_count
         evidence_summary = (
-            f"本回答基于 {len(wiki_evidence)} 个 Wiki 页面、{len(chunk_evidence)} 个原文片段"
+            f"本回答基于 {len(wiki_evidence)} 个 Wiki 页面、{wiki_chunk_count} 个 Wiki 片段、"
+            f"{raw_chunk_count} 个原始文档片段"
             f"和 {len(fact_evidence)} 条结构化事实生成。"
         )
 
@@ -1921,7 +2056,7 @@ class WikiEngine:
             "citation_validation": citation_validation,
             "referenced_pages": list(loaded),
             "wiki_sources": [e["filename"] for e in wiki_evidence],
-            "qdrant_sources": list(chunk_fns),
+            "qdrant_sources": list(all_chunk_fns),
         }
 
     # -----------------------------------------------------------------------
@@ -1949,7 +2084,7 @@ class WikiEngine:
         return self._chat_json(
             system=(
                 "你是一个知识库分析师。根据用户的问题历史和当前 Wiki 内容，找出知识缺口。\n\n"
-                + (schema_content or "")
+                + _format_repo_prompt(schema_content)
             ),
             user=(
                 "分析以下低置信度问题（Wiki 无法很好回答的问题）和现有 Wiki 页面，"
@@ -1988,7 +2123,7 @@ class WikiEngine:
         return self._chat_json(
             system=(
                 "你是一个 Wiki 质量审查员。识别可能重复的页面并建议合并。\n\n"
-                + (schema_content or "")
+                + _format_repo_prompt(schema_content)
             ),
             user=(
                 "分析以下 Wiki 页面列表，找出可能指代同一概念或高度重叠的页面组。\n\n"
@@ -2033,7 +2168,7 @@ class WikiEngine:
 
         system = (
             "你是一个 Wiki 质量审查员。检查 Wiki 的结构完整性和内容一致性。\n\n"
-            + (schema_content or "")
+            + _format_repo_prompt(schema_content)
         )
 
         result = self._chat_json(
@@ -2077,7 +2212,7 @@ class WikiEngine:
 
         system_base = (
             "你是一个 Wiki 维护者。修复以下 Wiki 页面的结构问题，保持原有内容不变。\n\n"
-            + (schema_content or "")
+            + _format_repo_prompt(schema_content)
         )
 
         fixed: list[str] = []

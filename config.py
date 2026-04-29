@@ -45,6 +45,7 @@ class Config:
     RAG_CHUNK_SCORE_THRESHOLD = float(os.environ.get("RAG_CHUNK_SCORE_THRESHOLD", "0.35"))
     RAG_FACT_SCORE_THRESHOLD = float(os.environ.get("RAG_FACT_SCORE_THRESHOLD", "0.40"))
     RAG_MAX_CHUNKS_PER_FILE = int(os.environ.get("RAG_MAX_CHUNKS_PER_FILE", "2"))
+    RAG_MAX_RAW_CHUNKS_PER_FILE = int(os.environ.get("RAG_MAX_RAW_CHUNKS_PER_FILE", "8"))
     RAG_RRF_K = int(os.environ.get("RAG_RRF_K", "60"))
     RAG_ENABLE_BM25 = os.environ.get("RAG_ENABLE_BM25", "true").lower() == "true"
     RAG_BM25_TOP_K = int(os.environ.get("RAG_BM25_TOP_K", "20"))

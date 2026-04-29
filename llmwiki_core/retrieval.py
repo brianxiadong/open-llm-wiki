@@ -29,12 +29,24 @@ from .keyword_index import KeywordIndex, global_keyword_index, tokenize
 logger = logging.getLogger(__name__)
 
 _SPACE_RE = re.compile(r"\s+")
+_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{1,}")
 
 
 class _QdrantLike(Protocol):
     """QdrantService 的最小接口子集，避免 llmwiki_core 反向依赖 qdrant_service.py。"""
 
     def search_chunks(
+        self,
+        repo_id: int,
+        query: str,
+        limit: int = ...,
+        *,
+        score_threshold: float | None = ...,
+        max_per_file: int | None = ...,
+        oversample: int = ...,
+    ) -> list[dict[str, Any]]: ...
+
+    def search_raw_chunks(
         self,
         repo_id: int,
         query: str,
@@ -57,6 +69,8 @@ class _QdrantLike(Protocol):
 
     def scroll_all_chunks(self, repo_id: int) -> list[dict[str, Any]]: ...
 
+    def scroll_all_raw_chunks(self, repo_id: int) -> list[dict[str, Any]]: ...
+
     def scroll_all_facts(self, repo_id: int) -> list[dict[str, Any]]: ...
 
 
@@ -67,6 +81,7 @@ class RetrievalConfig:
     chunk_score_threshold: float = 0.35
     fact_score_threshold: float = 0.40
     max_chunks_per_file: int = 2
+    max_raw_chunks_per_file: int = 8
     rrf_k: int = 60
     enable_bm25: bool = True
     bm25_top_k: int = 20
@@ -97,6 +112,7 @@ class RetrievalConfig:
             chunk_score_threshold=float(_get("RAG_CHUNK_SCORE_THRESHOLD", cls.chunk_score_threshold)),
             fact_score_threshold=float(_get("RAG_FACT_SCORE_THRESHOLD", cls.fact_score_threshold)),
             max_chunks_per_file=int(_get("RAG_MAX_CHUNKS_PER_FILE", cls.max_chunks_per_file)),
+            max_raw_chunks_per_file=int(_get("RAG_MAX_RAW_CHUNKS_PER_FILE", cls.max_raw_chunks_per_file)),
             rrf_k=int(_get("RAG_RRF_K", cls.rrf_k)),
             enable_bm25=_bool(_get("RAG_ENABLE_BM25", cls.enable_bm25)),
             bm25_top_k=int(_get("RAG_BM25_TOP_K", cls.bm25_top_k)),
@@ -122,6 +138,7 @@ class RetrievalConfig:
 class ChunkHit:
     chunk_id: str
     filename: str
+    source_layer: str = "wiki"
     page_title: str = ""
     page_type: str = ""
     heading: str = ""
@@ -136,6 +153,8 @@ class ChunkHit:
         return {
             "chunk_id": self.chunk_id,
             "filename": self.filename,
+            "source_layer": self.source_layer,
+            "source_file": self.filename if self.source_layer == "raw" else "",
             "page_title": self.page_title,
             "page_type": self.page_type,
             "heading": self.heading,
@@ -190,23 +209,52 @@ class HybridRetriever:
         k = int(top_k if top_k is not None else cfg.chunk_top_k)
         thr = cfg.chunk_score_threshold if score_threshold is None else score_threshold
         per_file = cfg.max_chunks_per_file if max_per_file is None else max_per_file
+        raw_per_file = (
+            cfg.max_raw_chunks_per_file
+            if max_per_file is None
+            else max_per_file
+        )
         neighbor_n = (
             cfg.context_expand_neighbors
             if expand_neighbors is None
             else int(expand_neighbors)
         )
         corpus_docs: list[dict[str, Any]] | None = None
+        raw_corpus_docs: list[dict[str, Any]] | None = None
+        identifier_terms = self._query_identifier_terms(query)
 
         def _corpus_loader() -> list[dict[str, Any]]:
             nonlocal corpus_docs
             if corpus_docs is None:
-                corpus_docs = self._qdrant.scroll_all_chunks(repo_id)
+                docs = self._qdrant.scroll_all_chunks(repo_id)
+                corpus_docs = docs if isinstance(docs, list) else []
             return list(corpus_docs)
+
+        def _raw_corpus_loader() -> list[dict[str, Any]]:
+            nonlocal raw_corpus_docs
+            if raw_corpus_docs is None:
+                scroll_raw = getattr(self._qdrant, "scroll_all_raw_chunks", None)
+                if not callable(scroll_raw):
+                    raw_corpus_docs = []
+                else:
+                    docs = scroll_raw(repo_id)
+                    raw_corpus_docs = docs if isinstance(docs, list) else []
+            return list(raw_corpus_docs)
+
+        def _mark_layer(hits: list[dict[str, Any]], layer: str) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for hit in hits:
+                if not isinstance(hit, dict):
+                    continue
+                item = dict(hit)
+                item["source_layer"] = item.get("source_layer") or layer
+                out.append(item)
+            return out
 
         dense_q = dense_query or query
         dense_hits: list[dict[str, Any]] = []
         try:
-            dense_hits = self._qdrant.search_chunks(
+            wiki_dense = self._qdrant.search_chunks(
                 repo_id=repo_id,
                 query=dense_q,
                 limit=max(k * 2, cfg.bm25_top_k),
@@ -214,13 +262,33 @@ class HybridRetriever:
                 max_per_file=None,  # 融合之前先不限流，避免 RRF 排序被破坏
                 oversample=3,
             ) or []
+            if not isinstance(wiki_dense, list):
+                wiki_dense = []
+            raw_dense: list[dict[str, Any]] = []
+            search_raw = getattr(self._qdrant, "search_raw_chunks", None)
+            if callable(search_raw):
+                raw_dense = search_raw(
+                    repo_id=repo_id,
+                    query=dense_q,
+                    limit=max(k * 2, cfg.bm25_top_k),
+                    score_threshold=thr,
+                    max_per_file=None,
+                    oversample=3,
+                ) or []
+                if not isinstance(raw_dense, list):
+                    raw_dense = []
+            dense_hits = sorted(
+                _mark_layer(wiki_dense, "wiki") + _mark_layer(raw_dense, "raw"),
+                key=lambda h: float(h.get("score") or 0.0),
+                reverse=True,
+            )
         except Exception as exc:
             logger.warning("dense chunk search failed repo_id=%s: %s", repo_id, exc)
 
         bm25_hits: list[dict[str, Any]] = []
         if cfg.enable_bm25:
             try:
-                raw = self._kw.search(
+                wiki_raw = self._kw.search(
                     key=f"{self._repo_key_prefix}:{repo_id}:chunks",
                     signature=self._chunks_signature_from_docs(_corpus_loader()),
                     query=query,
@@ -229,11 +297,12 @@ class HybridRetriever:
                     id_key="chunk_id",
                     limit=cfg.bm25_top_k,
                 )
-                for h in raw:
+                for h in wiki_raw:
                     doc = h.payload
                     bm25_hits.append({
                         "chunk_id": doc.get("chunk_id", h.doc_id),
                         "filename": doc.get("filename", ""),
+                        "source_layer": doc.get("source_layer", "wiki"),
                         "page_title": doc.get("page_title", ""),
                         "page_type": doc.get("page_type", ""),
                         "heading": doc.get("heading", ""),
@@ -241,18 +310,61 @@ class HybridRetriever:
                         "position": doc.get("position", 0),
                         "score": 0.0,
                         "_bm25": h.score,
+                        "_identifier": self._identifier_overlap_score(doc, identifier_terms),
                     })
+                raw_docs = _raw_corpus_loader()
+                if raw_docs:
+                    raw_bm25_limit = max(
+                        cfg.bm25_top_k,
+                        k * max(2, raw_per_file or cfg.max_raw_chunks_per_file),
+                    )
+                    raw_hits = self._kw.search(
+                        key=f"{self._repo_key_prefix}:{repo_id}:raw_chunks",
+                        signature=self._chunks_signature_from_docs(raw_docs),
+                        query=query,
+                        corpus_loader=lambda: list(raw_docs),
+                        text_key="chunk_text",
+                        id_key="chunk_id",
+                        limit=raw_bm25_limit,
+                    )
+                    for h in raw_hits:
+                        doc = h.payload
+                        bm25_hits.append({
+                            "chunk_id": doc.get("chunk_id", h.doc_id),
+                            "filename": doc.get("filename", ""),
+                            "source_layer": doc.get("source_layer", "raw"),
+                            "page_title": doc.get("page_title", ""),
+                            "page_type": doc.get("page_type", "raw"),
+                            "heading": doc.get("heading", ""),
+                            "chunk_text": doc.get("chunk_text", ""),
+                            "position": doc.get("position", 0),
+                            "score": 0.0,
+                            "_bm25": h.score,
+                            "_identifier": self._identifier_overlap_score(doc, identifier_terms),
+                        })
+                bm25_hits.sort(
+                    key=lambda h: (
+                        float(h.get("_identifier") or 0.0),
+                        float(h.get("_bm25") or 0.0),
+                    ),
+                    reverse=True,
+                )
             except Exception as exc:
                 logger.warning("bm25 chunk search failed repo_id=%s: %s", repo_id, exc)
 
         fused = self._fuse_chunks(dense_hits, bm25_hits, rrf_k=cfg.rrf_k)
-        primary = self._apply_per_file_cap(fused, per_file=per_file, limit=k)
+        primary = self._apply_per_file_cap(
+            fused,
+            wiki_per_file=per_file,
+            raw_per_file=raw_per_file,
+            limit=k,
+        )
         if neighbor_n <= 0 or not primary:
             return primary
         try:
             return self._expand_neighbor_chunks(
                 primary,
-                _corpus_loader(),
+                _corpus_loader() + _raw_corpus_loader(),
                 expand_neighbors=neighbor_n,
             )
         except Exception as exc:
@@ -575,6 +687,7 @@ class HybridRetriever:
         for doc in sorted(
             docs,
             key=lambda d: (
+                str(d.get("source_layer") or "wiki"),
                 str(d.get("filename") or ""),
                 int(d.get("position") or 0),
                 str(d.get("chunk_id") or ""),
@@ -583,6 +696,7 @@ class HybridRetriever:
             parts = (
                 str(doc.get("chunk_id") or ""),
                 str(doc.get("filename") or ""),
+                str(doc.get("source_layer") or "wiki"),
                 str(doc.get("position") or 0),
                 str(doc.get("page_title") or ""),
                 str(doc.get("heading") or ""),
@@ -591,6 +705,39 @@ class HybridRetriever:
             digest.update("\x1f".join(parts).encode("utf-8", errors="ignore"))
             digest.update(b"\x1e")
         return f"n={len(docs)};h={digest.hexdigest()[:16]}"
+
+    @staticmethod
+    def _normalize_identifier_text(text: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(text or "").lower())
+
+    @classmethod
+    def _query_identifier_terms(cls, query: str) -> list[str]:
+        out: list[str] = []
+        for raw in _IDENTIFIER_RE.findall(query or ""):
+            has_alpha = any(ch.isalpha() for ch in raw)
+            has_digit = any(ch.isdigit() for ch in raw)
+            if not (has_alpha and has_digit):
+                continue
+            term = cls._normalize_identifier_text(raw)
+            if len(term) >= 3 and term not in out:
+                out.append(term)
+        return out
+
+    @classmethod
+    def _identifier_overlap_score(
+        cls,
+        doc: dict[str, Any],
+        terms: list[str],
+    ) -> float:
+        if not terms:
+            return 0.0
+        haystack = cls._normalize_identifier_text(
+            " ".join(
+                str(doc.get(key) or "")
+                for key in ("filename", "page_title", "heading", "chunk_text")
+            )
+        )
+        return float(sum(1 for term in terms if term in haystack))
 
     @staticmethod
     def _facts_signature_from_docs(docs: list[dict[str, Any]]) -> str:
@@ -632,9 +779,10 @@ class HybridRetriever:
 
         def _key(h: dict[str, Any]) -> str:
             cid = str(h.get("chunk_id") or "")
+            layer = str(h.get("source_layer") or "wiki")
             if cid:
-                return cid
-            return f"{h.get('filename', '')}#{h.get('position', 0)}"
+                return f"{layer}:{cid}"
+            return f"{layer}:{h.get('filename', '')}#{h.get('position', 0)}"
 
         for rank, h in enumerate(dense_hits):
             key = _key(h)
@@ -643,6 +791,7 @@ class HybridRetriever:
                 hit = ChunkHit(
                     chunk_id=str(h.get("chunk_id") or key),
                     filename=str(h.get("filename") or ""),
+                    source_layer=str(h.get("source_layer") or "wiki"),
                     page_title=str(h.get("page_title") or ""),
                     page_type=str(h.get("page_type") or ""),
                     heading=str(h.get("heading") or ""),
@@ -662,6 +811,7 @@ class HybridRetriever:
                 hit = ChunkHit(
                     chunk_id=str(h.get("chunk_id") or key),
                     filename=str(h.get("filename") or ""),
+                    source_layer=str(h.get("source_layer") or "wiki"),
                     page_title=str(h.get("page_title") or ""),
                     page_type=str(h.get("page_type") or ""),
                     heading=str(h.get("heading") or ""),
@@ -680,16 +830,19 @@ class HybridRetriever:
     def _apply_per_file_cap(
         hits: list[ChunkHit],
         *,
-        per_file: int | None,
+        wiki_per_file: int | None,
+        raw_per_file: int | None,
         limit: int,
     ) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         per_file_count: dict[str, int] = {}
         for hit in hits:
+            per_file = raw_per_file if hit.source_layer == "raw" else wiki_per_file
             if per_file is not None and hit.filename:
-                if per_file_count.get(hit.filename, 0) >= per_file:
+                cap_key = f"{hit.source_layer}:{hit.filename}"
+                if per_file_count.get(cap_key, 0) >= per_file:
                     continue
-                per_file_count[hit.filename] = per_file_count.get(hit.filename, 0) + 1
+                per_file_count[cap_key] = per_file_count.get(cap_key, 0) + 1
             out.append(hit.to_dict())
             if len(out) >= limit:
                 break
@@ -700,6 +853,8 @@ class HybridRetriever:
         return {
             "chunk_id": str(doc.get("chunk_id") or ""),
             "filename": str(doc.get("filename") or ""),
+            "source_layer": str(doc.get("source_layer") or "wiki"),
+            "source_file": str(doc.get("source_file") or doc.get("filename") or ""),
             "page_title": str(doc.get("page_title") or ""),
             "page_type": str(doc.get("page_type") or ""),
             "heading": str(doc.get("heading") or ""),
@@ -721,24 +876,27 @@ class HybridRetriever:
     ) -> list[dict[str, Any]]:
         if expand_neighbors <= 0 or not corpus_docs:
             return primary_hits
-        by_file_pos: dict[tuple[str, int], dict[str, Any]] = {}
+        by_file_pos: dict[tuple[str, str, int], dict[str, Any]] = {}
         for doc in corpus_docs:
             fn = str(doc.get("filename") or "")
             if not fn:
                 continue
+            layer = str(doc.get("source_layer") or "wiki")
             try:
                 pos = int(doc.get("position") or 0)
             except (TypeError, ValueError):
                 continue
-            by_file_pos[(fn, pos)] = doc
+            by_file_pos[(layer, fn, pos)] = doc
 
         out: list[dict[str, Any]] = []
         seen: set[str] = set()
 
         def _mark_seen(hit: dict[str, Any]) -> bool:
             key = str(hit.get("chunk_id") or "")
+            layer = str(hit.get("source_layer") or "wiki")
             if not key:
                 key = f"{hit.get('filename', '')}#{hit.get('position', 0)}"
+            key = f"{layer}:{key}"
             if key in seen:
                 return False
             seen.add(key)
@@ -750,6 +908,7 @@ class HybridRetriever:
             fn = str(hit.get("filename") or "")
             if not fn:
                 continue
+            layer = str(hit.get("source_layer") or "wiki")
             try:
                 pos = int(hit.get("position") or 0)
             except (TypeError, ValueError):
@@ -757,7 +916,7 @@ class HybridRetriever:
             for delta in range(-expand_neighbors, expand_neighbors + 1):
                 if delta == 0:
                     continue
-                doc = by_file_pos.get((fn, pos + delta))
+                doc = by_file_pos.get((layer, fn, pos + delta))
                 if not doc:
                     continue
                 neighbor = self._chunk_doc_to_hit(doc)

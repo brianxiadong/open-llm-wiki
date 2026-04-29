@@ -7,9 +7,11 @@ import pytest
 from utils import (
     _find_header_row_index,
     _format_deploy_revision_file,
+    build_glossary_context,
     build_tabular_markdown_and_records,
     classify_query_mode,
     ensure_repo_dirs,
+    expand_query_with_glossary,
     extract_links,
     get_app_revision,
     get_backlinks,
@@ -17,7 +19,9 @@ from utils import (
     get_repo_path,
     list_raw_sources,
     list_wiki_pages,
+    match_glossary_entries,
     normalize_inline_bullet_markdown,
+    parse_glossary_entries,
     render_markdown,
     safe_upload_basename,
     slugify,
@@ -202,6 +206,7 @@ def test_schema_templates_in_utils():
     assert "default" in SCHEMA_TEMPLATES
     assert "academic" in SCHEMA_TEMPLATES
     assert len(SCHEMA_TEMPLATES) >= 3
+    assert "提示词" in SCHEMA_TEMPLATES["default"][1]
 
 
 def test_build_tabular_markdown_and_records():
@@ -285,6 +290,60 @@ def test_build_tabular_with_title_row():
     assert "模型名称=LLaMA 2" in records[0]["fact_text"]
 
 
+def test_build_tabular_with_multi_row_discount_headers():
+    rows = [
+        ["小鱼易连伙伴渠道政策"] + [None] * 22,
+        ["签约级别", "签约上级", "年度出货任务\n（万元）", "保证金\n（万元）", None, "加盟包",
+         "出货任务分解（万元）", None, None, None, "结算折扣", None, None, None, None, None,
+         None, None, None, None, "支持政策", None, None],
+        [None, None, None, None, None, None, "Q1", "Q2", "Q3", "Q4", "平台", None, None, None,
+         "终端", None, "配件", "服务", None, None, "二级\n分销权", "商机\n支持", "市场\n活动"],
+        [None, None, None, None, None, None, None, None, None, None, "本地部署\n云平台",
+         "项目型\n硬件平台", "渠道型\n硬件平台", "公有云平台", "项目型终端\n（XE/AE/TP/GE系列等）",
+         "渠道型终端\n（ME/NE系列）", None, "维保服务", "定制服务", "支撑服务", None, None, None],
+        ["总代", "小鱼易连", "/", "/", None, "/", None, None, None, None, "按项目咨询", "按项目咨询",
+         2.7, 4.7, "按项目咨询", 2.7, 6.7, 4.7, 4.7, 5, "有", "有", 0.015],
+        ["白金", "总代或省市代", 200, 15, None, "/", 0.15, 0.25, 0.3, 0.3, "按项目咨询",
+         "按项目咨询", 3, 5, "按项目咨询", 3, 7, 5, 5, 5.5, "无", "无", 0.015],
+    ]
+
+    markdown, records = build_tabular_markdown_and_records(
+        source_filename="渠道折扣体系.xlsx",
+        source_markdown_filename="渠道折扣体系.md",
+        tables=[{"name": "Sheet1", "rows": rows}],
+    )
+
+    assert _find_header_row_index(rows) == 3
+    assert "结算折扣 终端 渠道型终端（ME/NE系列）" in markdown
+    platinum = next(r for r in records if r["fields"].get("签约级别") == "白金")
+    assert platinum["row_index"] == 6
+    assert platinum["fields"]["结算折扣 终端 渠道型终端（ME/NE系列）"] == 3
+    assert platinum["fields"]["结算折扣 平台 渠道型硬件平台"] == 3
+    assert "结算折扣 终端 渠道型终端（ME/NE系列）=3" in platinum["fact_text"]
+
+
+def test_glossary_entries_expand_query_and_prompt_context():
+    entries = parse_glossary_entries(
+        """
+        # 当前知识库术语
+        - 双模|双引擎 = SVC + AVC
+        渠道型终端: ME/NE 系列终端
+        """
+    )
+
+    assert entries[0]["term"] == "双模"
+    assert entries[0]["aliases"] == ["双模", "双引擎"]
+    matches = match_glossary_entries("ME60S 是双模终端吗？", entries)
+    expanded = expand_query_with_glossary("ME60S 是双模终端吗？", matches)
+    context = build_glossary_context(matches)
+
+    assert "检索术语解释" in expanded
+    assert "SVC + AVC" in expanded
+    assert "=== GLOSSARY ===" in context
+    assert "双模 = SVC + AVC" in context
+    assert "渠道型终端" not in context
+
+
 def test_classify_query_mode_prefers_fact_for_exact_lookup():
     assert classify_query_mode("华东地区 2024Q4 收入是多少？") == "fact"
     assert classify_query_mode("总结一下 2024Q4 市场趋势") == "narrative"
@@ -309,4 +368,5 @@ def test_create_repo_with_academic_schema(auth_client, app):
         schema_path = os.path.join(Config.DATA_DIR, "alice", "academic-kb", "wiki", "schema.md")
         assert os.path.exists(schema_path)
         content = open(schema_path).read()
-        assert "学术研究" in content or "paper" in content
+        assert "学术研究" in content
+        assert "回答规则" in content

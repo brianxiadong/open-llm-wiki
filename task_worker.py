@@ -207,24 +207,26 @@ class TaskWorker:
         logger.info("Task %d completed: %s", task.id, task.progress_msg)
 
     def _run_rebuild_index(self, task, repo, owner) -> None:
-        """重建 Qdrant page + chunk 索引，用于 import_zip 后回填。"""
+        """重建 Qdrant wiki page/chunk + raw chunk 索引，用于 import_zip 后回填。"""
         from models import db
-        from utils import list_wiki_pages, get_repo_path
+        from utils import list_raw_sources, list_wiki_pages, get_repo_path
         from config import Config
         import os
 
         base = get_repo_path(Config.DATA_DIR, owner.username, repo.slug)
         wiki_dir = os.path.join(base, "wiki")
+        raw_dir = os.path.join(base, "raw")
 
-        if not os.path.isdir(wiki_dir):
+        if not os.path.isdir(wiki_dir) and not os.path.isdir(raw_dir):
             task.status = "done"
-            task.progress_msg = "wiki dir not found"
+            task.progress_msg = "wiki/raw dir not found"
             task.finished_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
             db.session.commit()
             return
 
-        pages = list_wiki_pages(wiki_dir)
+        pages = list_wiki_pages(wiki_dir) if os.path.isdir(wiki_dir) else []
         rebuilt = 0
+        rebuilt_raw = 0
         qdrant = self._app.qdrant
         for page in pages:
             if self._cancel_requested(task.id):
@@ -248,9 +250,41 @@ class TaskWorker:
             except Exception as exc:
                 logger.warning("rebuild_index failed for %s: %s", page["filename"], exc)
 
+        raw_sources = list_raw_sources(raw_dir)
+        for source in raw_sources:
+            if self._cancel_requested(task.id):
+                task.progress_msg = "Task cancelled by user"
+                self._mark_cancelled(task)
+                return
+            filename = source["filename"]
+            fpath = os.path.join(raw_dir, filename)
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if qdrant:
+                    qdrant.upsert_raw_chunks(
+                        repo_id=repo.id,
+                        filename=filename,
+                        title=filename,
+                        content=content,
+                    )
+                rebuilt_raw += 1
+            except Exception as exc:
+                logger.warning("rebuild_raw_index failed for %s: %s", filename, exc)
+
         task.status = "done"
-        task.progress_msg = f"Rebuilt index for {rebuilt}/{len(pages)} pages"
+        task.progress_msg = (
+            f"Rebuilt index for {rebuilt}/{len(pages)} wiki pages and "
+            f"{rebuilt_raw}/{len(raw_sources)} raw sources"
+        )
         from datetime import datetime, timezone
         task.finished_at = datetime.now(timezone.utc)
         db.session.commit()
-        logger.info("Task %d rebuild_index done: %d/%d", task.id, rebuilt, len(pages))
+        logger.info(
+            "Task %d rebuild_index done: wiki=%d/%d raw=%d/%d",
+            task.id,
+            rebuilt,
+            len(pages),
+            rebuilt_raw,
+            len(raw_sources),
+        )

@@ -57,13 +57,14 @@ def test_compose_system_prompt_injects_guard_only_when_context():
 
 
 def test_guard_system_prompt_contains_core_rules():
-    """guard 必须覆盖 6 条核心规则（跨域通用性保证）。"""
+    """guard 必须覆盖核心规则（跨域通用性保证）。"""
     for key in (
         "字段级严格",
         "推理级允许",
         "无正文来源标注",
         "未知即未知",
         "不跨实体传染",
+        "术语解释优先",
         "行级原子性",
     ):
         assert key in GUARD_SYSTEM_PROMPT, f"guard 缺失规则：{key}"

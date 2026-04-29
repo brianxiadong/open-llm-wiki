@@ -219,9 +219,10 @@
         '<div class="evidence-items">';
       chunkEvidence.forEach(function(e) {
         var scorePct = e.score ? Math.round(e.score * 100) : 0;
+        var layerLabel = e.source_layer === 'raw' ? '原始文档' : 'Wiki';
         chunkEvHtml += '<div class="evidence-item evidence-chunk">' +
           '<a href="' + escapeHtml(e.url || '#') + '" class="evidence-chunk-title">' + escapeHtml(e.title || e.filename || '') + '</a>' +
-          (e.heading ? '<span class="evidence-heading">§ ' + escapeHtml(e.heading) + '</span>' : '') +
+          '<span class="evidence-heading">' + escapeHtml(layerLabel) + (e.heading ? ' § ' + escapeHtml(e.heading) : '') + '</span>' +
           '<div class="evidence-snippet">' + escapeHtml((e.snippet || '').substring(0, 150)) + '</div>' +
           '<span class="evidence-score">' + scorePct + '%</span>' +
           '</div>';
@@ -973,9 +974,10 @@
         '<div class="evidence-items">';
       chunkEv.forEach(function(e) {
         var scorePct = e.score ? Math.round(e.score * 100) : 0;
+        var layerLabel = e.source_layer === 'raw' ? '原始文档' : 'Wiki';
         html += '<div class="evidence-item evidence-chunk">' +
           '<a href="' + escapeHtml(e.url || '#') + '" class="evidence-chunk-title">' + escapeHtml(e.title || e.filename || '') + '</a>' +
-          (e.heading ? '<span class="evidence-heading">§ ' + escapeHtml(e.heading) + '</span>' : '') +
+          '<span class="evidence-heading">' + escapeHtml(layerLabel) + (e.heading ? ' § ' + escapeHtml(e.heading) : '') + '</span>' +
           '<div class="evidence-snippet">' + escapeHtml((e.snippet || '').substring(0, 300)) + '</div>' +
           '<span class="evidence-score">' + scorePct + '%</span></div>';
       });

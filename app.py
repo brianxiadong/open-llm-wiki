@@ -533,6 +533,7 @@ def _delete_repo_data(app: Flask, repo: Repo, username: str) -> str:
         for fn_name in (
             "delete_collection",
             "delete_chunk_collection",
+            "delete_raw_chunk_collection",
             "delete_fact_collection",
         ):
             try:
@@ -1662,6 +1663,7 @@ def _register_routes(app: Flask) -> None:
 
         base = get_repo_path(Config.DATA_DIR, username, repo_slug)
         schema_path = os.path.join(base, "wiki", "schema.md")
+        glossary_path = os.path.join(base, "glossary.md")
 
         if request.method == "POST":
             action = request.form.get("action")
@@ -1677,18 +1679,32 @@ def _register_routes(app: Flask) -> None:
                     f"{username}/{repo_slug} public={repo.is_public}",
                 )
                 flash("设置已保存", "success")
-            elif action == "update_schema":
-                content = request.form.get("schema_content", "")
+            elif action in {"update_prompt", "update_schema"}:
+                content = request.form.get("prompt_content")
+                if content is None:
+                    content = request.form.get("schema_content", "")
                 os.makedirs(os.path.dirname(schema_path), exist_ok=True)
                 with open(schema_path, "w", encoding="utf-8") as f:
                     f.write(content)
                 _audit(
-                    "update_schema",
+                    "update_prompt" if action == "update_prompt" else "update_schema",
                     "repo",
                     repo.id,
                     f"{username}/{repo_slug} chars={len(content)}",
                 )
-                flash("Schema 已保存", "success")
+                flash("知识库提示词已保存", "success")
+            elif action == "update_glossary":
+                content = request.form.get("glossary_content", "")
+                os.makedirs(os.path.dirname(glossary_path), exist_ok=True)
+                with open(glossary_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                _audit(
+                    "update_glossary",
+                    "repo",
+                    repo.id,
+                    f"{username}/{repo_slug} chars={len(content)}",
+                )
+                flash("术语解释已保存", "success")
             elif action == "update_readme":
                 readme_content = request.form.get("readme", "")
                 readme_path = os.path.join(base, "README.md")
@@ -1733,6 +1749,11 @@ def _register_routes(app: Flask) -> None:
             with open(schema_path, "r", encoding="utf-8") as f:
                 schema_content = f.read()
 
+        glossary_content = ""
+        if os.path.isfile(glossary_path):
+            with open(glossary_path, "r", encoding="utf-8") as f:
+                glossary_content = f.read()
+
         readme_content = ""
         readme_path = os.path.join(base, "README.md")
         if os.path.isfile(readme_path):
@@ -1757,6 +1778,8 @@ def _register_routes(app: Flask) -> None:
             username=username,
             repo=repo,
             schema_content=schema_content,
+            prompt_content=schema_content,
+            glossary_content=glossary_content,
             readme_content=readme_content,
             repo_members=repo_members,
             repo_share_codes=repo_share_codes,
@@ -2667,6 +2690,12 @@ def _register_routes(app: Flask) -> None:
         filepath = os.path.join(raw_dir, source_id)
         if os.path.isfile(filepath):
             os.remove(filepath)
+            if current_app.qdrant:
+                try:
+                    current_app.qdrant.delete_raw_chunks(repo.id, source_id)
+                    current_app.qdrant.delete_fact_records(repo.id, source_id)
+                except Exception:
+                    logger.warning("Failed to delete raw/fact vectors for source %s", source_id)
             removed = _purge_source_wiki(current_app._get_current_object(), repo, username, source_id)
             _audit(
                 "delete_source",
@@ -2715,6 +2744,12 @@ def _register_routes(app: Flask) -> None:
         elif os.path.exists(new_path):
             flash(f"{safe_new} 已存在", "error")
         else:
+            if current_app.qdrant:
+                try:
+                    current_app.qdrant.delete_raw_chunks(repo.id, source_id)
+                    current_app.qdrant.delete_fact_records(repo.id, source_id)
+                except Exception:
+                    logger.warning("Failed to delete raw/fact vectors for renamed source %s", source_id)
             os.rename(old_path, new_path)
             # Queue re-ingest so wiki reflects the renamed source
             task = Task(repo_id=repo.id, type="ingest", status="queued", input_data=safe_new)
@@ -2746,10 +2781,17 @@ def _register_routes(app: Flask) -> None:
         purged_wiki = 0
         app_obj = current_app._get_current_object()
         for fn in filenames:
-            fp = os.path.join(raw_dir, safe_upload_basename(fn))
+            safe_fn = safe_upload_basename(fn)
+            fp = os.path.join(raw_dir, safe_fn)
             if os.path.isfile(fp):
                 os.remove(fp)
-                purged_wiki += _purge_source_wiki(app_obj, repo, username, safe_upload_basename(fn))
+                if current_app.qdrant:
+                    try:
+                        current_app.qdrant.delete_raw_chunks(repo.id, safe_fn)
+                        current_app.qdrant.delete_fact_records(repo.id, safe_fn)
+                    except Exception:
+                        logger.warning("Failed to delete raw/fact vectors for source %s", safe_fn)
+                purged_wiki += _purge_source_wiki(app_obj, repo, username, safe_fn)
                 deleted += 1
         _sync_repo_counts(repo, username)
         if deleted:
@@ -3154,7 +3196,17 @@ def _register_routes(app: Flask) -> None:
                     _pre_critique = []
                 _pre_retrieval = {
                     "wiki": [{"filename": e.get("filename", ""), "title": e.get("title", ""), "reason": e.get("reason", "")} for e in pre_wiki_ev],
-                    "chunks": [{"filename": e.get("filename", ""), "score": e.get("score"), "snippet": (e.get("snippet") or "")[:300]} for e in pre_chunk_ev],
+                    "chunks": [
+                        {
+                            "filename": e.get("filename", ""),
+                            "source_layer": e.get("source_layer", "wiki"),
+                            "source_file": e.get("source_file", ""),
+                            "score": e.get("score"),
+                            "snippet": (e.get("snippet") or "")[:300],
+                            "url": e.get("url", ""),
+                        }
+                        for e in pre_chunk_ev
+                    ],
                     "facts": [{"source_file": e.get("source_file", ""), "score": e.get("score"), "fields": e.get("fields", {})} for e in pre_fact_ev],
                     "reasoning_mode": _pre_rm,
                     "sub_questions": _pre_subq,
@@ -3255,7 +3307,14 @@ def _register_routes(app: Flask) -> None:
                     for e in _wiki_ev
                 ],
                 "chunks": [
-                    {"filename": e.get("filename", ""), "score": e.get("score"), "snippet": (e.get("snippet") or "")[:300]}
+                    {
+                        "filename": e.get("filename", ""),
+                        "source_layer": e.get("source_layer", "wiki"),
+                        "source_file": e.get("source_file", ""),
+                        "score": e.get("score"),
+                        "snippet": (e.get("snippet") or "")[:300],
+                        "url": e.get("url", ""),
+                    }
                     for e in _chunk_ev
                 ],
                 "facts": [
@@ -3858,8 +3917,11 @@ def _register_routes(app: Flask) -> None:
                 "chunks": [
                     {
                         "filename": e.get("filename", ""),
+                        "source_layer": e.get("source_layer", "wiki"),
+                        "source_file": e.get("source_file", ""),
                         "score": e.get("score"),
                         "snippet": (e.get("snippet") or "")[:300],
+                        "url": e.get("url", ""),
                     }
                     for e in chunk_ev
                 ],
@@ -4032,8 +4094,14 @@ def _register_routes(app: Flask) -> None:
                     for e in wiki_ev
                 ],
                 "chunks": [
-                    {"filename": e.get("filename", ""), "score": e.get("score"),
-                     "snippet": (e.get("snippet") or "")[:300]}
+                    {
+                        "filename": e.get("filename", ""),
+                        "source_layer": e.get("source_layer", "wiki"),
+                        "source_file": e.get("source_file", ""),
+                        "score": e.get("score"),
+                        "snippet": (e.get("snippet") or "")[:300],
+                        "url": e.get("url", ""),
+                    }
                     for e in chunk_ev
                 ],
                 "facts": [

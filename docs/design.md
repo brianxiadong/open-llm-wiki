@@ -33,7 +33,7 @@
 
 ```
 {username}/{repo-slug}/
-├── schema.md          ← 第三层：Schema，控制 LLM 行为的配置文档
+├── glossary.md        ← 知识库级术语解释（用于检索扩展与回答约束）
 ├── raw/               ← 第一层：原始文档（不可变，LLM 只读不写）
 │   ├── assets/        ← 图片等附件（MinerU 提取的图片）
 │   ├── originals/     ← 表格/二进制原始文件备份（仅上传时保留）
@@ -43,6 +43,7 @@
 ├── facts/
 │   └── records/       ← 结构化事实层（JSONL，按行/记录保真存储）
 └── wiki/              ← 第二层：LLM 生成的 Wiki（LLM 完全拥有）
+    ├── schema.md      ← 第三层：知识库提示词（兼容历史文件名，控制 LLM 行为）
     ├── index.md       ← 内容目录——所有页面的分类索引
     ├── log.md         ← 时间线——操作的追加记录
     ├── overview.md    ← 全局综述——所有来源的高层综合
@@ -62,7 +63,7 @@
 - PPT (.pptx)——调用 MinerU 转为 .pptx.md
 - 图片 (.png/.jpg)——调用 MinerU OCR 转为 .md
 - CSV (.csv)——转换为 Markdown 展示稿 + `facts/records/*.jsonl` 行级 records
-- Excel (.xlsx/.xls)——用 openpyxl 解析，转换为 Markdown 表格（支持多 Sheet）+ `facts/records/*.jsonl`
+- Excel (.xlsx/.xls)——用 openpyxl 解析，转换为 Markdown 表格（支持多 Sheet，会合并多行/分组表头）+ `facts/records/*.jsonl`
 
 其中 Markdown 用于 Wiki 叙事层摄入，JSONL records 用于 Fact Layer 保真检索；原始表格文件会保存在 `raw/originals/` 便于回溯。
 
@@ -96,25 +97,24 @@ sources:
 正文内容，包含到 [其他页面](other-page.md) 的交叉引用。
 ```
 
-### 3.3 Schema 层（schema.md）
+### 3.3 知识库提示词层（schema.md）
 
-控制 LLM 如何维护该仓库 Wiki 的配置文档。新建仓库时可从预设模板选择，用户可以随时修改。用户与 LLM 共同演进这个文件。
+控制 LLM 如何摄入资料、维护 Wiki 与回答问题的知识库级自定义提示词。底层文件名仍为 `wiki/schema.md`，用于兼容已有知识库和导入/导出包；产品界面统一展示为「知识库提示词」。新建仓库时可从预设模板选择，owner 可以随时在设置页修改。
 
 预设模板（`utils.SCHEMA_TEMPLATES`）：
 
-- **通用**（default）：通用页面类型（concept/guide/reference/overview 等）
-- **学术研究**（academic）：paper/concept/method/result/comparison，含证据等级字段
-- **产品文档**（product）：feature/guide/reference/faq/changelog
-- **技术笔记**（tech_notes）：concept/howto/snippet/troubleshoot
+- **通用问答**（default）：结论先行、证据不足坦率说明、字段严格
+- **学术研究**（academic）：区分论文结论、实验结果、作者观点和归纳
+- **产品/报价**（product）：型号、参数、价格、折扣和适用范围严格按资料回答
+- **技术笔记**（tech_notes）：优先给可执行步骤、验证命令与排障结构
 
-Schema 定义：
+知识库提示词建议定义：
 
-- Wiki 的组织结构（有哪些类别的页面）
-- 命名约定和格式要求
-- 摄入工作流（拿到新文档时做什么）
-- 查询工作流（被问问题时做什么）
-- 维护工作流（Lint 时检查什么）
-- 领域特定规则（如：在研究场景中标注证据等级）
+- 回答口径（例如是否结论先行、是否面向销售/研发/客服）
+- 字段严格性（例如价格、折扣、型号、日期、接口字段不能跨行/跨实体套用）
+- 计算规则（例如折扣价、税费、统计口径如何展示公式）
+- 不确定时的表达方式（例如资料缺失时必须说“资料中未提及”）
+- 领域特定规则（例如研究场景标注证据强弱，产品场景区分套装和单机）
 
 ## 4. 核心操作
 
@@ -241,8 +241,8 @@ GET /{username}/{repo}/query/stream?q=<question>&reasoning_mode=standard|deep|re
         ▼ 前端用 done 中的 markdown 调用 POST /query（_rendered_answer 模式）渲染 HTML + 证据面板
 ```
 
-- **检索模式**：`reasoning_mode=standard`（默认）单次选页 + 单次向量/事实召回；`deep` 为「深度推理」：先 `LLM.chat_json` 拆 2～4 个子问题，再对主问题与各子问题分别选页与召回，合并去限后用**原始主问题**做流式生成；`react` 为「极致推理」（ReAct）：每轮由模型输出 `thought` + `action`（`retrieve` / `finish`），在 `retrieve` 时对 `action_input` 执行与标准路径相同的选页与双通道召回，把**观察摘要**（累积页面/片段/事实数量等，不含全文答案）写回下一轮提示，最多 `REACT_MAX_STEPS` 轮（见 `wiki_engine.py`），最后仍用主问题 + 合并证据一次流式生成。**深度 / 极致专属**：在上述检索合并完成后、拼上下文与生成回答前，增加一轮 **检索评审**（`WikiEngine._retrieval_critique_json`）：将用户问题与「已召回证据」的紧凑摘要（页面列表、片段摘录、事实条数，非全文）交给 LLM，输出 JSON `sufficient` / `follow_up_queries`（至多 `RETRIEVAL_CRITIQUE_MAX_FOLLOWUPS` 条）；若判定不足且 `follow_up_queries` 非空，则再执行一轮选页 + 向量/事实召回并与前序结果合并去重（`refined: true` 写入评审 trace）。**标准模式不经过该评审**。SSE 在评审与补充检索阶段推送进度文案；流式与非流式结束均可带 `retrieval_critique`（与 `react_trace` 并列，供落库与排障）。Dashboard 下拉对应三档；`POST /query` 与 SSE 均传 `reasoning_mode`。流式结束落库可带 `_sub_questions`、`_react_trace`、`_retrieval_critique`（写入 `query_logs.retrieval_json`，与 `reasoning_mode` / `react_trace` 并列）。
-- **后端**：`WikiEngine.query_stream()` 为生成器，`LLMClient.chat_stream()` 使用 `stream=True`；Flask 路由使用 `stream_with_context` + `mimetype=text/event-stream`。`done` 事件中的 `wiki_evidence` / `chunk_evidence` 链接必须输出为仓库级 Wiki 完整路径（`/{username}/{repo}/wiki/{page_slug}`）；`fact_evidence` 链接输出为来源页完整路径（`/{username}/{repo}/sources/{source_markdown_filename}`）。
+- **检索模式**：`reasoning_mode=standard`（默认）单次选页 + 单次向量/事实召回；其中向量片段召回是 **Wiki chunk + Raw chunk 双通道**，先分别查 `repo_{id}_chunks` 与 `repo_{id}_raw_chunks`，再与 BM25 结果做 RRF 融合。`deep` 为「深度推理」：先 `LLM.chat_json` 拆 2～4 个子问题，再对主问题与各子问题分别选页与召回，合并去限后用**原始主问题**做流式生成；`react` 为「极致推理」（ReAct）：每轮由模型输出 `thought` + `action`（`retrieve` / `finish`），在 `retrieve` 时对 `action_input` 执行与标准路径相同的选页与双通道召回，把**观察摘要**（累积页面/片段/事实数量等，不含全文答案）写回下一轮提示，最多 `REACT_MAX_STEPS` 轮（见 `wiki_engine.py`），最后仍用主问题 + 合并证据一次流式生成。**深度 / 极致专属**：在上述检索合并完成后、拼上下文与生成回答前，增加一轮 **检索评审**（`WikiEngine._retrieval_critique_json`）：将用户问题与「已召回证据」的紧凑摘要（页面列表、片段摘录、事实条数，非全文）交给 LLM，输出 JSON `sufficient` / `follow_up_queries`（至多 `RETRIEVAL_CRITIQUE_MAX_FOLLOWUPS` 条）；若判定不足且 `follow_up_queries` 非空，则再执行一轮选页 + 向量/事实召回并与前序结果合并去重（`refined: true` 写入评审 trace）。**标准模式不经过该评审**。SSE 在评审与补充检索阶段推送进度文案；流式与非流式结束均可带 `retrieval_critique`（与 `react_trace` 并列，供落库与排障）。Dashboard 下拉对应三档；`POST /query` 与 SSE 均传 `reasoning_mode`。流式结束落库可带 `_sub_questions`、`_react_trace`、`_retrieval_critique`（写入 `query_logs.retrieval_json`，与 `reasoning_mode` / `react_trace` 并列）。
+- **后端**：`WikiEngine.query_stream()` 为生成器，`LLMClient.chat_stream()` 使用 `stream=True`；Flask 路由使用 `stream_with_context` + `mimetype=text/event-stream`。`done` 事件中的 `wiki_evidence` / `chunk_evidence` 链接必须输出为仓库级路径：Wiki chunk 链到 `/{username}/{repo}/wiki/{page_slug}`，Raw chunk 链到 `/{username}/{repo}/sources/{source_filename}`，`fact_evidence` 链接输出为来源页完整路径（`/{username}/{repo}/sources/{source_markdown_filename}`）。`chunk_evidence[].source_layer` 标识 `wiki` 或 `raw`。
 - **前端**：`chat.js` 优先使用 `EventSource`；`answer_chunk` 事件实时更新加载气泡；`done` 后调用 `POST /query`（`_rendered_answer` 模式）获取完整渲染 HTML，并展示置信度 badge + 三路证据面板。
 - **降级**：`queryStreamUrl` 缺失时自动回退到原 POST 轮询模式。
 - **渲染复用**：`POST /query` 若请求体含 `_rendered_answer`，则跳过 LLM 调用，直接渲染 Markdown 返回 HTML，同时返回 `confidence`、`wiki_evidence`、`chunk_evidence`、`fact_evidence` 字段。该分支仍需像普通查询一样写入 `conversation_sessions`，以保证流式查询不会丢失历史消息，也不会让会话标题在重新加载后退回“新对话”。
@@ -256,9 +256,9 @@ GET /{username}/{repo}/query/stream?q=<question>&reasoning_mode=standard|deep|re
   "answer": "...",
   "confidence": {"level": "high|medium|low", "score": 0.85, "reasons": ["..."]},
   "wiki_evidence": [{"filename": "...", "title": "...", "type": "...", "url": "...", "reason": "..."}],
-  "chunk_evidence": [{"chunk_id": "...", "filename": "...", "title": "...", "heading": "...", "url": "...", "snippet": "...", "score": 0.92}],
+  "chunk_evidence": [{"chunk_id": "...", "filename": "...", "source_layer": "wiki|raw", "source_file": "...", "title": "...", "heading": "...", "url": "...", "snippet": "...", "score": 0.92}],
   "fact_evidence": [{"record_id": "...", "source_file": "...", "source_markdown_filename": "...", "sheet": "...", "row_index": 12, "fields": {"地区": "华东"}, "snippet": "...", "score": 0.96, "url": "..."}],
-  "evidence_summary": "本回答基于 N 个 Wiki 页面、M 个原文片段和 K 条结构化事实生成。",
+  "evidence_summary": "本回答基于 N 个 Wiki 页面、M 个 Wiki 片段、R 个原始文档片段和 K 条结构化事实生成。",
   "wiki_sources": [...],
   "qdrant_sources": [...]
 }
@@ -432,7 +432,7 @@ CREATE TABLE audit_logs (
     INDEX idx_al_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-**`audit_logs.action` 常见取值（节选）**：`login` / `logout` / `verify_email` / `delete_account`；`create_api_token` / `revoke_api_token` / `reveal_api_token` / `delete_api_token`；`delete_repo` / `import_zip`；`update_repo_info` / `update_schema` / `create_share_code`；`upload_source` / `delete_source` / `rename_source` / `batch_delete_sources` / `batch_ingest` / `import_url` / `queue_ingest`；`delete_wiki_page` / `save_query_as_wiki`；**检索**：`kb_query`（POST 非流式）、`kb_query_stream`（SSE 每次用户提问一条，不含流式结束后的 `_rendered_answer` 回放）、`api_kb_search`（`/api/v1/search`）。上述三类检索审计的 **`detail` 仅保存用户问题正文**（过长截断）；**知人**为 `user_id`/`username`，**知识库**为 `resource_type=repo` 与 `resource_id`（仓库主键），**不写入模型回答、证据或 trace**。完整问答与检索细节见 `query_logs` 与文件型 query trace。
+**`audit_logs.action` 常见取值（节选）**：`login` / `logout` / `verify_email` / `delete_account`；`create_api_token` / `revoke_api_token` / `reveal_api_token` / `delete_api_token`；`delete_repo` / `import_zip`；`update_repo_info` / `update_prompt` / `update_schema`（旧表单兼容） / `update_glossary` / `create_share_code`；`upload_source` / `delete_source` / `rename_source` / `batch_delete_sources` / `batch_ingest` / `import_url` / `queue_ingest`；`delete_wiki_page` / `save_query_as_wiki`；**检索**：`kb_query`（POST 非流式）、`kb_query_stream`（SSE 每次用户提问一条，不含流式结束后的 `_rendered_answer` 回放）、`api_kb_search`（`/api/v1/search`）。上述三类检索审计的 **`detail` 仅保存用户问题正文**（过长截断）；**知人**为 `user_id`/`username`，**知识库**为 `resource_type=repo` 与 `resource_id`（仓库主键），**不写入模型回答、证据或 trace**。完整问答与检索细节见 `query_logs` 与文件型 query trace。
 
 -- Wave 3 新增：API Token 表
 CREATE TABLE api_tokens (
@@ -454,12 +454,13 @@ CREATE TABLE api_tokens (
 data/
 ├── alice/                      ← 用户 alice
 │   ├── ml-research/            ← 仓库：机器学习研究
-│   │   ├── schema.md
+│   │   ├── glossary.md
 │   │   ├── raw/
 │   │   │   ├── assets/
 │   │   │   ├── attention-paper.pdf.md
 │   │   │   └── transformer-survey.md
 │   │   └── wiki/
+│   │       ├── schema.md
 │   │       ├── index.md
 │   │       ├── log.md
 │   │       ├── overview.md
@@ -467,14 +468,16 @@ data/
 │   │       ├── transformer.md
 │   │       └── self-attention-vs-cross-attention.md
 │   └── book-notes/             ← 仓库：读书笔记
-│       ├── schema.md
+│       ├── glossary.md
 │       ├── raw/
 │       └── wiki/
+│           └── schema.md
 └── bob/                        ← 用户 bob
     └── competitive-analysis/
-        ├── schema.md
+        ├── glossary.md
         ├── raw/
         └── wiki/
+            └── schema.md
 ```
 
 ## 6. Web 界面
@@ -516,6 +519,7 @@ POST /{username}/repos                   → 创建新仓库
 GET  /{username}/{repo}                  → 仓库面板（Wiki 概览 + README）
 POST /{username}/{repo}/delete           → 删除仓库
 GET  /{username}/{repo}/settings         → 仓库设置
+POST /{username}/{repo}/settings         → 更新基本信息 / 知识库提示词 / 检索术语解释 / README / 共享访问码
 POST /{username}/{repo}/import.zip       → 从 ZIP 导入/恢复整个知识库
 POST /{username}/{repo}/members/{id}/delete → owner 移除共享成员
 POST /{username}/{repo}/share-codes/{id}/disable → owner 停用访问码
@@ -616,7 +620,7 @@ GET  /api/system/dependencies-status         → 顶栏组件状态探测（聚�
 
 **个人设置页**（`templates/user/settings.html`、`templates/user/tokens.html`）：包含「基本信息」「修改密码」「危险操作」三个区域。删除账号时要求再次输入当前用户名和密码确认，提交后会同步清理名下知识库目录、向量索引、任务、会话、API Token 以及关联查询记录中的用户引用，并立即注销当前会话；E2E 测试脚本会复用这条删除流程自动回收 `e2e_*` 账号。
 
-**知识库设置页**（`templates/repo/settings.html`）：由「基本信息」「共享访问码」「共享成员」「Wiki Schema」「导入 Wiki（ZIP）」「README」「删除知识库」七个独立表单区块组成；owner 可在这里生成 viewer/editor 访问码、停用访问码以及移除共享成员。生成访问码后，页面会自动尝试复制邀请链接，并在访问码列表中保留“复制邀请链接”按钮，但不直接展示链接文本。每个表单都显式携带 `action` 隐藏字段，避免未启用 CSRF 模板变量时提交丢失操作类型。
+**知识库设置页**（`templates/repo/settings.html`）：由「基本信息」「检索术语解释」「共享访问码」「共享成员」「知识库提示词」「导入 Wiki（ZIP）」「README」「删除知识库」八个独立表单区块组成；owner 可维护 `glossary.md`，每行使用 `术语 = 解释` / `别名1|别名2 = 解释`，供检索扩展与回答约束使用。owner 也可维护知识库提示词（底层兼容保存到 `wiki/schema.md`），用于控制摄入、Wiki 生成和问答回答风格。owner 还可在这里生成 viewer/editor 访问码、停用访问码以及移除共享成员。生成访问码后，页面会自动尝试复制邀请链接，并在访问码列表中保留“复制邀请链接”按钮，但不直接展示链接文本。每个表单都显式携带 `action` 隐藏字段，避免未启用 CSRF 模板变量时提交丢失操作类型。
 
 **基础壳层**（`templates/base.html` + `static/css/style.css`）：站点统一头部、页脚与全局设计令牌都在这里定义。为了适配内网和离线环境，正文不再依赖 Google Fonts，而是使用系统自带中文优先字体栈；Pico CSS、Lucide、EasyMDE、D3 也全部 vendoring 到 `static/vendor/` 由应用自身提供，避免 CDN 或外网不可达时页面样式、图标、编辑器和图谱功能失效。知识库聊天页注入给 `chat.js` 的配置对象必须使用 `tojson` 输出，避免 Jinja 自动转义把 URL 变成 `"..."` 从而导致会话栏和“新对话”初始化失效。顶栏左侧新增两枚状态胶囊：其一每 30 秒轮询 `/api/system/llm-status`，服务端使用短 TTL 缓存调用 OpenAI 兼容 `/models` 探活，正常时显示绿灯和「大模型正常」，异常时显示红灯并在 `title` 中带出错误信息；其二每 30 秒轮询 `/api/system/dependencies-status`，聚合 Embedding、MinerU、Qdrant 三项依赖的探活结果，正常时显示「组件正常」，任一异常时显示「组件异常」，并在悬浮提示中列出各子组件状态。页脚展示「版本」及短版本号（与 `/health` 响应中的 `revision` 字段一致）：优先环境变量 `APP_REVISION`，否则为 `deploy/revision.txt`（由 `scripts/deploy.sh` 在打包前写入**两行**：Git 短 SHA、部署时间，默认 **Asia/Shanghai**（`date` 含 `%z`）；展示为 `SHA · 时间`），本地开发无上述文件时回退为 `git rev-parse --short HEAD`（无部署时间），均不可用时为 `unknown`。
 
@@ -650,6 +654,8 @@ QDRANT_URL=http://localhost:6333
 RAG_CONTEXT_CHUNK_CHARS=700          # 每个 chunk 注入 Prompt 前的最大字符数
 RAG_CONTEXT_EXPAND_NEIGHBORS=1       # 命中 chunk 前后各补 N 个相邻 chunk 作为局部上下文
 RAG_BM25_TOP_K=20                    # chunk / fact 关键词通道候选条数上限（见 HybridRetriever）
+RAG_MAX_CHUNKS_PER_FILE=2            # Wiki chunk 同文件保留上限
+RAG_MAX_RAW_CHUNKS_PER_FILE=8        # Raw chunk 同文件保留上限，适配单份大表/规格书
 
 # Fact：dense 之外的 BM25 + 字段精确加分（超大表可调低 MAX_RECORDS 或关闭）
 RAG_ENABLE_FACT_KEYWORD=true
@@ -713,32 +719,32 @@ ADMIN_USERNAME=admin
 
 | 机制                                                            | 触发条件                                       | 作用                                                                                                                                                                                      | 开关                                                               |
 | ------------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| **Prompt guard**（`compose_system_prompt`）                     | 有 context 且 `RAG_ENABLE_PROMPT_GUARD=true` | 注入 6 条通用规则：字段级严格、推理级允许、来源合法、未知即未知、不跨实体传染、空上下文坦率                                                                                                                                         | `RAG_ENABLE_PROMPT_GUARD`                                        |
+| **Prompt guard**（`compose_system_prompt`）                     | 有 context 且 `RAG_ENABLE_PROMPT_GUARD=true` | 注入 7 条通用规则：字段级严格、推理级允许、来源合法、未知即未知、不跨实体传染、术语解释优先、空上下文坦率                                                                                                                                  | `RAG_ENABLE_PROMPT_GUARD`                                        |
 | **对比模板**（`build_comparison_user_prompt`）                      | 关键词命中 comparison 且 context 非空              | 动态归纳 ≥ N 个维度 + 维度对比表 + 可选选型建议 + 资料缺口；维度不足时 LLM 自动退化为要点回答                                                                                                                                | `RAG_ENABLE_COMPARISON_TEMPLATE`、`RAG_COMPARISON_MIN_DIMENSIONS` |
 | **引用合法性后校验**（`validate_citations` + `apply_citation_penalty`） | `RAG_CITATION_POSTCHECK=true`              | 扫描答案里的 `xxx.md/docx/pdf` 等文件名，若不在`wiki_evidence ∪ chunk_evidence ∪ fact_evidence.source_file/source_markdown_filename` 中，对 confidence 扣 `RAG_CITATION_PENALTY` 并写入 `confidence.reasons` | `RAG_CITATION_POSTCHECK`、`RAG_CITATION_PENALTY`                  |
 
 
-> **证据追溯位置**：guard 规则 3 显式禁止 LLM 在答案正文中嵌入文件名 / 手册名 / 章节号 / 行号等来源信息，避免答案出现 `(来源: xxx.md)` 这类追溯标注影响阅读体验。证据可追溯性由前端的 `wiki_evidence` / `chunk_evidence` / `fact_evidence` 面板统一承担，对 RAG 整体证据链无损失。引用合法性校验仍保留：一旦 LLM 违反指令写了文件名，系统会抽取并对比 allowed 集合，非法项触发 confidence 扣分。
+> **证据追溯位置**：guard 规则 3 显式禁止 LLM 在答案正文中嵌入文件名 / 手册名 / 章节号 / 行号等来源信息，避免答案出现 `(来源: xxx.md)` 这类追溯标注影响阅读体验。证据可追溯性由前端的 `wiki_evidence` / `chunk_evidence` / `fact_evidence` 面板统一承担，对 RAG 整体证据链无损失。引用合法性校验仍保留：一旦 LLM 违反指令写了文件名，系统会抽取并对比 allowed 集合，非法项触发 confidence 扣分。若当前知识库配置了 `glossary.md` 且用户问题命中术语，生成上下文会增加 `=== GLOSSARY ===` 区块，guard 要求 LLM 优先采用这里的知识库内约定含义。
 
 实现位置：`wiki_prompts.py`（纯函数）+ `wiki_engine.py` 的 `query_with_evidence` / `query_stream` 分支。返回体额外包含 `intent` 与 `citation_validation` 两个字段以便前端展示。
 
 设计约束：
 
-1. **跨域零耦合**：guard 文本中不包含任何领域词汇（产品名、字段名），对比模板要求 LLM 从 context 中**动态归纳**维度而非硬编码；因此可直接套用到任意知识库。
+1. **跨域零耦合**：guard 文本中不包含任何领域词汇（产品名、字段名），对比模板要求 LLM 从 context 中**动态归纳**维度而非硬编码；术语解释来自 owner 在 `glossary.md` 中的知识库级配置，而不是代码里的业务词表，因此可直接套用到任意知识库。
 2. **零负向兜底**：
   - 对比模板只在意图被分类为 comparison 且 context 非空时生效；否则回退通用模板，**不改变原行为**。
   - guard 在 context 为空时不注入，避免压抑纯生成任务（例如"写一段示例代码"）。
   - 对比模板内置**退化规则**：LLM 归纳不出 `RAG_COMPARISON_MIN_DIMENSIONS` 个维度时自动回退到要点回答。
 3. **可独立灰度**：5 个开关互相正交，可单独关闭某一项观察效果。
 
-单测覆盖见 `tests/test_wiki_prompts.py`（15 用例，纯函数级别）与 `tests/test_wiki_engine.py` 的集成用例（注入、对比分支、引用校验、关闭开关回退、空 context 不注入 guard 等 7 条）。
+单测覆盖见 `tests/test_wiki_prompts.py`（15 用例，纯函数级别）与 `tests/test_wiki_engine.py` 的集成用例（注入、对比分支、术语解释、引用校验、关闭开关回退、空 context 不注入 guard 等）。
 
 每次 LLM 调用都遵循统一结构：
 
 ```
 System Prompt:
   你是一个 Wiki 维护者。你负责阅读原始文档、构建和维护结构化的 Wiki。
-  以下是本 Wiki 的 Schema：
+  以下是当前知识库 owner 配置的知识库提示词：
   ---
   {schema.md 内容}
   ---
@@ -801,7 +807,7 @@ User Prompt:（根据操作类型不同）
 页面类型：{type}
 相关来源：{source filename}
 上下文：{来自 Step 1 的分析}
-要求：遵循 Schema 中定义的页面格式，包含交叉引用。
+要求：遵循知识库提示词中的口径和格式要求，包含必要交叉引用。
 请直接返回完整的 markdown 内容（包含 frontmatter）。
 
 更新页面场景：
@@ -847,24 +853,35 @@ User Prompt:（根据操作类型不同）
 
 ```python
 # 1) Dense (cosine)：bge-m3 embedding + Qdrant
+#    - 同时搜索 Wiki chunk collection 与 raw chunk collection
 #    - chunk embed 前缀拼入 page_title / heading，显著提高语义区分度
 #    - score_threshold 过滤低分噪声；max_per_file 避免单页霸榜
-dense_hits = qdrant.search_chunks(
+wiki_dense_hits = qdrant.search_chunks(
     repo_id, query,
     limit=top_k * 2,
     score_threshold=Config.RAG_CHUNK_SCORE_THRESHOLD,  # 默认 0.35
     oversample=3,
 )
+raw_dense_hits = qdrant.search_raw_chunks(
+    repo_id, query,
+    limit=top_k * 2,
+    score_threshold=Config.RAG_CHUNK_SCORE_THRESHOLD,
+    oversample=3,
+)
 
 # 2) BM25 (关键字)：rank_bm25 + jieba，按 repo_id 惰性构建
-#    - corpus 从 qdrant.scroll_all_chunks 拉取（桌面端来自本地 SQLite）
+#    - corpus 分别从 qdrant.scroll_all_chunks / scroll_all_raw_chunks 拉取（桌面端来自本地 SQLite）
 #    - 缓存 key=(repo, n_chunks + chunk 内容 hash)，页面内容更新后自动失效
-bm25_hits = keyword_index.search(query)
+wiki_bm25_hits = keyword_index.search(query, corpus=wiki_chunks)
+raw_bm25_hits = keyword_index.search(query, corpus=raw_chunks)
 
 # 3) RRF 融合：score = Σ 1/(k + rank_i)，默认 k=60
 #    - 不直接相加 cosine + BM25 分数（量纲不同）
 #    - 同时出现在两个通道的 chunk 排名更靠前
-fused = rrf_merge(dense_hits, bm25_hits, k=Config.RAG_RRF_K)
+#    - 含字母+数字的型号/编号做通用 exact identifier 提权
+#    - 不做业务同义词/词表硬编码；问题扩展只来自通用检索配置、上层深度推理、
+#      或 owner 在当前知识库 glossary.md 中维护的术语解释
+fused = rrf_merge(wiki_dense_hits, raw_dense_hits, wiki_bm25_hits, raw_bm25_hits, k=Config.RAG_RRF_K)
 
 # 4) 局部上下文扩展：对最终命中 chunk 按 position 补前后邻居
 chunk_hits = expand_neighbors(fused, n=Config.RAG_CONTEXT_EXPAND_NEIGHBORS)
@@ -882,7 +899,15 @@ chunk_hits = expand_neighbors(fused, n=Config.RAG_CONTEXT_EXPAND_NEIGHBORS)
 `HybridRetriever` 会先按 RRF 融合结果选出主命中，再根据
 `RAG_CONTEXT_EXPAND_NEIGHBORS`（默认 1）从 chunk corpus 中补相邻片段，避免答案缺少
 命中段落前后的定义、约束或表格上下文；深度 / 极致模式多路合并时继续优先保留
-`fused_score` 更高的主命中。每段只保留 `RAG_CONTEXT_CHUNK_CHARS`（默认 700）字符。
+`fused_score` 更高的主命中。Wiki 与 Raw 使用独立同文件上限：Wiki 默认最多 2 个，
+Raw 默认最多 8 个，避免单页 Wiki 霸屏，同时允许单份大表返回更多精确行。每段只保留
+`RAG_CONTEXT_CHUNK_CHARS`（默认 700）字符。
+查询中类似 `ABC123`、`EdgeBox-42` 的字母数字型号会作为通用 exact identifier
+参与 BM25 候选排序，优先保留包含该编号的片段；这不包含业务同义词推断。
+知识库根目录可选 `glossary.md`，每行 `术语 = 解释` / `别名1|别名2 = 解释`。
+查询命中术语时，`wiki_engine` 会把匹配解释追加到选页、chunk 检索与 fact 检索的查询文本中，
+例如 `双模 = SVC + AVC` 会让「ME60S 是双模终端吗」同时检索 `SVC` / `AVC`；
+最终 Prompt 还会追加 `=== GLOSSARY ===` 区块，约束模型按当前知识库术语含义回答。
 仅 Wiki 结构通道挑中但未出现在 chunk 命中里的页面，才追加前 2000 字作为兜底。
 
 ```
@@ -981,7 +1006,7 @@ open-llm-wiki/
 │   │   ├── list.html      ← 仓库列表
 │   │   ├── new.html       ← 新建仓库
 │   │   ├── dashboard.html ← 仓库面板
-│   │   └── settings.html  ← 仓库设置（基本信息 / Schema / ZIP 导入 / README / 删除）
+│   │   └── settings.html  ← 仓库设置（基本信息 / 术语解释 / 知识库提示词 / ZIP 导入 / README / 删除）
 │   ├── wiki/
 │   │   ├── page.html      ← Wiki 页面渲染
 │   │   └── graph.html     ← 关系图
@@ -1090,7 +1115,8 @@ openpyxl>=3.1
 | 阶段                     | 并发度来源                                       | 行为                                                                                                              |
 | ---------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | 页面生成（create + update）  | `Config.INGEST_LLM_CONCURRENCY`（默认 4）       | `pages_to_create` 和 `pages_to_update` 合并后用 `ThreadPoolExecutor` 并发调 `_chat_text`；单页失败仅影响自身，进度事件按 `[X/N]` 语义累计上报 |
-| 向量索引（多页）               | `Config.INGEST_INDEX_CONCURRENCY`（默认 4）     | 所有改动页面并发执行 `upsert_page` + `upsert_page_chunks`；单页 Qdrant 失败不影响其它页                                              |
+| 原始文档索引                 | 单文件同步执行                                      | 读取 raw 源文件后先执行 `upsert_raw_chunks`，把原始 Markdown/TXT 切片写入 `repo_{id}_raw_chunks`；失败只记录进度，不阻塞 Wiki 生成               |
+| 向量索引（多页）               | `Config.INGEST_INDEX_CONCURRENCY`（默认 4）     | 所有改动 Wiki 页面并发执行 `upsert_page` + `upsert_page_chunks`；单页 Qdrant 失败不影响其它页                                          |
 | chunk embedding（单页多批次） | `QdrantService.EMBEDDING_MAX_WORKERS`（默认 4） | `_embed_chunks_batched` 把一页的多个 embedding batch 交给线程池并发，失败时回退到逐条 embed 保证鲁棒性                                     |
 
 
@@ -1164,18 +1190,21 @@ MINERU_TIMEOUT=300
 
 Qdrant 既承担叙事层的页面/片段检索，也承担 Fact Layer 的 record 检索。
 
-**Collection 设计**：每个仓库对应三类 collection：
+**Collection 设计**：每个仓库对应四类 collection：
 
 - `repo_{repo_id}`：页面级向量（Wiki 页面全文）
-- `repo_{repo_id}_chunks`：段落级向量（chunk evidence）
+- `repo_{repo_id}_chunks`：Wiki 段落级向量（`source_layer=wiki`）
+- `repo_{repo_id}_raw_chunks`：原始文档段落级向量（`source_layer=raw`），用于保留报价表、规格表、适配关系等未被 Wiki 摘要覆盖的细节
 - `repo_{repo_id}_facts`：结构化 record 向量（fact evidence）
 
-**Chunking 策略**（`QdrantService.split_page_into_chunks`）：
+**Chunking 策略**（`QdrantService.split_page_into_chunks` / `split_raw_source_into_chunks`）：
 
 - 切分参数由 `RAG_CHUNK_MIN / RAG_CHUNK_MAX / RAG_CHUNK_OVERLAP`（默认 400 / 1200 / 80）控制。
 - 先按 H1~H4 切出 section；短 section 合并到下一段，避免碎片。
 - 超长 section 在句末（`。！？\n` 等）就近断开，**相邻 chunk 保留 `chunk_overlap` 字符重叠**，
 避免重要句子被刚好切在边界上。
+- 原始文档使用 raw 专用切片：保留 Markdown/TXT 中较长的单行记录为独立 chunk，避免 OCR/Excel
+  导出的宽表行被合并进相邻产品或配置项；短行仍按标题/空行聚合，保持上下文密度。
 - 在**送入 embedding 之前**会把 `page_title / heading` 拼到正文前面：
   ```
   {page_title} / {heading}
@@ -1186,13 +1215,13 @@ Qdrant 既承担叙事层的页面/片段检索，也承担 Fact Layer 的 recor
   「Transformer → 位置编码」这种同主题不同切面的片段在向量空间里拉开距离。
   `chunk_text` 本身不含前缀，payload 里还是原文，不影响 Prompt 显示。
 
-**Upsert 性能**：`upsert_page_chunks` 和 `upsert_fact_records` 都走 batch embed
+**Upsert 性能**：`upsert_page_chunks`、`upsert_raw_chunks` 和 `upsert_fact_records` 都走 batch embed
 （`_embed_chunks_batched` / `_iter_embedded_fact_batches`）。失败时按批回退到逐条，
 避免单条异常带崩整次摄入。
 
 **Hybrid 检索与旁路索引**：见 §7.4。`QdrantService.scroll_all_chunks` /
-`scroll_all_facts` 把某个 repo 下 chunk / fact payload 吐出来，供
-`llmwiki_core/keyword_index.py` 构建 BM25（chunk 另用于按 `position` 扩展相邻片段）；
+`scroll_all_raw_chunks` / `scroll_all_facts` 把某个 repo 下 wiki chunk / raw chunk / fact payload 吐出来，供
+`llmwiki_core/keyword_index.py` 构建 BM25（chunk 另用于按 `source_layer + filename + position` 扩展相邻片段）；
 同一内容签名的 corpus 会被进程级缓存，下一次查询不重复分词，内容变化即换签名重建。
 
 ```python
@@ -1462,65 +1491,27 @@ POST /{username}/{slug}/settings/description/suggest
 - 不读也不写 DB 的旧 description（用户选择 `replace` 模式：重新生成不参考旧描述）
 - 只返回建议，不直接 commit，保留用户最后一次审阅机会
 
-## 9. 默认 Schema 模板
+## 9. 默认知识库提示词模板
 
-新建仓库时自动生成的 `schema.md`：
+新建仓库时自动生成的 `wiki/schema.md`（历史兼容文件名，界面展示为「知识库提示词」）：
 
 ```markdown
-# Wiki Schema
+# 知识库提示词
 
-## 结构
-本 Wiki 遵循 LLM Wiki 模式。页面按以下类型组织：
+这段内容会作为当前知识库的自定义提示词，参与文档摄入、Wiki 生成和问答回答。
 
-- **index.md** — 所有页面的分类目录，每个条目包含链接和一句话摘要
-- **log.md** — 按时间线记录的操作日志（追加式）
-- **overview.md** — 全局综述，综合所有来源的高层观点
-- **来源摘要页** — 每个摄入的来源对应一个摘要页面
-- **实体页** — 关键实体（人物、组织、产品等）各一个页面
-- **概念页** — 核心概念和主题各一个页面
-- **分析页** — 对比分析、综合讨论等衍生内容
+## 回答规则
 
-## 命名约定
-- 文件名使用小写英文 + 连字符：`attention-mechanism.md`
-- 如果主题是中文，文件名用拼音或英文翻译
+- 优先依据检索上下文和原始文档回答，不要凭空补全。
+- 如果资料中没有直接证据，请明确说明“资料中未提及”或“现有证据不足”。
+- 对型号、价格、参数、日期、折扣、适用范围等字段保持严格，不跨产品或跨版本套用。
+- 如果问题涉及表格或清单，按原始记录逐行整理，避免把不同行字段拼成一条新记录。
 
-## 交叉引用
-- 使用标准 markdown 链接：`[页面标题](page-name.md)`
-- 首次提及一个有独立页面的实体/概念时，必须链接
+## 输出风格
 
-## 摄入工作流
-处理新文档时：
-1. 阅读完整文档，理解核心内容
-2. 创建来源摘要页（source-xxx.md）
-3. 识别关键实体和概念
-4. 为新实体创建页面，为已有实体更新页面
-5. 更新 overview.md，整合新信息
-6. 标注任何与已有 Wiki 内容的矛盾
-7. 更新 index.md
-8. 追加 log.md
-
-## 查询工作流
-回答问题时：
-1. 阅读 index.md 定位相关页面
-2. 阅读相关页面内容
-3. 综合回答，引用具体页面
-4. 如果信息不足，明确告知
-
-## 页面格式
-每个 Wiki 页面遵循此格式：
-
-  ---
-  title: 页面标题
-  type: entity | concept | source | topic | analysis
-  created: YYYY-MM-DD
-  updated: YYYY-MM-DD
-  sources:
-    - 来源文件名.md
-  ---
-
-  # 页面标题
-
-  正文内容。
+- 默认使用中文，结论先行，必要时给出简短依据。
+- 能直接回答时不要绕弯；需要计算时写出关键公式。
+- 不要在正文中写文件名或来源标注，证据由页面下方证据面板展示。
 ```
 
 ## 10. 默认初始文件
@@ -1619,7 +1610,7 @@ sources: []
 | 创建仓库                               | 自己              |
 | 浏览私有仓库 Wiki / 原始文档 / Query         | 仅 owner / admin |
 | 上传文档 / 下载原始文件 / 触发摄入 / Lint / 终止任务 | 仅仓库创建者          |
-| 修改 Schema                          | 仅仓库创建者          |
+| 修改知识库提示词                           | 仅仓库创建者          |
 | 删除仓库                               | 仅仓库创建者          |
 | 修改个人信息 / 密码                        | 仅本人             |
 
@@ -2236,6 +2227,7 @@ eval/
 │   ├── eval_retrieval.py      ← 检索准确率评估（Recall@k / MRR）
 │   ├── eval_e2e.py            ← 已部署实例 E2E（`/api/v1/search` + Bearer）
 │   ├── build_e2e_wiki_pack.py ← 从 `corpus/doc-0*.md` 生成 `pack/e2e-llm-bench.zip`
+│   ├── bench_retrieval_throughput.py ← 连 Qdrant+Embedding 测 chunk 检索耗时与证据 char/s（粗算 tok/s）
 │   └── eval_answer.py         ← 回答质量评估（LLM-as-Judge）
 └── results/                   ← 评估结果输出
     └── report-YYYY-MM-DD.json
@@ -2249,5 +2241,5 @@ eval/
 - **仓库协作**：多人共同维护一个仓库
 - **导出功能**：生成 Marp 幻灯片、PDF 报告
 - **Webhook**：摄入完成后通知
-- **Schema 模板市场**：为不同场景（研究、读书、竞品分析）提供预设 Schema
+- **提示词模板市场**：为不同场景（研究、读书、竞品分析）提供预设知识库提示词
 - **BM25 混合检索**：在 Qdrant 语义检索基础上叠加关键词检索，进一步提升召回率

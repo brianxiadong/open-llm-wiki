@@ -49,6 +49,29 @@
 </article>
 
 <article>
+  <header><h3>检索术语解释</h3></header>
+  <p style="color:var(--pico-muted-color);font-size:0.9rem;">
+    配置当前知识库里的常用简称、同义词或业务术语。问答检索时，如果用户问题命中左侧术语，系统会把右侧解释加入检索查询和回答上下文。
+  </p>
+  <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
+    {% if csrf_token is defined %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% endif %}
+    <input type="hidden" name="action" value="update_glossary">
+
+    <label for="glossary_content">glossary.md</label>
+    <textarea id="glossary_content" name="glossary_content" rows="8" class="code-textarea"
+              placeholder="双模 = SVC + AVC&#10;渠道型终端 = ME/NE 系列终端">{{ glossary_content or '' }}</textarea>
+    <small>
+      每行一条，支持 <code>术语 = 解释</code>、<code>术语: 解释</code>、<code>别名1|别名2 = 解释</code>。
+      这是知识库级配置，不会影响其他知识库。
+    </small>
+
+    <button type="submit" class="mt-2">保存术语解释</button>
+  </form>
+</article>
+
+<article>
   <header><h3>共享访问码</h3></header>
   <p style="color:var(--pico-muted-color);font-size:0.9rem;">生成访问码后，其他用户既可以手动输入访问码，也可以直接打开邀请链接，把这个知识库挂载到自己的列表中。访问码只负责“加入”，实际权限由成员关系控制。</p>
   {% if new_share_invite_link %}
@@ -177,18 +200,24 @@
 </article>
 
 <article>
-  <header><h3>Wiki Schema</h3></header>
+  <header><h3>知识库提示词</h3></header>
+  <p style="color:var(--pico-muted-color);font-size:0.9rem;">
+    这里的内容会作为当前知识库的自定义提示词，参与后续文档摄入、Wiki 生成和问答回答。建议写业务口径、回答风格、计算规则和“不确定时怎么说”。
+  </p>
   <form method="POST" action="{{ url_for('repo.settings', username=username, repo_slug=repo.slug) }}">
     {% if csrf_token is defined %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% endif %}
-    <input type="hidden" name="action" value="update_schema">
+    <input type="hidden" name="action" value="update_prompt">
 
-    <label for="schema_content">schema.md</label>
-    <textarea id="schema_content" name="schema_content" rows="14" class="code-textarea" placeholder="在此编辑 Wiki 结构约定…">{{ schema_content or '' }}</textarea>
-    <small>定义页面类型、前置元数据与关联规则，将影响后续生成与校验行为。</small>
+    <label for="prompt_content">自定义提示词</label>
+    <textarea id="prompt_content" name="prompt_content" rows="14" class="code-textarea"
+              placeholder="例如：回答先给结论；涉及价格必须展示公式；资料没有明确说明时回答“资料中未提及”…">{{ prompt_content or schema_content or '' }}</textarea>
+    <small>
+      底层仍兼容保存到 <code>wiki/schema.md</code>，但用途已改为知识库提示词；系统级安全规则和证据约束仍优先于这里的内容。
+    </small>
 
-    <button type="submit" class="mt-2">保存 Schema</button>
+    <button type="submit" class="mt-2">保存提示词</button>
   </form>
 </article>
 

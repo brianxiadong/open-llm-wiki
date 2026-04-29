@@ -8,7 +8,7 @@
 
 ## 项目特点
 
-- 多用户、多知识库，每个仓库独立维护自己的 `raw/ + wiki/ + schema.md`
+- 多用户、多知识库，每个仓库独立维护自己的 `raw/ + wiki/ + glossary.md`，并可配置知识库级提示词（兼容保存到 `wiki/schema.md`）
 - 支持 Markdown、TXT、PDF、DOCX、PPTX、图片、CSV、Excel 等多种资料导入
 - 摄入流程会自动生成或更新 Wiki 页面、目录页、概览页和操作日志
 - 查询采用 **三通道检索**：Wiki 结构化选页 + Chunk 向量与 BM25 融合（Hybrid RRF）+ 结构化表格 **Fact**（向量 + 关键词 + 字段精确加分融合，便于金额、地区、日期等短值对齐到正确行）
@@ -61,11 +61,12 @@
 
 ```text
 {username}/{repo-slug}/
-├── schema.md
+├── glossary.md
 ├── raw/
 │   ├── assets/
 │   └── ...
 └── wiki/
+    ├── schema.md
     ├── index.md
     ├── log.md
     ├── overview.md
@@ -74,7 +75,8 @@
 
 - `raw/`：原始资料层，作为事实来源，LLM 只读不写
 - `wiki/`：LLM 维护的知识层，存放概览、实体、概念、来源摘要等页面
-- `schema.md`：仓库级知识组织规则，控制 LLM 如何摄入、查询和维护该仓库
+- `glossary.md`：知识库级术语解释，用于检索扩展和回答约束
+- `wiki/schema.md`：知识库级用户提示词，控制 LLM 如何摄入、查询和维护该仓库；文件名沿用历史兼容名
 
 ## 技术栈
 
@@ -110,7 +112,7 @@
 
 查询在 **Wiki 结构化选页** 与 **Qdrant** 之间协同：
 
-- **Wiki 路径**：由 LLM 结合 `index.md` / `schema.md` 选择相关页面（深度模式会对多个子问题分别选页）。
+- **Wiki 路径**：由 LLM 结合 `index.md` / 知识库提示词选择相关页面（深度模式会对多个子问题分别选页）。
 - **Chunk 路径**：向量检索 +（可选）全库 chunk 语料上的 BM25，RRF 融合后再做按文件限流与可选邻居扩展。
 - **Fact 路径**：表格行向量检索；默认再对全量 fact payload 构建搜索文本（字段名、值、`fact_text` 等）做 BM25，并叠加轻量字段精确加分，三者融合排序。超大表可通过环境变量关闭或限制行数。
 

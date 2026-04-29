@@ -31,6 +31,12 @@ def test_chunk_collection_name(qdrant_service):
     assert svc._chunk_collection_name(42) == "repo_42_chunks"
 
 
+def test_raw_chunk_collection_name(qdrant_service):
+    svc, _ = qdrant_service
+    assert svc._raw_chunk_collection_name(1) == "repo_1_raw_chunks"
+    assert svc._raw_chunk_collection_name(42) == "repo_42_raw_chunks"
+
+
 def test_fact_collection_name(qdrant_service):
     svc, _ = qdrant_service
     assert svc._fact_collection_name(1) == "repo_1_facts"
@@ -69,6 +75,28 @@ def test_split_no_headings(qdrant_service):
     assert len(chunks) >= 1
 
 
+def test_split_raw_source_keeps_wide_table_rows_separate(qdrant_service):
+    svc, _ = qdrant_service
+    content = (
+        "**设备清单**\n\n"
+        "序号 型号 名称 规格\n"
+        "1.0 Alpha-10    入门网关    支持基础路由、日志采集、远程配置下发，适用于小型站点    1000 元/台\n"
+        "2.0 EdgeBox-42    边缘网关    支持离线授权、双网口冗余、本地日志缓存，适用于离线网点部署    2000 元/台\n"
+        "3.0 CoreNode-8    核心节点    支持集群部署、热备切换、集中审计，适用于总部机房    3000 元/台\n"
+    )
+
+    chunks = svc.split_raw_source_into_chunks(content)
+    target = [
+        c for c in chunks
+        if "EdgeBox-42" in c["chunk_text"] and "双网口冗余" in c["chunk_text"]
+    ]
+
+    assert len(target) == 1
+    assert target[0]["heading"] == "设备清单"
+    assert len(target[0]["chunk_text"]) < svc._chunk_min
+    assert "Alpha-10" not in target[0]["chunk_text"]
+
+
 def test_stable_chunk_point_id_deterministic(qdrant_service):
     svc, _ = qdrant_service
     id1 = svc._stable_chunk_point_id(1, "page.md", "0")
@@ -90,6 +118,22 @@ def test_upsert_page_chunks_calls_qdrant(qdrant_service):
         content="## Section\n\n" + "word " * 80,
     )
     assert mock_client.upsert.called
+
+
+def test_upsert_raw_chunks_marks_payload_layer(qdrant_service):
+    svc, mock_client = qdrant_service
+    mock_client.collection_exists.return_value = True
+    svc.upsert_raw_chunks(
+        repo_id=1,
+        filename="source.md",
+        title="Source",
+        content="## EdgeBox-42\n\nEdgeBox-42 支持离线授权和双网口冗余。" + " word" * 80,
+    )
+
+    assert mock_client.upsert.called
+    point = mock_client.upsert.call_args.kwargs["points"][0]
+    assert point.payload["source_layer"] == "raw"
+    assert point.payload["source_file"] == "source.md"
 
 
 def test_upsert_page_chunks_empty_content(qdrant_service):
@@ -127,6 +171,33 @@ def test_search_chunks_returns_structured_results(qdrant_service):
     assert results[0]["chunk_id"] == "test.md#0"
     assert results[0]["score"] == 0.92
     assert results[0]["heading"] == "Section A"
+    assert results[0]["source_layer"] == "wiki"
+
+
+def test_search_raw_chunks_returns_structured_results(qdrant_service):
+    svc, mock_client = qdrant_service
+    mock_client.collection_exists.return_value = True
+    mock_hit = MagicMock()
+    mock_hit.score = 0.93
+    mock_hit.payload = {
+        "chunk_id": "source.md#0",
+        "filename": "source.md",
+        "source_file": "source.md",
+        "page_title": "Source",
+        "page_type": "raw",
+        "heading": "EdgeBox-42",
+        "chunk_text": "EdgeBox-42 支持离线授权和双网口冗余",
+        "position": 0,
+        "source_layer": "raw",
+    }
+    mock_client.query_points.return_value = MagicMock(points=[mock_hit])
+
+    results = svc.search_raw_chunks(repo_id=1, query="EdgeBox-42 离线授权")
+
+    assert len(results) == 1
+    assert results[0]["chunk_id"] == "source.md#0"
+    assert results[0]["source_layer"] == "raw"
+    assert results[0]["source_file"] == "source.md"
 
 
 def test_upsert_page_chunks_uses_batch_embed_and_injects_heading(qdrant_service):
@@ -186,6 +257,35 @@ def test_scroll_all_chunks_iterates_pages(qdrant_service):
         "heading": "",
         "chunk_text": "hi",
         "position": 0,
+        "source_layer": "wiki",
+        "source_file": "a.md",
+    }]
+
+
+def test_scroll_all_raw_chunks_iterates_pages(qdrant_service):
+    svc, mock_client = qdrant_service
+    mock_client.collection_exists.return_value = True
+    point = MagicMock()
+    point.payload = {
+        "chunk_id": "source.md#0",
+        "filename": "source.md",
+        "source_file": "source.md",
+        "chunk_text": "raw hi",
+        "position": 0,
+        "source_layer": "raw",
+    }
+    mock_client.scroll.side_effect = [([point], None)]
+    out = svc.scroll_all_raw_chunks(repo_id=42)
+    assert out == [{
+        "chunk_id": "source.md#0",
+        "filename": "source.md",
+        "page_title": "",
+        "page_type": "",
+        "heading": "",
+        "chunk_text": "raw hi",
+        "position": 0,
+        "source_layer": "raw",
+        "source_file": "source.md",
     }]
 
 
@@ -250,6 +350,13 @@ def test_delete_page_chunks_with_collection(qdrant_service):
     svc, mock_client = qdrant_service
     mock_client.collection_exists.return_value = True
     svc.delete_page_chunks(repo_id=1, filename="page.md")
+    assert mock_client.delete.called
+
+
+def test_delete_raw_chunks_with_collection(qdrant_service):
+    svc, mock_client = qdrant_service
+    mock_client.collection_exists.return_value = True
+    svc.delete_raw_chunks(repo_id=1, filename="source.md")
     assert mock_client.delete.called
 
 

@@ -97,6 +97,10 @@ updated: 2026-01-01
     events = list(engine.ingest(repo, "alice", "doc.md"))
 
     assert any(e.get("phase") == "done" for e in events)
+    first_messages = mock_llm.chat_json.call_args_list[0].args[0]
+    assert "当前知识库提示词" in first_messages[0]["content"]
+    assert "Rules here." in first_messages[0]["content"]
+    assert "schema 规范" not in first_messages[0]["content"]
     wiki_dir = os.path.join(base, "wiki")
     assert os.path.isfile(os.path.join(wiki_dir, "concept-e1.md"))
     mock_qdrant.upsert_page.assert_called()
@@ -750,6 +754,174 @@ def test_query_with_evidence_with_pages(tmp_data_dir):
     assert "evidence_summary" in result
     assert "wiki_sources" in result
     assert "qdrant_sources" in result
+
+
+def test_query_with_evidence_returns_raw_chunk_evidence(tmp_data_dir):
+    wiki_dir = os.path.join(tmp_data_dir, "alice", "raw1", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "index.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntitle: 首页\ntype: index\n---\n\n# Index\n")
+
+    raw_chunk = {
+        "chunk_id": "source.md#3",
+        "filename": "source.md",
+        "source_layer": "raw",
+        "source_file": "source.md",
+        "page_title": "source.md",
+        "page_type": "raw",
+        "heading": "设备规格",
+        "chunk_text": "EdgeBox-42 边缘网关，支持离线授权和双网口冗余。",
+        "position": 3,
+        "score": 0.91,
+        "sources": ["dense"],
+    }
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": []}
+    mock_llm.chat.return_value = "EdgeBox-42 支持离线授权和双网口冗余。"
+
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve_chunks.return_value = [raw_chunk]
+    mock_retriever.retrieve_facts.return_value = []
+    mock_retriever.config = RetrievalConfig()
+
+    engine = WikiEngine(mock_llm, None, tmp_data_dir, retriever=mock_retriever)
+    repo = MagicMock()
+    repo.slug = "raw1"
+    repo.id = 7
+
+    result = engine.query_with_evidence(repo, "alice", "EdgeBox-42 是否支持离线授权")
+
+    assert result["chunk_evidence"][0]["source_layer"] == "raw"
+    assert result["chunk_evidence"][0]["url"] == "/alice/raw1/sources/source.md"
+    assert "原始文档片段" in result["evidence_summary"]
+    prompt = mock_llm.chat.call_args.args[0][1]["content"]
+    assert "RAW SOURCE" in prompt
+    assert "EdgeBox-42" in prompt
+
+
+def test_query_with_evidence_can_calculate_platinum_discount_price(tmp_data_dir):
+    wiki_dir = os.path.join(tmp_data_dir, "alice", "discount-kb", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "index.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntitle: 首页\ntype: index\n---\n\n# Index\n")
+
+    price_chunk = {
+        "chunk_id": "报价体系.md#172",
+        "filename": "报价体系.md",
+        "source_layer": "raw",
+        "source_file": "报价体系.md",
+        "page_title": "报价体系.md",
+        "page_type": "raw",
+        "heading": "一、ME系列终端",
+        "chunk_text": (
+            "3.0 ME60S视频会议终端 1、1080p视频会议主机，支持AVC+SVC双引擎编解码 "
+            "市场报价（元） 27000.0 单位 元/个 产品编码 62060-00286-002"
+        ),
+        "position": 172,
+        "score": 0.89,
+        "sources": ["bm25"],
+    }
+    discount_fact = {
+        "record_id": "discount:platinum",
+        "source_file": "渠道折扣体系.xlsx",
+        "source_markdown_filename": "渠道折扣体系.md",
+        "sheet": "Sheet1",
+        "row_index": 7,
+        "fields": {
+            "签约级别": "白金",
+            "结算折扣 终端 渠道型终端（ME/NE系列）": 3,
+        },
+        "fact_text": (
+            "来源=渠道折扣体系.xlsx; 表=Sheet1; 行=7; 签约级别=白金; "
+            "结算折扣 终端 渠道型终端（ME/NE系列）=3"
+        ),
+        "score": 0.95,
+        "sources": ["keyword", "exact"],
+    }
+
+    def fake_chat(messages, **kwargs):
+        prompt = messages[1]["content"]
+        assert "ME60S视频会议终端" in prompt
+        assert "27000" in prompt
+        assert "签约级别=白金" in prompt
+        assert "结算折扣 终端 渠道型终端（ME/NE系列）=3" in prompt
+        return "ME60S视频会议终端的白金折扣价为 8100 元/个（27000 × 3 折 ÷ 10 = 8100）。"
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": []}
+    mock_llm.chat.side_effect = fake_chat
+
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve_chunks.return_value = [price_chunk]
+    mock_retriever.retrieve_facts.return_value = [discount_fact]
+    mock_retriever.config = RetrievalConfig()
+
+    engine = WikiEngine(mock_llm, None, tmp_data_dir, retriever=mock_retriever)
+    repo = MagicMock()
+    repo.slug = "discount-kb"
+    repo.id = 8
+
+    result = engine.query_with_evidence(repo, "alice", "ME60S的白金折扣价是多少？")
+
+    assert "8100" in result["markdown"]
+    assert result["chunk_evidence"][0]["source_layer"] == "raw"
+    assert result["fact_evidence"][0]["fields"]["签约级别"] == "白金"
+    assert "结构化事实" in result["evidence_summary"]
+
+
+def test_query_with_evidence_uses_repo_glossary_for_retrieval_and_prompt(tmp_data_dir):
+    repo_dir = os.path.join(tmp_data_dir, "alice", "gloss-kb")
+    wiki_dir = os.path.join(repo_dir, "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    with open(os.path.join(wiki_dir, "index.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntitle: 首页\ntype: index\n---\n\n# Index\n")
+    with open(os.path.join(repo_dir, "glossary.md"), "w", encoding="utf-8") as f:
+        f.write("双模 = SVC + AVC\n")
+
+    raw_chunk = {
+        "chunk_id": "source.md#3",
+        "filename": "source.md",
+        "source_layer": "raw",
+        "source_file": "source.md",
+        "page_title": "source.md",
+        "page_type": "raw",
+        "heading": "产品特性",
+        "chunk_text": "ME60S视频会议终端，支持AVC+SVC双引擎编解码。",
+        "position": 3,
+        "score": 0.91,
+        "sources": ["bm25"],
+    }
+
+    def fake_retrieve_chunks(repo_id, query, **kwargs):
+        assert "ME60S 是双模终端吗" in query
+        assert "双模 = SVC + AVC" in query
+        return [raw_chunk]
+
+    def fake_chat(messages, **kwargs):
+        prompt = messages[1]["content"]
+        assert "=== GLOSSARY ===" in prompt
+        assert "双模 = SVC + AVC" in prompt
+        assert "ME60S视频会议终端" in prompt
+        return "按当前知识库术语解释，ME60S 支持 AVC+SVC 双引擎编解码，可视为双模终端。"
+
+    mock_llm = MagicMock()
+    mock_llm.chat_json.return_value = {"filenames": []}
+    mock_llm.chat.side_effect = fake_chat
+
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve_chunks.side_effect = fake_retrieve_chunks
+    mock_retriever.retrieve_facts.return_value = []
+    mock_retriever.config = RetrievalConfig()
+
+    engine = WikiEngine(mock_llm, None, tmp_data_dir, retriever=mock_retriever)
+    repo = MagicMock()
+    repo.slug = "gloss-kb"
+    repo.id = 9
+
+    result = engine.query_with_evidence(repo, "alice", "ME60S 是双模终端吗？")
+
+    assert "可视为双模终端" in result["markdown"]
+    assert result["chunk_evidence"][0]["source_layer"] == "raw"
 
 
 def test_ingest_runs_multiple_pages_concurrently(tmp_data_dir):

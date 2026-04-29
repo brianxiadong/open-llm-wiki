@@ -224,6 +224,8 @@ def test_repo_settings_get(sample_repo):
     slug = repo_info["slug"]
     resp = client.get(f"/alice/{slug}/settings")
     assert resp.status_code == 200
+    assert "检索术语解释".encode() in resp.data
+    assert "知识库提示词".encode() in resp.data
 
 
 def test_join_repo_by_access_code_mounts_shared_repo(sample_repo, app):
@@ -495,6 +497,7 @@ def test_user_settings_delete_account_cascades_related_data(auth_client, app):
 
     with patch.object(app.qdrant, "delete_collection") as delete_collection, \
          patch.object(app.qdrant, "delete_chunk_collection") as delete_chunk_collection, \
+         patch.object(app.qdrant, "delete_raw_chunk_collection") as delete_raw_chunk_collection, \
          patch.object(app.qdrant, "delete_fact_collection") as delete_fact_collection:
         resp = auth_client.post(
             "/user/settings",
@@ -510,6 +513,7 @@ def test_user_settings_delete_account_cascades_related_data(auth_client, app):
     assert "/login" in (resp.headers.get("Location") or "")
     delete_collection.assert_called_once_with(repo.id)
     delete_chunk_collection.assert_called_once_with(repo.id)
+    delete_raw_chunk_collection.assert_called_once_with(repo.id)
     delete_fact_collection.assert_called_once_with(repo.id)
 
     with app.app_context():
@@ -532,7 +536,8 @@ def test_user_settings_delete_account_cascades_related_data(auth_client, app):
 def test_repo_settings_update_info_and_schema(sample_repo, app):
     client, repo_info = sample_repo
     slug = repo_info["slug"]
-    schema_content = "# Custom Schema\n\n- concept\n- guide\n"
+    prompt_content = "# 自定义提示词\n\n回答先给结论，资料缺失时明确说明。\n"
+    glossary_content = "双模 = SVC + AVC\n渠道型终端 = ME/NE 系列终端\n"
 
     resp = client.post(
         f"/alice/{slug}/settings",
@@ -548,10 +553,19 @@ def test_repo_settings_update_info_and_schema(sample_repo, app):
 
     resp2 = client.post(
         f"/alice/{slug}/settings",
-        data={"action": "update_schema", "schema_content": schema_content},
+        data={"action": "update_prompt", "prompt_content": prompt_content},
         follow_redirects=True,
     )
     assert resp2.status_code == 200
+    assert "知识库提示词已保存".encode() in resp2.data
+
+    resp3 = client.post(
+        f"/alice/{slug}/settings",
+        data={"action": "update_glossary", "glossary_content": glossary_content},
+        follow_redirects=True,
+    )
+    assert resp3.status_code == 200
+    assert "术语解释已保存".encode() in resp3.data
 
     with app.app_context():
         from config import Config
@@ -565,7 +579,11 @@ def test_repo_settings_update_info_and_schema(sample_repo, app):
 
         schema_path = os.path.join(Config.DATA_DIR, "alice", slug, "wiki", "schema.md")
         with open(schema_path, "r", encoding="utf-8") as f:
-            assert f.read() == schema_content
+            assert f.read() == prompt_content
+
+        glossary_path = os.path.join(Config.DATA_DIR, "alice", slug, "glossary.md")
+        with open(glossary_path, "r", encoding="utf-8") as f:
+            assert f.read() == glossary_content
 
 
 def test_repo_delete(sample_repo):
@@ -2525,8 +2543,11 @@ def test_task_worker_runs_rebuild_index_task(app, sample_repo):
 
         slug = sample_repo[1]["slug"]
         wiki_dir = os.path.join(Config.DATA_DIR, "alice", slug, "wiki")
+        raw_dir = os.path.join(Config.DATA_DIR, "alice", slug, "raw")
         with open(os.path.join(wiki_dir, "index-test.md"), "w", encoding="utf-8") as f:
             f.write("---\ntitle: Index Test\ntype: concept\n---\n\n# Index Test\n")
+        with open(os.path.join(raw_dir, "source-test.md"), "w", encoding="utf-8") as f:
+            f.write("# Source Test\n\nRaw details.\n")
 
         task = Task(repo_id=sample_repo[1]["id"], type="rebuild_index", status="queued", input_data="import_zip")
         db.session.add(task)
@@ -2534,7 +2555,8 @@ def test_task_worker_runs_rebuild_index_task(app, sample_repo):
         tid = task.id
 
     with patch.object(app.qdrant, "upsert_page") as mock_upsert_page, \
-         patch.object(app.qdrant, "upsert_page_chunks") as mock_upsert_chunks:
+         patch.object(app.qdrant, "upsert_page_chunks") as mock_upsert_chunks, \
+         patch.object(app.qdrant, "upsert_raw_chunks") as mock_upsert_raw_chunks:
         TaskWorker(app)._poll_once()
 
     with app.app_context():
@@ -2545,6 +2567,7 @@ def test_task_worker_runs_rebuild_index_task(app, sample_repo):
         assert "Rebuilt index" in (task.progress_msg or "")
     assert mock_upsert_page.called
     assert mock_upsert_chunks.called
+    assert mock_upsert_raw_chunks.called
 
 
 # ---------------------------------------------------------------------------

@@ -34,13 +34,13 @@
     <textarea id="description" name="description" placeholder="简要说明该知识库的用途与范围" rows="4"></textarea>
 
     <label for="schema_template">
-      Wiki Schema 模板
+      知识库提示词模板
       <select id="schema_template" name="schema_template">
         {% for key, (label, _) in schema_templates.items() %}
         <option value="{{ key }}">{{ label }}</option>
         {% endfor %}
       </select>
-      <small>选择适合你知识库类型的预设规范，创建后可在设置中修改。</small>
+      <small>选择适合你知识库类型的默认提示词，创建后可在设置中自由修改。</small>
     </label>
 
     <div class="form-actions">

@@ -14,20 +14,29 @@ class _FakeQdrant:
     def __init__(
         self,
         dense: list[dict[str, Any]] | None = None,
+        raw_dense: list[dict[str, Any]] | None = None,
         facts: list[dict[str, Any]] | None = None,
         chunks_corpus: list[dict[str, Any]] | None = None,
+        raw_chunks_corpus: list[dict[str, Any]] | None = None,
         facts_corpus: list[dict[str, Any]] | None = None,
     ) -> None:
         self._dense = dense or []
+        self._raw_dense = raw_dense or []
         self._facts = facts or []
         self._corpus = chunks_corpus or []
+        self._raw_corpus = raw_chunks_corpus or []
         self._facts_corpus = list(facts_corpus) if facts_corpus is not None else []
         self.dense_calls: list[dict[str, Any]] = []
+        self.raw_dense_calls: list[dict[str, Any]] = []
         self.fact_calls: list[dict[str, Any]] = []
 
     def search_chunks(self, repo_id, query, limit=8, **kwargs):
         self.dense_calls.append({"query": query, "limit": limit, **kwargs})
         return list(self._dense)
+
+    def search_raw_chunks(self, repo_id, query, limit=8, **kwargs):
+        self.raw_dense_calls.append({"query": query, "limit": limit, **kwargs})
+        return list(self._raw_dense)
 
     def search_facts(self, repo_id, query, limit=8, **kwargs):
         self.fact_calls.append({"query": query, "limit": limit, **kwargs})
@@ -35,6 +44,9 @@ class _FakeQdrant:
 
     def scroll_all_chunks(self, repo_id):
         return list(self._corpus)
+
+    def scroll_all_raw_chunks(self, repo_id):
+        return list(self._raw_corpus)
 
     def scroll_all_facts(self, repo_id):
         return list(self._facts_corpus)
@@ -51,6 +63,14 @@ def _chunk(chunk_id: str, filename: str, position: int, text: str, score: float 
         "position": position,
         "score": score,
     }
+
+
+def _raw_chunk(chunk_id: str, filename: str, position: int, text: str, score: float = 0.0):
+    item = _chunk(chunk_id, filename, position, text, score)
+    item["page_type"] = "raw"
+    item["source_layer"] = "raw"
+    item["source_file"] = filename
+    return item
 
 
 def test_retriever_returns_dense_results_when_bm25_disabled():
@@ -107,6 +127,121 @@ def test_retriever_rrf_fuses_dense_and_bm25():
     b = next(h for h in out if h["chunk_id"] == "b.md#0")
     assert set(b["sources"]) == {"dense", "bm25"}
     assert out[0]["chunk_id"] == "b.md#0"
+
+
+def test_retriever_searches_raw_chunks_and_preserves_layer():
+    raw_dense = [
+        _raw_chunk(
+            "spec.md#3",
+            "spec.md",
+            3,
+            "EdgeBox-42 supports offline license activation and dual network uplinks",
+            score=0.91,
+        )
+    ]
+    retriever = HybridRetriever(
+        qdrant=_FakeQdrant(raw_dense=raw_dense),
+        config=RetrievalConfig(enable_bm25=False, chunk_top_k=3, max_chunks_per_file=10),
+    )
+
+    out = retriever.retrieve_chunks(repo_id=1, query="EdgeBox-42 offline license")
+
+    assert out[0]["chunk_id"] == "spec.md#3"
+    assert out[0]["source_layer"] == "raw"
+    assert out[0]["source_file"] == "spec.md"
+    assert out[0]["sources"] == ["dense"]
+
+
+def test_retriever_raw_bm25_can_recall_exact_model_specs():
+    raw_corpus = [
+        _raw_chunk(
+            "spec.md#3",
+            "spec.md",
+            3,
+            "型号 EdgeBox-42 边缘网关 支持离线授权，支持双网口冗余，支持本地日志缓存",
+        )
+    ]
+    retriever = HybridRetriever(
+        qdrant=_FakeQdrant(raw_chunks_corpus=raw_corpus),
+        config=RetrievalConfig(
+            enable_bm25=True,
+            chunk_top_k=3,
+            max_chunks_per_file=10,
+            bm25_top_k=5,
+        ),
+        keyword_index=KeywordIndex(),
+    )
+
+    out = retriever.retrieve_chunks(repo_id=1, query="EdgeBox-42 支持离线授权吗")
+
+    assert out[0]["chunk_id"] == "spec.md#3"
+    assert out[0]["source_layer"] == "raw"
+    assert "bm25" in out[0]["sources"]
+
+
+def test_retriever_uses_larger_raw_file_cap_by_default():
+    raw_corpus = [
+        _raw_chunk(
+            f"spec.md#{idx}",
+            "spec.md",
+            idx,
+            f"needle row {idx} EdgeBox-{idx} 支持离线授权和本地日志缓存",
+        )
+        for idx in range(5)
+    ]
+    retriever = HybridRetriever(
+        qdrant=_FakeQdrant(raw_chunks_corpus=raw_corpus),
+        config=RetrievalConfig(
+            enable_bm25=True,
+            chunk_top_k=5,
+            max_chunks_per_file=1,
+            max_raw_chunks_per_file=3,
+            bm25_top_k=10,
+        ),
+        keyword_index=KeywordIndex(),
+    )
+
+    out = retriever.retrieve_chunks(repo_id=1, query="needle 离线授权")
+
+    assert len(out) == 3
+    assert {h["source_layer"] for h in out} == {"raw"}
+
+
+def test_retriever_prioritizes_exact_identifier_matches_generically():
+    raw_corpus = [
+        _raw_chunk(
+            "spec.md#0",
+            "spec.md",
+            0,
+            "通用终端支持离线授权，离线授权可按站点开通，离线授权需要管理员审批",
+        ),
+        _raw_chunk(
+            "spec.md#1",
+            "spec.md",
+            1,
+            "ZX9000 边缘网关支持离线授权和本地日志缓存",
+        ),
+        _raw_chunk(
+            "spec.md#2",
+            "spec.md",
+            2,
+            "普通网关支持在线授权，适用于云端管理场景",
+        ),
+    ]
+    retriever = HybridRetriever(
+        qdrant=_FakeQdrant(raw_chunks_corpus=raw_corpus),
+        config=RetrievalConfig(
+            enable_bm25=True,
+            chunk_top_k=3,
+            max_raw_chunks_per_file=3,
+            bm25_top_k=2,
+        ),
+        keyword_index=KeywordIndex(),
+    )
+
+    out = retriever.retrieve_chunks(repo_id=1, query="ZX9000 是否支持离线授权")
+
+    assert out[0]["chunk_id"] == "spec.md#1"
 
 
 def test_retriever_bm25_signature_changes_when_chunk_text_changes():
@@ -244,6 +379,63 @@ def test_retriever_fact_keyword_exact_can_outrank_dense_only():
     assert out[0]["record_id"] == "r_right"
     assert "exact" in (out[0].get("sources") or [])
     assert out[0].get("exact_score", 0) > 0
+
+
+def test_retriever_fact_keyword_recalls_price_and_discount_rows_for_calculation():
+    corpus = [
+        {
+            "record_id": "price:me60s-terminal",
+            "source_file": "报价体系.md",
+            "source_markdown_filename": "报价体系.md",
+            "sheet": "渠道型终端",
+            "row_index": 231,
+            "fields": {
+                "产品型号/类别": "ME60S",
+                "产品名称": "ME60S视频会议终端",
+                "产品描述": "1080p视频会议主机，支持AVC+SVC双引擎编解码",
+                "市场报价（元）": 27000,
+                "单位": "元/个",
+            },
+            "fact_text": (
+                "来源=报价体系.md; 表=渠道型终端; 行=231; 产品型号/类别=ME60S; "
+                "产品名称=ME60S视频会议终端; 市场报价（元）=27000; 单位=元/个"
+            ),
+        },
+        {
+            "record_id": "discount:platinum",
+            "source_file": "渠道折扣体系.xlsx",
+            "source_markdown_filename": "渠道折扣体系.md",
+            "sheet": "Sheet1",
+            "row_index": 7,
+            "fields": {
+                "签约级别": "白金",
+                "结算折扣 终端 渠道型终端（ME/NE系列）": 3,
+                "结算折扣 平台 渠道型硬件平台": 3,
+            },
+            "fact_text": (
+                "来源=渠道折扣体系.xlsx; 表=Sheet1; 行=7; 签约级别=白金; "
+                "结算折扣 终端 渠道型终端（ME/NE系列）=3"
+            ),
+        },
+    ]
+    retriever = HybridRetriever(
+        qdrant=_FakeQdrant(facts_corpus=corpus),
+        config=RetrievalConfig(
+            fact_top_k=5,
+            fact_score_threshold=0.0,
+            enable_fact_keyword=True,
+            fact_keyword_top_k=20,
+        ),
+        keyword_index=KeywordIndex(),
+    )
+
+    out = retriever.retrieve_facts(repo_id=1, query="ME60S的白金折扣价是多少")
+
+    by_id = {h["record_id"]: h for h in out}
+    assert "price:me60s-terminal" in by_id
+    assert "discount:platinum" in by_id
+    assert by_id["discount:platinum"]["fields"]["结算折扣 终端 渠道型终端（ME/NE系列）"] == 3
+    assert by_id["price:me60s-terminal"]["fields"]["市场报价（元）"] == 27000
 
 
 def test_retriever_fact_skips_keyword_when_over_max_records():
